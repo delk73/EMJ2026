@@ -18,13 +18,10 @@ public:
 private:
     UPROPERTY() TObjectPtr<AAttractionSimulation> Board;
     UPROPERTY() TObjectPtr<class ACameraActor> BoardCamera;
-    enum class ELeftGesture : uint8 { None, Agent, Patch, RewardPending, Reward };
-    ELeftGesture LeftGesture = ELeftGesture::None;
-    int32 DragIndex = INDEX_NONE;
-    FVector2D PressScreen = FVector2D::ZeroVector;
+    enum class ELeftMode : uint8 { None, RewardPaint, PatchDrag };
+    ELeftMode LeftMode = ELeftMode::None;
     FVector LeftPoint = FVector::ZeroVector;
     bool bHaveLeftPoint = false;
-    FVector PressPoint = FVector::ZeroVector;
     void DisableReward();
     void NextStage();
     static constexpr float MinZoomZ = 550.0f;

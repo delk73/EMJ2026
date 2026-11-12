@@ -104,50 +104,51 @@ bool AAttractionPlayerController::MouseScreen(FVector2D& Point,int32& Width,int3
 void AAttractionPlayerController::BeginLeft()
 {
     CancelLeft();
-    if(!CursorPoint(LeftPoint))return;
-    Board->RefreshConnectivity();
-    DragIndex=Board->PickNode(LeftPoint);
-    if(DragIndex!=INDEX_NONE)
-        LeftGesture=Board->Nodes[DragIndex].bConnectedToRoot?ELeftGesture::Agent:ELeftGesture::Patch;
-    else
+    if (bSwiping || !CursorPoint(LeftPoint)) return;
+    const int32 Hit=Board->PickLatticeComponent(LeftPoint);
+    if (Hit!=INDEX_NONE)
     {
-        const float D=FVector2D::Distance(FVector2D(LeftPoint),Board->RewardCenter);
-        if(Board->bRewardActive&&D<Board->RewardRadius) LeftGesture=ELeftGesture::RewardPending;
-        else {Board->RewardCenter=FVector2D(LeftPoint);Board->bRewardActive=true;LeftGesture=ELeftGesture::Reward;}
+        if (Board->BeginPatchDrag(Hit)) {LeftMode=ELeftMode::PatchDrag;bHaveLeftPoint=true;}
+        return; // Rooted lattice hits must not fall through to painting.
     }
-    Board->bManipulatingAgents=LeftGesture==ELeftGesture::Agent||LeftGesture==ELeftGesture::Patch;
-    int32 W,H;MouseScreen(PressScreen,W,H);
-    PressPoint=LeftPoint;
+    LeftMode=ELeftMode::RewardPaint;bHaveLeftPoint=true;
+    Board->PaintReward(FVector2D(LeftPoint));
 }
 void AAttractionPlayerController::UpdateLeft()
 {
-    FVector P; if(!CursorPoint(P))return;
-    FVector2D Mouse;int32 W,H;if(!MouseScreen(Mouse,W,H))return;
-    if(LeftGesture==ELeftGesture::RewardPending && FVector2D::DistSquared(Mouse,PressScreen)>36)LeftGesture=ELeftGesture::Reward;
-    if(LeftGesture==ELeftGesture::Reward) Board->RewardCenter=FVector2D(P);
-    if(LeftGesture==ELeftGesture::Agent)Board->SlideAgent(DragIndex,P);
-    if(LeftGesture==ELeftGesture::Patch && Board->Nodes.IsValidIndex(DragIndex))
+    FVector P;
+    if (LeftMode==ELeftMode::None || !CursorPoint(P)) {bHaveLeftPoint=false;return;}
+    if (LeftMode==ELeftMode::PatchDrag)
     {
-        const FVector Delta=((P-LeftPoint)*FMath::Clamp(GetWorld()->GetDeltaSeconds()*18.f,0.f,1.f)).GetClampedToMaxSize(90);
-        Board->DragPatch(DragIndex,Delta);
-        LeftPoint+=Delta;
+        Board->UpdatePatchDrag(bHaveLeftPoint?P-LeftPoint:FVector::ZeroVector,GetWorld()->GetDeltaSeconds());
+        LeftPoint=P;bHaveLeftPoint=true;
+        return;
     }
-    else LeftPoint=P;
+    // Spatial sampling keeps fast strokes connected. Losing the viewport breaks
+    // the path, so re-entry never paints a bridge across a stale cursor location.
+    const float Spacing=FMath::Max(25.0f,Board->EdgeRestLength*1.75f*0.25f);
+    const int32 Steps=bHaveLeftPoint?FMath::Max(1,FMath::CeilToInt(FVector::Distance(LeftPoint,P)/Spacing)):1;
+    for (int32 I=1;I<=Steps;++I)
+        Board->PaintReward(FVector2D(bHaveLeftPoint?FMath::Lerp(LeftPoint,P,float(I)/Steps):P));
+    LeftPoint=P;bHaveLeftPoint=true;
 }
 void AAttractionPlayerController::EndLeft()
 {
-    if(!IsValid(Board)){CancelLeft();return;}
-    UpdateLeft();
-    if(LeftGesture==ELeftGesture::RewardPending && FVector2D::Distance(FVector2D(PressPoint),Board->RewardCenter)<Board->RewardRadius*0.14f) Board->bRewardActive=false;
-    if(LeftGesture==ELeftGesture::Patch) Board->GraftPatch(DragIndex);
+    if (IsValid(Board) && LeftMode!=ELeftMode::None)
+    {
+        FVector P;
+        const bool bValidRelease=CursorPoint(P);
+        if (bValidRelease) UpdateLeft();
+        if (LeftMode==ELeftMode::PatchDrag) Board->EndPatchDrag(bValidRelease);
+    }
     CancelLeft();
 }
 void AAttractionPlayerController::CancelLeft()
 {
-    if(Board){Board->bManipulatingAgents=false;for(auto& N:Board->Nodes){N.AgentSlideTarget=INDEX_NONE;N.AgentSlideProgress=0;}}
-    LeftGesture=ELeftGesture::None;DragIndex=INDEX_NONE;
+    if (LeftMode==ELeftMode::PatchDrag && IsValid(Board)) Board->EndPatchDrag(false);
+    LeftMode=ELeftMode::None;bHaveLeftPoint=false;
 }
-void AAttractionPlayerController::DisableReward(){if(Board)Board->bRewardActive=false;}
+void AAttractionPlayerController::DisableReward(){CancelLeft();if(Board)Board->ClearReward();}
 void AAttractionPlayerController::NextStage(){CancelLeft();bSwiping=false;bHaveSwipePoint=false;if(Board)Board->NextStage();}
 
 void AAttractionPlayerController::ZoomIn() { Zoom(1.0f); }
@@ -231,7 +232,7 @@ void AAttractionPlayerController::PlayerTick(float DeltaTime)
     }
     FVector Point;
     const bool bValidPoint = CursorPoint(Point);
-    if (LeftGesture!=ELeftGesture::None)
+    if (LeftMode!=ELeftMode::None)
     {
         // A lost release/focus cancels instead of spawning or toggling unexpectedly.
         if (!IsInputKeyDown(EKeys::LeftMouseButton)) CancelLeft();

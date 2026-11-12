@@ -5,6 +5,7 @@ float Phi = 0.0;
 float2 Gradient = float2(0.0, 0.0);
 float NodeWeight = 0.0;
 float EnergyField = 0.0;
+float RootRingDistance = 10000.0;
 int Nodes = clamp((int)NodeCount, 0, 256);
 int Tethers = clamp((int)TetherCount, 0, 256);
 
@@ -16,11 +17,15 @@ for (int i = 0; i < Nodes; ++i)
     float2 D = P - Node.xy;
     float R2 = max(Node.z * Node.z, 0.0001);
     float Q = saturate(1.0 - dot(D, D) / R2);
-    // Geometry stays visible even at zero internal energy. Row 0.w now carries
-    // normalized charge/pulse/strain, used only for lighting contrast.
+    // Row 0.w: ordinary energy [0,1], or root flag 2 + energy [2,3].
+    // Decode the flag separately so roots retain normal carrier lighting.
+    float IsRoot = step(1.5, Node.w);
+    float NodeEnergy = saturate(Node.w - 2.0 * IsRoot);
     float Kernel = Q * Q * Q;
     NodeWeight += Kernel;
-    EnergyField += saturate(Node.w) * Kernel;
+    EnergyField += NodeEnergy * Kernel;
+    if (IsRoot > 0.5)
+        RootRingDistance = min(RootRingDistance, abs(length(D) / max(Node.z, 0.01) - 0.36) - 0.055);
     // Phi = (1 - r^2/R^2)^3 inside support; value and first two
     // derivatives vanish at the boundary. No finite differences or raster grid.
     Phi += Kernel;
@@ -82,9 +87,16 @@ float3 Lobes[3] = { TargetLobe0, TargetLobe1, TargetLobe2 };
 }
 float Target=1-TargetComplement;
 float Recess=0.22-0.065*Target;
-float DiscDistance=length(P-RewardDisc.xy)/max(1,RewardDisc.z);
-float Reward=RewardActive * (1-smoothstep(0.65,1.0,DiscDistance));
-float DiscEdge=RewardActive * (1-smoothstep(0.008,0.025,abs(DiscDistance-1)));
-float Backdrop=Recess+0.035*Reward+0.045*DiscEdge;
+// Match the CPU's endpoint-centered bilinear 64x64 board field exactly.
+float2 GridUV=P/(2*max(BoardExtent.xy,float2(400,400)))+0.5;
+float InBoard=all(GridUV>=0)&&all(GridUV<=1) ? 1.0 : 0.0;
+float2 RewardUV=(saturate(GridUV)*63.0+0.5)/64.0;
+float Reward=RewardActive*InBoard*Texture2DSampleLevel(RewardTex,RewardTexSampler,RewardUV,0).r;
+float Backdrop=Recess+0.085*saturate(Reward);
 float Grey = lerp(Backdrop, Liquid, Coverage);
+// Screen-space derivative AA is evaluated outside uniform record loops. The
+// marker stays inside the gel and cannot be washed out by a passing bright bud.
+float RootAA = max(fwidth(RootRingDistance), 0.0001);
+float RootRing = 1.0 - smoothstep(-RootAA, RootAA, RootRingDistance);
+Grey = lerp(Grey, 0.025, RootRing * Coverage);
 return float3(Grey, Grey, Grey);

@@ -70,6 +70,15 @@ struct FAttractionTether
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) FAttractionBondRule Rule;
 };
 
+USTRUCT(BlueprintType)
+struct FAttractionTriangle
+{
+    GENERATED_BODY()
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) int32 A = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) int32 B = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) int32 C = 0;
+};
+
 // Self-contained XY board. Positions/velocities are local to this actor, in cm / cm/s.
 UCLASS()
 class EMJ2026_API AAttractionSimulation : public AActor
@@ -99,6 +108,24 @@ public:
     UPROPERTY(EditAnywhere, Category="Simulation") bool bRunning = true;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionNode> Nodes;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionTether> Tethers;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionTriangle> Triangles;
+    static constexpr int32 MaxSimulationNodes = 220;
+    static constexpr int32 RewardGridSize = 64;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") TArray<float> RewardGrid;
+    UPROPERTY(EditAnywhere, Category="Agents", meta=(ClampMin="100")) float EdgeRestLength = 240.0f;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") float BuildProgress = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") int32 AgentNode = INDEX_NONE;
+    UFUNCTION(BlueprintCallable) void PaintReward(FVector2D Center);
+    UFUNCTION(BlueprintCallable) void ClearReward();
+    UFUNCTION(BlueprintCallable) float SampleReward(FVector2D Position) const;
+    UFUNCTION(BlueprintCallable) int32 PickLatticeNode(FVector Position) const;
+    UFUNCTION(BlueprintCallable) int32 PickLatticeComponent(FVector Position) const;
+    UFUNCTION(BlueprintCallable) bool BeginPatchDrag(int32 NodeIndex);
+    UFUNCTION(BlueprintCallable) void UpdatePatchDrag(FVector CursorDelta, float DeltaSeconds);
+    UFUNCTION(BlueprintCallable) bool EndPatchDrag(bool bTryGraft);
+    UFUNCTION(BlueprintPure) FVector GetBuilderPosition() const { return AgentPosition(); }
+    // The same geometric/field query is used by selection and commit-time validation.
+    UFUNCTION(BlueprintCallable) bool EvaluateFrontierCandidate(int32 A, int32 B, FVector& Apex, int32& Weld, float& Score) const;
     UFUNCTION(BlueprintCallable, CallInEditor, Category="Simulation") void ResetSimulation();
     // Severed pairs remain suppressed until reset, so a cut cannot instantly reattach.
     UFUNCTION(BlueprintCallable, Category="Simulation") bool SliceTether(int32 TetherIndex);
@@ -120,30 +147,46 @@ public:
     UPROPERTY(EditAnywhere, Category="Stages") TArray<FAttractionStageConfig> Stages;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stages") int32 StageIndex = 0;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") bool bRewardActive = false;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") FVector2D RewardCenter = FVector2D::ZeroVector;
-    UPROPERTY(EditAnywhere, Category="Reward") float RewardRadius = 950;
     UPROPERTY(EditAnywhere, Category="Agents") float TargetThreshold = 0.25f;
-    UPROPERTY(EditAnywhere, Category="Agents") float MaxAttachDist = 320;
     UFUNCTION(BlueprintCallable) float SampleTargetHeight(FVector2D Pos) const;
-    UFUNCTION(BlueprintCallable) void SetReward(FVector2D Center, bool bActive);
     UFUNCTION(BlueprintCallable) void NextStage();
     UFUNCTION(BlueprintCallable) void RefreshConnectivity();
     UFUNCTION(BlueprintCallable) float TargetCoverage() const;
     UFUNCTION(BlueprintCallable) int32 ExcessNodes() const;
     UFUNCTION(BlueprintCallable) int32 ConnectedAgents() const;
-    bool bManipulatingAgents = false;
-    float RewardWeight(const FVector& P) const;
-    int32 PickNode(const FVector& P) const;
-    void SlideAgent(int32& Index, const FVector& P);
-    UFUNCTION(BlueprintCallable) void DragPatch(int32 Index, const FVector& Delta);
-    UFUNCTION(BlueprintCallable) void GraftPatch(int32 Index);
 private:
+    struct FBoundaryEdge { int32 A, B, Opposite; };
+    TArray<FBoundaryEdge> BoundaryEdges() const;
+    TArray<FBoundaryEdge> CarrierBoundaryEdges() const;
+    TArray<int32> ComponentNodes(int32 NodeIndex) const;
+    TArray<int32> BoundaryVertices() const;
+    void RepairAgentCarrier(const FVector& PreviousPosition);
+    void RemoveCutOrphans(int32 CutA, int32 CutB, const FVector& PreviousCarrier);
+    bool GraftComponent(const TArray<int32>& Patch);
+    bool IsGraftGeometryValid(const TArray<FAttractionNode>& ProposedNodes,
+        const TArray<FAttractionTether>& ProposedTethers, const TArray<FAttractionTriangle>& ProposedTriangles) const;
+    TArray<int32> DraggedPatch;
+    TArray<FVector> PatchStartPositions;
+    FVector PatchTargetOffset = FVector::ZeroVector;
+    FVector PatchCurrentOffset = FVector::ZeroVector;
+    int32 EdgeIncidence(int32 A, int32 B) const;
+    bool HasTether(int32 A, int32 B) const;
+    void DecayReward(float Dt);
+    void CancelBuild();
+    FVector AgentPosition() const;
+    TArray<int32> AgentPath;
+    int32 PathIndex = 0;
+    int32 PreviousPatrolNode = INDEX_NONE;
+    float TravelProgress = 0;
+    int32 BuildA = INDEX_NONE, BuildB = INDEX_NONE, BuildWeld = INDEX_NONE;
+    FVector BuildApex = FVector::ZeroVector;
+    bool bBuilding = false;
     bool AddStructuralTether(int32 A, int32 B);
     void WorkAgents(float Dt);
-    void RemoveNode(int32 Index);
     UPROPERTY(VisibleAnywhere, Category="Liquid") TObjectPtr<class UStaticMeshComponent> LiquidPlane;
     UPROPERTY() TSoftObjectPtr<class UMaterialInterface> LiquidMaterialAsset;
     UPROPERTY(Transient) TObjectPtr<class UTexture2D> LiquidDataTexture;
+    UPROPERTY(Transient) TObjectPtr<class UTexture2D> RewardTexture;
     UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> LiquidMID;
     struct FPinchingFilament
     {

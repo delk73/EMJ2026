@@ -14,7 +14,7 @@ void AAttractionHUD::DrawHUD()
     for(TActorIterator<AAttractionSimulation> It(GetWorld());It;++It)
     {
         const float Coverage=It->TargetCoverage();const int32 Excess=It->ExcessNodes();
-        const FString Status=FString::Printf(TEXT("Target Coverage %.0f%%   Excess Nodes %d\nReward: %s   Connected Agents %d   Stage %d\nLMB: reward / slide / graft   RMB: cut   Space: halt   N: next   R: reset"),Coverage,Excess,It->bRewardActive?TEXT("ON"):TEXT("OFF"),It->ConnectedAgents(),It->StageIndex+1);
+        const FString Status=FString::Printf(TEXT("Target Coverage %.0f%%   Excess Nodes %d\nReward %s   Builder %d   Stage %d\nLMB: paint (7s fade)   RMB: cut   Space: clear paint   N: next   R: reset"),Coverage,Excess,It->bRewardActive?TEXT("ON"):TEXT("OFF"),It->ConnectedAgents(),It->StageIndex+1);
         DrawText(Status,FLinearColor(0.85f,0.85f,0.85f),18,16,GEngine->GetSmallFont());
         if(Coverage>=85&&Excess<=2)DrawText(TEXT("Pattern Clean"),FLinearColor(0.65f,0.65f,0.65f),18,76,GEngine->GetSmallFont());
         break;
