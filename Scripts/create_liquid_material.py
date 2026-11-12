@@ -3,7 +3,7 @@
 UnrealEditor-Cmd.exe EMJ2026.uproject -EnablePlugins=PythonScriptPlugin
   -run=pythonscript -script=Scripts/create_liquid_material.py -unattended -nop4
   -AllowCommandletRendering (no -NullRHI: shader compilation needs a renderer)
-Only /Game/Materials/M_LiquidHeightfield is rebuilt. No maps are saved.
+Rebuilds M_LiquidHeightfield and M_TrayGlyphSDF, backing up existing assets. No maps saved.
 """
 from pathlib import Path
 from datetime import datetime
@@ -87,3 +87,52 @@ if errors:
 if not unreal.EditorAssetLibrary.save_loaded_asset(material):
     raise RuntimeError("Could not save liquid material")
 unreal.log("LIQUID_ANALYTICAL_MATERIAL_COMPILED: " + asset_path)
+
+# UI-domain analytical glyph material, independently backed up before graph edits.
+asset_path = "/Game/Materials/M_TrayGlyphSDF"
+material = unreal.load_asset(asset_path)
+if material:
+    source = root / "Content/Materials/M_TrayGlyphSDF.uasset"
+    backup = root / "Saved/Backups" / ("M_TrayGlyphSDF-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".uasset")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, backup)
+    library.delete_all_material_expressions(material)
+else:
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        "M_TrayGlyphSDF", "/Game/Materials", unreal.Material, unreal.MaterialFactoryNew())
+if not material:
+    raise RuntimeError("Could not create tray material")
+material.set_editor_property("material_domain", unreal.MaterialDomain.MD_UI)
+material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+custom = node(unreal.MaterialExpressionCustom, 0, 0)
+custom.set_editor_property("description", "Driver / Buffer / Anchor analytical SDF glyphs")
+custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT4)
+custom.set_editor_property("code", Path(__file__).with_name("TrayGlyphSDF.hlsl").read_text())
+inputs=[]
+for name in ("UV", "GlyphIndex", "HoverAlpha", "DragAlpha"):
+    custom_input=unreal.CustomInput()
+    custom_input.set_editor_property("input_name", name)
+    inputs.append(custom_input)
+custom.set_editor_property("inputs", inputs)
+uv=node(unreal.MaterialExpressionTextureCoordinate,-400,0)
+connect(uv,"",custom,"UV")
+for index,name in enumerate(("GlyphIndex", "HoverAlpha", "DragAlpha")):
+    parameter=node(unreal.MaterialExpressionScalarParameter,-400,150+index*150)
+    parameter.set_editor_property("parameter_name",name)
+    parameter.set_editor_property("default_value",0.0)
+    connect(parameter,"",custom,name)
+color=node(unreal.MaterialExpressionComponentMask,300,0)
+for channel,enabled in (("r",True),("g",True),("b",True),("a",False)):
+    color.set_editor_property(channel,enabled)
+connect(custom,"",color,"Input")
+alpha=node(unreal.MaterialExpressionComponentMask,300,180)
+for channel,enabled in (("r",False),("g",False),("b",False),("a",True)):
+    alpha.set_editor_property(channel,enabled)
+connect(custom,"",alpha,"Input")
+assert library.connect_material_property(color,"",unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+assert library.connect_material_property(alpha,"",unreal.MaterialProperty.MP_OPACITY)
+errors=library.recompile_material(material)
+if errors:
+    raise RuntimeError("Tray material compile errors: "+str(errors))
+assert unreal.EditorAssetLibrary.save_loaded_asset(material)
+unreal.log("TRAY_SDF_MATERIAL_COMPILED: "+asset_path)

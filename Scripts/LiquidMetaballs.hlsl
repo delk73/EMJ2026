@@ -3,6 +3,8 @@
 float2 P = (UV - 0.5) * (2.0 * PlaneHalfExtent);
 float Phi = 0.0;
 float2 Gradient = float2(0.0, 0.0);
+float NodeWeight = 0.0;
+float EnergyField = 0.0;
 int Nodes = clamp((int)NodeCount, 0, 256);
 int Tethers = clamp((int)TetherCount, 0, 256);
 
@@ -14,10 +16,15 @@ for (int i = 0; i < Nodes; ++i)
     float2 D = P - Node.xy;
     float R2 = max(Node.z * Node.z, 0.0001);
     float Q = saturate(1.0 - dot(D, D) / R2);
-    // Phi = E * (1 - r^2/R^2)^3 inside support; value and first two
+    // Geometry stays visible even at zero internal energy. Row 0.w now carries
+    // normalized charge/pulse/strain, used only for lighting contrast.
+    float Kernel = Q * Q * Q;
+    NodeWeight += Kernel;
+    EnergyField += saturate(Node.w) * Kernel;
+    // Phi = (1 - r^2/R^2)^3 inside support; value and first two
     // derivatives vanish at the boundary. No finite differences or raster grid.
-    Phi += Node.w * Q * Q * Q;
-    Gradient += (-6.0 * Node.w * Q * Q / R2) * D;
+    Phi += Kernel;
+    Gradient += (-6.0 * Q * Q / R2) * D;
 }
 
 [loop]
@@ -59,7 +66,9 @@ float Diffuse = saturate(dot(N, Light));
 float Specular = pow(saturate(dot(N, HalfVector)), 64.0);
 float Rim = (1.0 - saturate(N.z)) * (1.0 - saturate(N.z));
 float Meniscus = 1.0 - smoothstep(IsoThreshold, IsoThreshold + 0.3, Phi);
-float Liquid = saturate(0.13 + 0.38 * Diffuse + 0.6 * Specular + 0.18 * Rim - 0.10 * Meniscus);
+float CoreEnergy = saturate(EnergyField / max(NodeWeight, 0.00001));
+float Liquid = saturate(0.10 + 0.33 * Diffuse + lerp(0.3, 0.8, CoreEnergy) * Specular
+    + 0.18 * Rim - 0.10 * Meniscus + 0.18 * CoreEnergy);
 // Derivatives are evaluated after both uniform-count loops, at native pixel resolution.
 float AA = max(0.5 * fwidth(Phi), 0.00001);
 float Coverage = smoothstep(IsoThreshold - AA, IsoThreshold + AA, Phi);

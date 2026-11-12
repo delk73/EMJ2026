@@ -4,12 +4,16 @@
 #include "GameFramework/Actor.h"
 #include "AttractionSimulation.generated.h"
 
+UENUM(BlueprintType)
+enum class EAttractionArchetype : uint8 { Driver, Buffer, Anchor };
+
 // Force on receiver i from emitter j = Receive_i dot (ChannelMatrix * Emit_j).
 // Positive affinity attracts; negative affinity repels. Reciprocity is optional.
 USTRUCT(BlueprintType)
 struct FAttractionNode
 {
     GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EAttractionArchetype Archetype = EAttractionArchetype::Driver;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Position = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Velocity = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.01")) float Mass = 1.f;
@@ -20,6 +24,9 @@ struct FAttractionNode
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float CaptureRadius = 180.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) int32 Valence = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 BondType = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float InternalEnergy = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float PulseTimeRemaining = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float PulseCooldown = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -77,8 +84,15 @@ public:
     // Severed pairs remain suppressed until reset, so a cut cannot instantly reattach.
     UFUNCTION(BlueprintCallable, Category="Simulation") bool SliceTether(int32 TetherIndex);
     UFUNCTION(BlueprintCallable, Category="Simulation") int32 DropNode(FAttractionNode Profile, FVector LocalPosition);
-    // Player drop bounds; independent of the much larger neutral rendering backdrop.
-    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="400", ClampMax="4000")) float BoardHalfExtent = 1200.f;
+    UFUNCTION(BlueprintCallable, Category="Simulation") static FAttractionNode MakeArchetype(EAttractionArchetype Archetype);
+    UFUNCTION(BlueprintCallable, Category="Simulation") bool ToggleNearestPin(FVector LocalPosition);
+    UFUNCTION(BlueprintCallable, Category="Simulation") void Stir(FVector Start, FVector End);
+    // Shared fixed-step entry point also supports lightweight commandlet diagnostics.
+    UFUNCTION(BlueprintCallable, Category="Simulation") void AdvanceSimulation(float DeltaSeconds);
+    bool IsInsidePlayfield(const FVector& Position) const;
+    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="400")) float PlayfieldHalfExtentX = 4400.f;
+    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="400")) float PlayfieldHalfExtentY = 2600.f;
+    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="50")) float BoundarySoftness = 350.f;
     UPROPERTY(VisibleAnywhere, Category="Liquid") float PlaneHalfExtent = 12000.f;
     UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="20")) float DropletRadius = 115.f;
     UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="10")) float FilamentRadius = 55.f;

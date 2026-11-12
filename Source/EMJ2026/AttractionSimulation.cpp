@@ -45,14 +45,17 @@ void AAttractionSimulation::ResetSimulation()
     {
         Nodes.Reset();
         FRandomStream Random(Seed);
-        for (int32 I = 0; I < 6; ++I)
+        for (int32 I = 0; I < 9; ++I)
         {
-            FAttractionNode N;
-            N.Position = FVector((I % 3 - 1) * 145.f, (I / 3) * 150.f - 75.f, 0);
-            N.bPinned = I == 0 || I == 2;
-            N.Velocity = N.bPinned ? FVector::ZeroVector : FVector(Random.FRandRange(-30,30), Random.FRandRange(-40,40),0);
-            // Node 5 responds oppositely to channel 0: nonreciprocal chase.
-            if (I == 5) N.Receive = FVector(-0.6,0,0);
+            const auto Type = static_cast<EAttractionArchetype>(I%3);
+            FAttractionNode N = MakeArchetype(Type);
+            const float Angle = FMath::DegreesToRadians((I/3)*120.f+(I%3)*25.f);
+            const float Radius = I%3 == 0 ? 260.f : I%3 == 1 ? 155.f : 90.f;
+            N.Position = FVector(FMath::Cos(Angle)*Radius,FMath::Sin(Angle)*Radius,0);
+            N.Velocity = FVector(-FMath::Sin(Angle),FMath::Cos(Angle),0)*(I%3 == 0 ? 75.f : 25.f);
+            N.Velocity += FVector(Random.FRandRange(-8,8),Random.FRandRange(-8,8),0);
+            N.bPinned = I == 2;
+            if (Type == EAttractionArchetype::Buffer) N.InternalEnergy = Random.FRandRange(0.6f,0.75f);
             Nodes.Add(N);
         }
     }
@@ -61,6 +64,9 @@ void AAttractionSimulation::ResetSimulation()
         N.Position.Z = 0;
         N.Velocity.Z = 0;
         N.Mass = FMath::Max(N.Mass,0.01f);
+        N.Valence = FMath::Clamp(N.Valence,0,N.Archetype == EAttractionArchetype::Anchor ? 4 : 3);
+        N.InternalEnergy = FMath::Clamp(N.InternalEnergy,0.f,1.f);
+        N.PulseTimeRemaining = N.PulseCooldown = 0;
         if (N.bPinned) N.Velocity = FVector::ZeroVector;
     }
     Tethers.Reset();
@@ -108,7 +114,10 @@ void AAttractionSimulation::UpdateLiquidSurface()
     FVector4f* Records = new FVector4f[Width*3];
     const int32 NodeCount = FMath::Min(Nodes.Num(),Width);
     for (int32 I=0; I<NodeCount; ++I)
-        Records[I] = FVector4f(float(Nodes[I].Position.X),float(Nodes[I].Position.Y),FMath::Max(20.f,DropletRadius),1.f);
+    {
+        const float Energy = Nodes[I].PulseTimeRemaining>0 ? 1.f : FMath::Clamp(Nodes[I].InternalEnergy,0.f,1.f);
+        Records[I] = FVector4f(float(Nodes[I].Position.X),float(Nodes[I].Position.Y),FMath::Max(20.f,DropletRadius),Energy);
+    }
     int32 TetherCount = 0;
     auto AddTether = [&](const FVector& A,const FVector& B,float Radius,float PinchAlpha)
     {
@@ -123,6 +132,8 @@ void AAttractionSimulation::UpdateLiquidSurface()
         const FVector A = Nodes[T.A].Position, B = Nodes[T.B].Position;
         const float Strain = FMath::Max(0.f,float(FVector::Distance(A,B))/FMath::Max(1.f,T.Rule.RestLength)-1);
         const float Stretch = FMath::Clamp(Strain/FMath::Max(0.01f,T.Rule.BreakStrain),0.f,1.f);
+        if (T.A<NodeCount) Records[T.A].W = FMath::Max(Records[T.A].W,Stretch);
+        if (T.B<NodeCount) Records[T.B].W = FMath::Max(Records[T.B].W,Stretch);
         const float Pinch = Stretch*Stretch*(3-2*Stretch);
         AddTether(A,B,FMath::Max(10.f,FilamentRadius)*(1.f-0.88f*Pinch),Pinch);
     }
@@ -173,19 +184,89 @@ bool AAttractionSimulation::SliceTether(int32 TetherIndex)
 int32 AAttractionSimulation::DropNode(FAttractionNode Profile, FVector LocalPosition)
 {
     if (LocalPosition.ContainsNaN() || Nodes.Num() >= 128 ||
-        FMath::Abs(LocalPosition.X)>BoardHalfExtent || FMath::Abs(LocalPosition.Y)>BoardHalfExtent) return INDEX_NONE;
+        !IsInsidePlayfield(LocalPosition)) return INDEX_NONE;
     Profile.Position = FVector(LocalPosition.X,LocalPosition.Y,0);
     Profile.Velocity = FVector::ZeroVector;
     Profile.bPinned = false;
     Profile.Mass = FMath::Max(0.01f,Profile.Mass);
+    Profile.Valence = FMath::Clamp(Profile.Valence,0,Profile.Archetype == EAttractionArchetype::Anchor ? 4 : 3);
+    Profile.InternalEnergy = Profile.PulseTimeRemaining = Profile.PulseCooldown = 0;
     const int32 Index = Nodes.Add(Profile);
     return Index;
+}
+
+FAttractionNode AAttractionSimulation::MakeArchetype(EAttractionArchetype Type)
+{
+    FAttractionNode N;
+    N.Archetype = Type;
+    N.CaptureRadius = 320;
+    if (Type == EAttractionArchetype::Driver) { N.Mass = 0.8f; N.Valence = 2; N.RepulsionScale = 0.8f; }
+    if (Type == EAttractionArchetype::Buffer) { N.Mass = 1.2f; N.Valence = 3; N.RepulsionScale = 1.5f; }
+    if (Type == EAttractionArchetype::Anchor) { N.Mass = 2.f; N.Valence = 4; N.RepulsionScale = 0.4f; }
+    return N;
+}
+
+bool AAttractionSimulation::IsInsidePlayfield(const FVector& P) const
+{
+    return !P.ContainsNaN() && FMath::Abs(P.X)<=FMath::Max(400.f,PlayfieldHalfExtentX) && FMath::Abs(P.Y)<=FMath::Max(400.f,PlayfieldHalfExtentY);
+}
+
+bool AAttractionSimulation::ToggleNearestPin(FVector P)
+{
+    int32 Best = INDEX_NONE;
+    double Distance2 = 140*140;
+    for (int32 I=0; I<Nodes.Num(); ++I)
+    {
+        const double D = FVector::DistSquared2D(P,Nodes[I].Position);
+        if (D<=Distance2) { Distance2=D; Best=I; }
+    }
+    if (Best==INDEX_NONE) return false;
+    Nodes[Best].bPinned = !Nodes[Best].bPinned;
+    Nodes[Best].Velocity = FVector::ZeroVector;
+    return true;
+}
+
+void AAttractionSimulation::Stir(FVector Start,FVector End)
+{
+    if (Start.ContainsNaN() || End.ContainsNaN()) return;
+    Start.Z = End.Z = 0;
+    const FVector Impulse = ((End-Start)*2.f).GetClampedToMaxSize(240.f);
+    for (FAttractionNode& N : Nodes)
+    {
+        if (N.bPinned) continue;
+        const FVector Closest = FMath::ClosestPointOnSegment(N.Position,Start,End);
+        const float Q = FMath::Max(0.f,1.f-float(FVector::DistSquared(N.Position,Closest))/(350.f*350.f));
+        N.Velocity = (N.Velocity+Impulse*Q*Q/FMath::Max(0.01f,N.Mass)).GetClampedToMaxSize(FMath::Max(1.f,MaxSpeed));
+    }
+}
+
+void AAttractionSimulation::AdvanceSimulation(float DeltaSeconds)
+{
+    if (!bRunning || !FMath::IsFinite(DeltaSeconds)) return;
+    constexpr double FixedDt = 1.0/120.0;
+    Accumulator = FMath::Min(Accumulator+FMath::Max(0.f,DeltaSeconds),16*FixedDt);
+    while (Accumulator>=FixedDt) { Step(float(FixedDt)); Accumulator -= FixedDt; }
 }
 
 void AAttractionSimulation::Step(float Dt)
 {
     TArray<FVector> Forces;
     Forces.Init(FVector::ZeroVector, Nodes.Num());
+    // Density-driven relaxation oscillator: charge, 0.35 s pulse, then refractory cooldown.
+    for (int32 I=0; I<Nodes.Num(); ++I)
+    {
+        FAttractionNode& N = Nodes[I];
+        if (N.Archetype != EAttractionArchetype::Buffer) { N.InternalEnergy *= FMath::Exp(-Dt); continue; }
+        N.PulseTimeRemaining = FMath::Max(0.f,N.PulseTimeRemaining-Dt);
+        N.PulseCooldown = FMath::Max(0.f,N.PulseCooldown-Dt);
+        if (N.PulseTimeRemaining>0) { N.InternalEnergy=1; continue; }
+        if (N.PulseCooldown>0) { N.InternalEnergy=FMath::Max(0.f,N.InternalEnergy-1.5f*Dt); continue; }
+        float Density = 0;
+        for (int32 J=0; J<Nodes.Num(); ++J)
+            if (I!=J) Density += FMath::Exp(-float(FVector::DistSquared(N.Position,Nodes[J].Position))/(300.f*300.f));
+        N.InternalEnergy = FMath::Clamp(N.InternalEnergy+Dt*(Density>1.3f ? 0.9f*(Density-1.3f) : -0.5f),0.f,1.f);
+        if (N.InternalEnergy>=1) { N.PulseTimeRemaining=0.35f; N.PulseCooldown=1.85f; }
+    }
     TArray<int32> Degree;
     Degree.Init(0,Nodes.Num());
     TSet<uint64> Existing;
@@ -219,14 +300,28 @@ void AAttractionSimulation::Step(float Dt)
         // Difference of Gaussian potentials: analytic smooth radial gradients, zero at overlap.
         // The cushion is reciprocal; emit/receive affinity still permits directional field work.
         const float Range = FMath::Max(1.f,PullRange);
-        const float CushionRange = FMath::Max(1.f,Softening);
+        const bool HasBuffer = NA.Archetype==EAttractionArchetype::Buffer || NB.Archetype==EAttractionArchetype::Buffer;
+        const float CushionRange = FMath::Max(1.f,Softening)*(HasBuffer ? 1.6f : 1.f);
         const float Pull = 80.f*(Distance/Range)*FMath::Exp(-0.5f*Delta.SizeSquared()/(Range*Range));
         const float Cushion = FMath::Max(0.f,CushionStrength)*FMath::Max(0.f,(NA.RepulsionScale+NB.RepulsionScale)*0.5f)*(Distance/CushionRange)*FMath::Exp(-0.5f*Delta.SizeSquared()/(CushionRange*CushionRange));
         const float EnergyScale = FMath::Max(0.f,FieldStrength)/800000.f;
-        Forces[A] += Direction * EnergyScale*(Pull*Affinity(NA,NB)-Cushion);
-        Forces[B] -= Direction * EnergyScale*(Pull*Affinity(NB,NA)-Cushion);
+        // Rows receive, columns emit: deliberately nonreciprocal. No global orbit controller.
+        static constexpr float Coupling[3][3] = {{-1.2f,1.5f,2.2f},{0.45f,0.4f,0.5f},{0.35f,0.25f,0.f}};
+        auto Radial = [&](const FAttractionNode& Receiver,const FAttractionNode& Emitter)
+        {
+            float F = Pull*Coupling[int32(Receiver.Archetype)][int32(Emitter.Archetype)]*Affinity(Receiver,Emitter)-Cushion;
+            if (Receiver.Archetype==EAttractionArchetype::Anchor)
+                F += 210.f*(Distance/90.f)*FMath::Exp(-0.5f*Delta.SizeSquared()/(90.f*90.f));
+            return F;
+        };
+        Forces[A] += Direction*EnergyScale*Radial(NA,NB);
+        Forces[B] -= Direction*EnergyScale*Radial(NB,NA);
+        const float Pulse = 900.f*(Distance/240.f)*FMath::Exp(-0.5f*Delta.SizeSquared()/(450.f*450.f));
+        if (NB.PulseTimeRemaining>0) Forces[A] -= Direction*Pulse;
+        if (NA.PulseTimeRemaining>0) Forces[B] += Direction*Pulse;
         const float ViscousWeight = FMath::Exp(-0.5f*Delta.SizeSquared()/(Range*Range));
-        const FVector ViscousForce = (NB.Velocity-NA.Velocity)*FMath::Max(0.f,Viscosity)*ViscousWeight/FMath::Max(1.f,Nodes.Num()/6.f);
+        const float DampingGain = (NA.Archetype==EAttractionArchetype::Anchor || NB.Archetype==EAttractionArchetype::Anchor) ? 3.f : 1.f;
+        const FVector ViscousForce = (NB.Velocity-NA.Velocity)*FMath::Max(0.f,Viscosity)*DampingGain*ViscousWeight/FMath::Max(1.f,Nodes.Num()/6.f);
         Forces[A] += ViscousForce; Forces[B] -= ViscousForce;
         const uint64 Key = PairKey(A,B);
         if (Existing.Contains(Key) || SuppressedPairs.Contains(Key) ||
@@ -239,6 +334,11 @@ void AAttractionSimulation::Step(float Dt)
             if ((NB.Velocity-NA.Velocity).Size() > Rule.MaxRelativeSpeed ||
                 Distance > FMath::Max(1.f,Rule.RestLength)*(1.f+FMath::Max(0.f,Rule.BreakStrain))) continue;
             FAttractionTether T; T.A = A; T.B = B; T.Rule = Rule;
+            if (NA.Archetype==EAttractionArchetype::Driver || NB.Archetype==EAttractionArchetype::Driver)
+            {
+                T.Rule.Stiffness *= 0.55f;
+                T.Rule.BreakStrain = FMath::Max(1.8f,T.Rule.BreakStrain);
+            }
             Tethers.Add(T); Existing.Add(Key); ++Degree[A]; ++Degree[B]; break;
         }
     }
@@ -257,7 +357,16 @@ void AAttractionSimulation::Step(float Dt)
     {
         FAttractionNode& N = Nodes[I];
         if (N.bPinned) { N.Velocity = FVector::ZeroVector; continue; }
-        const FVector Acceleration = (Forces[I]/FMath::Max(0.01f,N.Mass)).GetClampedToMaxSize(FMath::Max(1.f,MaxAcceleration));
+        // Soft inward spring plus outward-velocity damping in a border band, without teleporting.
+        auto Boundary = [&](float Position,float Velocity,float Extent)
+        {
+            const float Depth = FMath::Max(0.f,FMath::Abs(Position)-FMath::Max(100.f,Extent-FMath::Max(50.f,BoundarySoftness)));
+            const float Sign = FMath::Sign(Position);
+            return -Sign*(2.5f*Depth+3.f*FMath::Max(0.f,Sign*Velocity)*FMath::Clamp(Depth/FMath::Max(50.f,BoundarySoftness),0.f,1.f));
+        };
+        const FVector BoundaryAcceleration(Boundary(N.Position.X,N.Velocity.X,PlayfieldHalfExtentX),Boundary(N.Position.Y,N.Velocity.Y,PlayfieldHalfExtentY),0);
+        const float KineticGain = N.Archetype==EAttractionArchetype::Driver ? 1.45f : 1.f;
+        const FVector Acceleration = (Forces[I]*KineticGain/FMath::Max(0.01f,N.Mass)+BoundaryAcceleration).GetClampedToMaxSize(FMath::Max(1.f,MaxAcceleration));
         N.Velocity = ((N.Velocity + Acceleration*Dt)*FMath::Exp(-FMath::Max(0.f,Drag)*Dt)).GetClampedToMaxSize(FMath::Max(1.f,MaxSpeed));
         N.Position += N.Velocity*Dt;
     }
@@ -271,13 +380,7 @@ void AAttractionSimulation::Tick(float DeltaSeconds)
         PinchingFilaments[I].Age += FMath::Max(0.f,DeltaSeconds);
         if (PinchingFilaments[I].Age>=0.22f) PinchingFilaments.RemoveAt(I);
     }
-    constexpr double FixedDt = 1.0/120.0;
-    if (bRunning)
-    {
-        // Bound hitch catch-up to 16 steps, intentionally dropping excess wall time.
-        Accumulator = FMath::Min(Accumulator + FMath::Max(0.f,DeltaSeconds),16*FixedDt);
-        while (Accumulator >= FixedDt) { Step(float(FixedDt)); Accumulator -= FixedDt; }
-    }
+    AdvanceSimulation(DeltaSeconds);
     UpdateLiquidSurface();
     const FTransform Transform = GetActorTransform();
     for (int32 I = 0; I < Nodes.Num(); ++I)

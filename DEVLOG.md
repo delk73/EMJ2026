@@ -45,3 +45,13 @@
 * **Next Immediate Step:** Content Browser > Maps > AttractionGym; Play dropdown > Selected Viewport > Play. Inspect close-up edges at zoom 600 and all four corners at 4200; test merge/swipe/reset and off-center cursor alignment for 30 seconds using `SIMULATION_TEST.md`, then record viewport results.
 
 ---
+
+### [2026-11-12 10:54] — Widescreen SDF tray and emergent archetypes
+
+* **Intent:** Make the widescreen field directly playable through archetype drag/drop and physical gestures.
+* **Changes Made:** Updated `AttractionSimulation.h/.cpp` with 4400x2600 half-extents, soft containment, Driver/Buffer/Anchor factories, nonreciprocal coupling, crowding charge/pulses, Anchor cohesion/damping, Driver tether strain, nine-node mixed demo, energy/strain GPU records, and native pin/stir/fixed-step APIs. Updated `AttractionPlayerController.h/.cpp` for tray drag/drop/cancel, short-click pinning, drag stirring, universal RMB slicing, reset and zoom. Added `AttractionHUD.h/.cpp` and separate `AttractionGameMode.h/.cpp`, preserving the native game-mode path. Updated `LiquidMetaballs.hlsl`, material generator and setup check; added `TrayGlyphSDF.hlsl`, dynamics/Canvas check scripts, and `Content/Materials/M_TrayGlyphSDF.uasset`; regenerated `M_LiquidHeightfield.uasset`. Updated `SIMULATION_TEST.md`. Materials were backed up; gym map was not saved.
+* **Verification Status:** `[VERIFIED IN CODE/COMPILE]` Both material compilations and final `.\preflight.ps1` build/NullRHI boot passed, exit 0. Gym/material/HUD wiring checks passed. Native diagnostics passed archetype forces, wide drops, 0.35-second pulses across three cycles, outward pulse, pin/stir, soft containment, Driver tethers, reset and finite active 20-second demo (maximum final speed 185.9). Offscreen Canvas GPU readback passed three distinct greyscale silhouettes, transparent corners and hover/drag brightness (0.540 to 0.760). Logs: `Saved/Logs/Slice4Materials.log`, `PreflightBuild.log`, `PreflightSmoke.log`, `Slice4Setup.log`, `Slice4Dynamics.log`, `TrayCanvasProbe.log`. Editor was closed before builds.
+* **Verification Status:** `[UNVERIFIED - NEEDS VIEWPORT TEST]` Tray layout/hit-testing, real mouse gesture transitions, visible orbital/pulse feedback, fullscreen corner coverage and GPU performance remain unobserved in PIE.
+* **Next Immediate Step:** Open Content Browser > Maps > AttractionGym; World Settings > GameMode Override = AttractionGameMode; Play dropdown > Selected Viewport > Play. Follow the Slice 4 checklist in `SIMULATION_TEST.md`: drag/cancel each tile, pin/stir/slice, test all visible corners at zoom 4200, then observe charge/pulses and reset for 30-60 seconds.
+
+---

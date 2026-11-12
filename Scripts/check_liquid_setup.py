@@ -31,7 +31,8 @@ assert parameters["NodeCount"].get_editor_property("default_value") == 0
 assert parameters["TetherCount"].get_editor_property("default_value") == 0
 assert parameters["PlaneHalfExtent"].get_editor_property("default_value") == 12000
 assert board.get_editor_property("plane_half_extent") == 12000
-assert board.get_editor_property("board_half_extent") == 1200
+assert board.get_editor_property("playfield_half_extent_x") == 4400
+assert board.get_editor_property("playfield_half_extent_y") == 2600
 scale = meshes[0].get_editor_property("relative_scale3d")
 assert scale.x == 240 and scale.y == 240, "Backdrop must be 24000x24000"
 count = len(board.get_editor_property("nodes"))
@@ -44,3 +45,16 @@ unreal.log("LIQUID_SETUP_OK: 24000x24000 plane, analytical Custom HLSL, no bitma
 unreal.log("LIQUID_GYM_TUNING: pull=" + str(board.get_editor_property("field_strength")) +
            " softness=" + str(board.get_editor_property("softening")) +
            " spring rules=" + str(board.get_editor_property("bond_rules")))
+
+tray = unreal.load_asset("/Game/Materials/M_TrayGlyphSDF")
+assert tray and tray.get_editor_property("material_domain") == unreal.MaterialDomain.MD_UI
+tray_expressions = unreal.MaterialEditingLibrary.get_material_expressions(tray)
+tray_customs = [e for e in tray_expressions if isinstance(e, unreal.MaterialExpressionCustom)]
+assert len(tray_customs) == 1
+assert tray_customs[0].get_editor_property("code") == Path(__file__).with_name("TrayGlyphSDF.hlsl").read_text()
+tray_parameters = {str(e.get_editor_property("parameter_name")) for e in tray_expressions
+                   if isinstance(e, unreal.MaterialExpressionScalarParameter)}
+assert tray_parameters == {"GlyphIndex", "HoverAlpha", "DragAlpha"}
+mode = unreal.get_default_object(unreal.AttractionGameMode)
+assert mode.get_editor_property("hud_class").get_path_name() == "/Script/EMJ2026.AttractionHUD"
+unreal.log("SLICE4_TRAY_WIRING_OK: UI-domain SDF, parameters and native HUD game-mode wiring")
