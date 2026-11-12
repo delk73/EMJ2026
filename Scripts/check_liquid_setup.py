@@ -26,7 +26,7 @@ assert customs[0].get_editor_property("code") == Path(__file__).with_name("Liqui
 assert not any(isinstance(expression, unreal.MaterialExpressionTextureSampleParameter2D) for expression in expressions), "Legacy bitmap sample remains"
 parameters = {str(expression.get_editor_property("parameter_name")): expression
               for expression in expressions if isinstance(expression, unreal.MaterialExpressionScalarParameter)}
-assert set(parameters) == {"NodeCount", "TetherCount", "PlaneHalfExtent", "IsoThreshold", "SurfaceHeight"}
+assert set(parameters) == {"NodeCount", "TetherCount", "PlaneHalfExtent", "IsoThreshold", "SurfaceHeight", "RewardActive"}
 assert parameters["NodeCount"].get_editor_property("default_value") == 0
 assert parameters["TetherCount"].get_editor_property("default_value") == 0
 assert parameters["PlaneHalfExtent"].get_editor_property("default_value") == 12000
@@ -57,4 +57,4 @@ tray_parameters = {str(e.get_editor_property("parameter_name")) for e in tray_ex
 assert tray_parameters == {"GlyphIndex", "HoverAlpha", "DragAlpha"}
 mode = unreal.get_default_object(unreal.AttractionGameMode)
 assert mode.get_editor_property("hud_class").get_path_name() == "/Script/EMJ2026.AttractionHUD"
-unreal.log("SLICE4_TRAY_WIRING_OK: UI-domain SDF, parameters and native HUD game-mode wiring")
+unreal.log("SLICE5_WIRING_OK: retained unused tray material and native status HUD game-mode wiring")

@@ -72,5 +72,19 @@ float Liquid = saturate(0.10 + 0.33 * Diffuse + lerp(0.3, 0.8, CoreEnergy) * Spe
 // Derivatives are evaluated after both uniform-count loops, at native pixel resolution.
 float AA = max(0.5 * fwidth(Phi), 0.00001);
 float Coverage = smoothstep(IsoThreshold - AA, IsoThreshold + AA, Phi);
-float Grey = lerp(0.22, Liquid, Coverage);
+float TargetComplement = 1.0;
+float3 Lobes[3] = { TargetLobe0, TargetLobe1, TargetLobe2 };
+[unroll] for(int l=0;l<3;++l)
+{
+    float2 D=P-Lobes[l].xy;
+    float Q=saturate(1-dot(D,D)/max(1,Lobes[l].z*Lobes[l].z));
+    TargetComplement *= 1-Q*Q*(3-2*Q);
+}
+float Target=1-TargetComplement;
+float Recess=0.22-0.065*Target;
+float DiscDistance=length(P-RewardDisc.xy)/max(1,RewardDisc.z);
+float Reward=RewardActive * (1-smoothstep(0.65,1.0,DiscDistance));
+float DiscEdge=RewardActive * (1-smoothstep(0.008,0.025,abs(DiscDistance-1)));
+float Backdrop=Recess+0.035*Reward+0.045*DiscEdge;
+float Grey = lerp(Backdrop, Liquid, Coverage);
 return float3(Grey, Grey, Grey);

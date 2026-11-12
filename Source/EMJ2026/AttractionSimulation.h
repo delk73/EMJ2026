@@ -5,6 +5,17 @@
 #include "AttractionSimulation.generated.h"
 
 UENUM(BlueprintType)
+enum class EAttractionAgentRole : uint8 { None, Builder, Filler, Trimmer };
+
+USTRUCT(BlueprintType)
+struct FAttractionStageConfig
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FVector> Lobes; // XY center, Z soft radius
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FVector2D> RootAnchors;
+};
+
+UENUM(BlueprintType)
 enum class EAttractionArchetype : uint8 { Driver, Buffer, Anchor };
 
 // Force on receiver i from emitter j = Receive_i dot (ChannelMatrix * Emit_j).
@@ -13,6 +24,14 @@ USTRUCT(BlueprintType)
 struct FAttractionNode
 {
     GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EAttractionAgentRole AgentRole = EAttractionAgentRole::None;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) bool bConnectedToRoot = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRootAnchor = false;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) int32 PotencyTier = 1;
+    float WorkCharge = 0;
+    float AgentSlideProgress = 0;
+    int32 AgentSlideTarget = INDEX_NONE;
+    FVector GrowthDirection = FVector(1,0,0);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EAttractionArchetype Archetype = EAttractionArchetype::Driver;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Position = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Velocity = FVector::ZeroVector;
@@ -85,8 +104,8 @@ public:
     UFUNCTION(BlueprintCallable, Category="Simulation") bool SliceTether(int32 TetherIndex);
     UFUNCTION(BlueprintCallable, Category="Simulation") int32 DropNode(FAttractionNode Profile, FVector LocalPosition);
     UFUNCTION(BlueprintCallable, Category="Simulation") static FAttractionNode MakeArchetype(EAttractionArchetype Archetype);
-    UFUNCTION(BlueprintCallable, Category="Simulation") bool ToggleNearestPin(FVector LocalPosition);
-    UFUNCTION(BlueprintCallable, Category="Simulation") void Stir(FVector Start, FVector End);
+
+
     // Shared fixed-step entry point also supports lightweight commandlet diagnostics.
     UFUNCTION(BlueprintCallable, Category="Simulation") void AdvanceSimulation(float DeltaSeconds);
     bool IsInsidePlayfield(const FVector& Position) const;
@@ -98,7 +117,30 @@ public:
     UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="10")) float FilamentRadius = 55.f;
     UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.01")) float IsoThreshold = 0.18f;
     UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.1")) float SurfaceHeight = 100.f;
+    UPROPERTY(EditAnywhere, Category="Stages") TArray<FAttractionStageConfig> Stages;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stages") int32 StageIndex = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") bool bRewardActive = false;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") FVector2D RewardCenter = FVector2D::ZeroVector;
+    UPROPERTY(EditAnywhere, Category="Reward") float RewardRadius = 950;
+    UPROPERTY(EditAnywhere, Category="Agents") float TargetThreshold = 0.25f;
+    UPROPERTY(EditAnywhere, Category="Agents") float MaxAttachDist = 320;
+    UFUNCTION(BlueprintCallable) float SampleTargetHeight(FVector2D Pos) const;
+    UFUNCTION(BlueprintCallable) void SetReward(FVector2D Center, bool bActive);
+    UFUNCTION(BlueprintCallable) void NextStage();
+    UFUNCTION(BlueprintCallable) void RefreshConnectivity();
+    UFUNCTION(BlueprintCallable) float TargetCoverage() const;
+    UFUNCTION(BlueprintCallable) int32 ExcessNodes() const;
+    UFUNCTION(BlueprintCallable) int32 ConnectedAgents() const;
+    bool bManipulatingAgents = false;
+    float RewardWeight(const FVector& P) const;
+    int32 PickNode(const FVector& P) const;
+    void SlideAgent(int32& Index, const FVector& P);
+    UFUNCTION(BlueprintCallable) void DragPatch(int32 Index, const FVector& Delta);
+    UFUNCTION(BlueprintCallable) void GraftPatch(int32 Index);
 private:
+    bool AddStructuralTether(int32 A, int32 B);
+    void WorkAgents(float Dt);
+    void RemoveNode(int32 Index);
     UPROPERTY(VisibleAnywhere, Category="Liquid") TObjectPtr<class UStaticMeshComponent> LiquidPlane;
     UPROPERTY() TSoftObjectPtr<class UMaterialInterface> LiquidMaterialAsset;
     UPROPERTY(Transient) TObjectPtr<class UTexture2D> LiquidDataTexture;

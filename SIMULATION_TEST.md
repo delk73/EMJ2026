@@ -1,3 +1,52 @@
+# Slice 5a: Camera centering and wide zoom altitude fix
+
+**[VERIFIED IN CODE/COMPILE]** 2026-11-12: controller compilation/link and `preflight.ps1` NullRHI initialization/clean exit passed with Unreal Editor closed. UE perspective projection uses an infinite far plane; no finite far-clip extension is needed for Z=18000. These checks do not exercise mouse input or rendered gameplay.
+
+**[UNVERIFIED - NEEDS VIEWPORT TEST]** These checks supersede historical camera settings only. Retain the current gameplay checklist below.
+
+1. Open `/Game/Maps/AttractionGym` with AttractionGameMode and one XY simulation actor. Save in-flight work. Play in a 16:9 Selected Viewport. Expect camera world Z=5200 and XY at the transformed active-node centroid. Empty Nodes falls back to actor XY; the first tick re-samples once after actor BeginPlay completes. Check both an authored board and an empty map with the automatically spawned board.
+2. In a scratch copy with `Running=false` and asymmetric/off-origin InitialNodes, compare mean node world XY against camera XY. Confirm the active ViewTarget is the controller's CameraActor, CameraComponent relative location/rotation are zero, its forward vector is (0,0,-1), and the centroid projects to viewport (0.5,0.5). Center means the full game viewport, including HUD overlays. Check an empty-node reset falls back to actor XY. Do not save fixture changes to the gym.
+3. Scroll up to world Z=550, down to world Z=18000, and reverse rapidly. Expect target multipliers 0.84/1.16 per wheel event, smooth FInterpTo speed 12, stable limits and no XY drift. Altitudes are absolute world Z, not heights above the board. At 18000 inspect the lattice, board and all four corners for clipping or missing backdrop; compilation does not prove rendered coverage or scene culling.
+4. At 550/5200/18000 and while zooming/reversing, test current reward placement/drag, carrier/patch picking and RMB cutting at several off-center positions. Cursor feedback and interaction should match the board plane. Existing playfield rejection remains in effect beyond the board. Resize and restore 16:9, then repeat.
+5. At both zoom limits, press R. Expect existing gameplay reset plus immediate centroid re-centering at Z=5200, zero camera component offset and no drift toward the old zoom target. Repeat three times, including after moving a patch. Normal play must not continuously chase the evolving centroid.
+
+Record viewport observations separately in DEVLOG.md; none have been recorded for Slice 5a.
+
+---
+
+# Slice 5: authorize / cut (current gameplay)
+
+This section supersedes historical Slice 2–4 pin, stir, deployment, oscillator, and force-profile checklists below.
+
+## Verified in code / compile
+
+- `preflight.ps1`: Unreal 5.9 UHT/C++/link and clean `-NullRHI` boot passed with the editor closed. Logs: `Saved/Logs/PreflightBuild.log`, `PreflightSmoke.log`.
+- Rendering-enabled `Scripts/create_liquid_material.py`: regenerated and compiled the saved liquid material with three soft lobe parameters and the single reward-disc parameters. Existing assets backed up under `Saved/Backups`; no map saved. Log: `Slice5Materials.log`.
+- `Scripts/check_slice5_dynamics.py`: native fixed-step OFF/remote/severed work gates, authorized Builder extrusion, bounded scalar samples, finite trajectories, cohesive cut topology, explicit graft reconnection, all three stages, survivor-only potency carryover, reset, Filler interior bracing/low-field stall, Trimmer inward pruning passed. Log: `Slice5Dynamics.log` (`SLICE5_NATIVE_OK`).
+- `Scripts/check_liquid_setup.py`: saved Custom HLSL matches source, analytical float-table material and plane/gym/HUD wiring passed. Log: `Slice5Setup.log`.
+
+These are commandlet checks, not evidence of rendered gameplay or actual mouse input.
+
+## Unverified — needs viewport test
+
+1. Open `/Game/Maps/AttractionGym`, save in-flight work, and Play in Selected Viewport using `AttractionGameMode`. Expect a widescreen board, recessed soft greyscale multi-lobe target, bright porous lattice, one root and three role carriers, and minimal top-left status. No deployment tray or click-to-pin behavior should remain.
+2. Before rewarding, observe 10 seconds: physics relaxes but agents do no work. Click empty board near the seed to authorize. Expect exactly one soft disc; Builder grows triangular cells toward reward with momentum, Filler adds interior struts, and Trimmer prunes near its carrier. Move the disc beyond the rim and inspect overshoot and exterior slowdown.
+3. Drag inside the disc to move it. Click within its central 14% radius, or press Space, to halt work. Repeat OFF/ON and move the disc far away; dormant role signatures should differ from active Builder/Filler/Trimmer and dim severed patches. Verify no extrusion, filling, or trimming while OFF. Passive relaxation/strain breaks may continue.
+4. RMB-drag across a bridge from anywhere on the board. Expect only intersected tethers to sever, retaining the detached component's internal tethers and agents. With reward active over the patch, detached agents must remain dormant.
+5. LMB-drag a connected carrier along existing adjacent edges. Its brightness should travel over each edge in roughly 0.25 seconds without moving the structural lattice. LMB-drag a detached patch: it should translate cohesively and weld to connected nodes within `MaxAttachDist` (320 default) on release. Beyond that distance it must remain disconnected. Work is suspended during carrier/patch gestures to keep selected indices stable; release restores reward-based authorization.
+6. Leave Trimmer authorized after edge excess clears: inspect slower inward loss. Guide Filler toward a low saddle: it must stall; bridge with a human graft before it can continue. Check local crowding and high strain slow Builder growth while triangular pores remain visible.
+7. Press N three times: cycle the three lobe presets. Only surviving root-connected carriers should reappear; potency rises by one per transition. A fully severed population must carry zero agents. R resets the current stage to its initial three tier-1 carriers, clears cuts and turns reward OFF.
+8. Check Target Coverage %, Excess Nodes, Reward ON/OFF, Connected Agents, Stage, and Pattern Clean at coverage >=85% and excess <=2. Coverage is a sampled interior occupancy estimate (160 cm probes, 240 cm connected-node influence), not liquid pixel area. Excess includes detached nodes outside the silhouette.
+9. Test at zoom 600/1800/4200, including left edge and all corners. Verify cursor alignment, disc legibility, smooth carrier/patch movement, role contrast, soft target shading, negative-space pores and GPU performance over 60 seconds. Record actual observations separately.
+
+## Runtime details
+
+`FAttractionStageConfig` stores three soft lobes (XY center, Z support radius) and designated root positions. CPU and shader use the same smooth radial union. The 256x3 float table retains position/radius/energy in row 0, endpoints in row 1, and filament shape in row 2; role lighting does not alter geometry. Nodes and tethers are capped at 128/256. Cuts suppress automatic restoration; only a deliberate graft can clear a suppressed attachment pair. There is no passive proximity capture.
+
+For native diagnostics with the editor closed, run `UnrealEditor-Cmd.exe EMJ2026.uproject -EnablePlugins=PythonScriptPlugin -run=pythonscript -script=<absolute Scripts/check_slice5_dynamics.py> -NullRHI -unattended -nop4 -abslog=<absolute log>`. These checks never save the gym.
+
+---
+
 # Slice 4: Widescreen archetypes, SDF tray, and field gestures
 
 **Status:** C++/UHT/link and NullRHI boot passed. Both materials compiled. Native fixed-step diagnostics and offscreen Canvas GPU readbacks passed. **In-viewport tray layout, mouse gestures, visual emergence and performance remain unverified.** The sections after this checklist are historical and describe earlier controls/bounds.

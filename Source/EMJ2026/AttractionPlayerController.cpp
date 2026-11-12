@@ -1,6 +1,7 @@
 #include "AttractionPlayerController.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/InputComponent.h"
 #include "DrawDebugHelpers.h"
 #include "AttractionHUD.h"
@@ -24,10 +25,9 @@ void AAttractionPlayerController::BeginPlay()
     BoardCamera = GetWorld()->SpawnActor<ACameraActor>();
     if (BoardCamera)
     {
-        const FVector Normal = Board->GetActorQuat().GetAxisZ();
-        BoardCamera->SetActorLocation(Board->GetActorLocation() + Normal*1800);
-        BoardCamera->SetActorRotation(FRotationMatrix::MakeFromXY(-Normal,Board->GetActorQuat().GetAxisX()).Rotator());
         BoardCamera->GetCameraComponent()->SetProjectionMode(ECameraProjectionMode::Perspective);
+        // Perspective uses UE's infinite-far reversed-Z projection; no finite far clip
+        // needs extending for the 18000-unit overview.
         BoardCamera->GetCameraComponent()->SetFieldOfView(60.f);
         BoardCamera->GetCameraComponent()->SetConstraintAspectRatio(false);
         BoardCamera->GetCameraComponent()->SetAspectRatioAxisConstraint(AspectRatio_MaintainXFOV);
@@ -44,7 +44,10 @@ void AAttractionPlayerController::BeginPlay()
         Post.BloomIntensity = 0;
         Post.bOverride_VignetteIntensity = true;
         Post.VignetteIntensity = 0;
-        SetViewTarget(BoardCamera);
+        CenterCamera();
+        // All actors have completed BeginPlay before the first world tick. Re-sample
+        // once in case the authored board had not populated Nodes above.
+        bRecenterOnFirstTick = true;
     }
     FInputModeGameAndUI Mode;
     Mode.SetHideCursorDuringCapture(false);
@@ -59,6 +62,8 @@ void AAttractionPlayerController::SetupInputComponent()
     InputComponent->BindKey(EKeys::LeftMouseButton,IE_Released,this,&AAttractionPlayerController::EndLeft);
     InputComponent->BindKey(EKeys::RightMouseButton,IE_Pressed,this,&AAttractionPlayerController::StartSwipe);
     InputComponent->BindKey(EKeys::RightMouseButton,IE_Released,this,&AAttractionPlayerController::EndSwipe);
+    InputComponent->BindKey(EKeys::SpaceBar,IE_Pressed,this,&AAttractionPlayerController::DisableReward);
+    InputComponent->BindKey(EKeys::N,IE_Pressed,this,&AAttractionPlayerController::NextStage);
     InputComponent->BindKey(EKeys::R,IE_Pressed,this,&AAttractionPlayerController::ResetBoard);
     InputComponent->BindKey(EKeys::MouseScrollUp,IE_Pressed,this,&AAttractionPlayerController::ZoomIn);
     InputComponent->BindKey(EKeys::MouseScrollDown,IE_Pressed,this,&AAttractionPlayerController::ZoomOut);
@@ -73,14 +78,9 @@ bool AAttractionPlayerController::CursorPoint(FVector& LocalPoint,bool bAllowTra
     GetViewportSize(Width,Height);
     if (!GetMousePosition(MouseX,MouseY) || Width<=0 || Height<=0 ||
         MouseX<0 || MouseY<0 || MouseX>Width || MouseY>Height) return false;
-    if (!bAllowTray && MouseX<AAttractionHUD::TrayWidth(Width,Height)) return false;
-    // Exact inverse of this camera's unconstrained, horizontal-FOV perspective view.
-    // Read the camera transform directly, avoiding last-frame camera-cache lag during zoom.
-    const float TanHalfFOV = FMath::Tan(FMath::DegreesToRadians(BoardCamera->GetCameraComponent()->FieldOfView*0.5f));
-    const FVector Origin = BoardCamera->GetActorLocation();
-    const FVector Direction = (BoardCamera->GetActorForwardVector()+
-        BoardCamera->GetActorRightVector()*((2*MouseX/Width-1)*TanHalfFOV)+
-        BoardCamera->GetActorUpVector()*((1-2*MouseY/Height)*TanHalfFOV*Height/Width)).GetSafeNormal();
+
+    FVector Origin,Direction;
+    if (!DeprojectScreenPositionToWorld(MouseX,MouseY,Origin,Direction)) return false;
     const FTransform Transform = Board->GetActorTransform();
     const FVector Normal = Transform.GetRotation().GetAxisZ();
     const double Denominator = FVector::DotProduct(Direction,Normal);
@@ -104,62 +104,81 @@ bool AAttractionPlayerController::MouseScreen(FVector2D& Point,int32& Width,int3
 void AAttractionPlayerController::BeginLeft()
 {
     CancelLeft();
-    int32 Width,Height;
-    FVector2D Mouse;
-    if (!MouseScreen(Mouse,Width,Height)) return;
-    const int32 Tile = AAttractionHUD::HitTray(Mouse,Width,Height);
-    if (Tile!=INDEX_NONE) { LeftGesture=ELeftGesture::Tray; DragIndex=Tile; return; }
-    if (CursorPoint(LeftPoint))
+    if(!CursorPoint(LeftPoint))return;
+    Board->RefreshConnectivity();
+    DragIndex=Board->PickNode(LeftPoint);
+    if(DragIndex!=INDEX_NONE)
+        LeftGesture=Board->Nodes[DragIndex].bConnectedToRoot?ELeftGesture::Agent:ELeftGesture::Patch;
+    else
     {
-        LeftGesture=ELeftGesture::Pending;
-        PressScreen=Mouse;
-        PressTime=GetWorld()->GetRealTimeSeconds();
-        bHaveLeftPoint=true;
+        const float D=FVector2D::Distance(FVector2D(LeftPoint),Board->RewardCenter);
+        if(Board->bRewardActive&&D<Board->RewardRadius) LeftGesture=ELeftGesture::RewardPending;
+        else {Board->RewardCenter=FVector2D(LeftPoint);Board->bRewardActive=true;LeftGesture=ELeftGesture::Reward;}
     }
+    Board->bManipulatingAgents=LeftGesture==ELeftGesture::Agent||LeftGesture==ELeftGesture::Patch;
+    int32 W,H;MouseScreen(PressScreen,W,H);
+    PressPoint=LeftPoint;
 }
-
 void AAttractionPlayerController::UpdateLeft()
 {
-    if (LeftGesture!=ELeftGesture::Pending && LeftGesture!=ELeftGesture::Stir) return;
-    FVector2D Mouse;
-    int32 Width,Height;
-    FVector P;
-    if (!MouseScreen(Mouse,Width,Height) || !CursorPoint(P)) { bHaveLeftPoint=false; return; }
-    if (FVector2D::DistSquared(Mouse,PressScreen)>36) LeftGesture=ELeftGesture::Stir;
-    if (LeftGesture==ELeftGesture::Stir && bHaveLeftPoint) Board->Stir(LeftPoint,P);
-    LeftPoint=P;
-    bHaveLeftPoint=true;
+    FVector P; if(!CursorPoint(P))return;
+    FVector2D Mouse;int32 W,H;if(!MouseScreen(Mouse,W,H))return;
+    if(LeftGesture==ELeftGesture::RewardPending && FVector2D::DistSquared(Mouse,PressScreen)>36)LeftGesture=ELeftGesture::Reward;
+    if(LeftGesture==ELeftGesture::Reward) Board->RewardCenter=FVector2D(P);
+    if(LeftGesture==ELeftGesture::Agent)Board->SlideAgent(DragIndex,P);
+    if(LeftGesture==ELeftGesture::Patch && Board->Nodes.IsValidIndex(DragIndex))
+    {
+        const FVector Delta=((P-LeftPoint)*FMath::Clamp(GetWorld()->GetDeltaSeconds()*18.f,0.f,1.f)).GetClampedToMaxSize(90);
+        Board->DragPatch(DragIndex,Delta);
+        LeftPoint+=Delta;
+    }
+    else LeftPoint=P;
 }
-
 void AAttractionPlayerController::EndLeft()
 {
-    if (!IsValid(Board)) { CancelLeft(); return; }
-    FVector P;
-    if (LeftGesture==ELeftGesture::Tray)
-    {
-        if (DragIndex>=0 && DragIndex<3 && CursorPoint(P))
-            Board->DropNode(AAttractionSimulation::MakeArchetype(static_cast<EAttractionArchetype>(DragIndex)),P);
-    }
-    else if (LeftGesture!=ELeftGesture::None)
-    {
-        UpdateLeft();
-        if (LeftGesture==ELeftGesture::Pending && GetWorld()->GetRealTimeSeconds()-PressTime<=0.35 && CursorPoint(P))
-            Board->ToggleNearestPin(P);
-    }
+    if(!IsValid(Board)){CancelLeft();return;}
+    UpdateLeft();
+    if(LeftGesture==ELeftGesture::RewardPending && FVector2D::Distance(FVector2D(PressPoint),Board->RewardCenter)<Board->RewardRadius*0.14f) Board->bRewardActive=false;
+    if(LeftGesture==ELeftGesture::Patch) Board->GraftPatch(DragIndex);
     CancelLeft();
 }
-
 void AAttractionPlayerController::CancelLeft()
 {
-    LeftGesture=ELeftGesture::None;
-    DragIndex=INDEX_NONE;
-    bHaveLeftPoint=false;
+    if(Board){Board->bManipulatingAgents=false;for(auto& N:Board->Nodes){N.AgentSlideTarget=INDEX_NONE;N.AgentSlideProgress=0;}}
+    LeftGesture=ELeftGesture::None;DragIndex=INDEX_NONE;
+}
+void AAttractionPlayerController::DisableReward(){if(Board)Board->bRewardActive=false;}
+void AAttractionPlayerController::NextStage(){CancelLeft();bSwiping=false;bHaveSwipePoint=false;if(Board)Board->NextStage();}
+
+void AAttractionPlayerController::ZoomIn() { Zoom(1.0f); }
+void AAttractionPlayerController::ZoomOut() { Zoom(-1.0f); }
+void AAttractionPlayerController::Zoom(float WheelAxis)
+{
+    TargetZoomZ = FMath::Clamp(TargetZoomZ * (1.0f - WheelAxis * 0.16f), MinZoomZ, MaxZoomZ);
 }
 
-void AAttractionPlayerController::ZoomIn() { TargetAltitude = FMath::Clamp(TargetAltitude/1.18f,600.f,4200.f); }
-void AAttractionPlayerController::ZoomOut() { TargetAltitude = FMath::Clamp(TargetAltitude*1.18f,600.f,4200.f); }
+void AAttractionPlayerController::CenterCamera()
+{
+    if (!IsValid(Board) || !IsValid(BoardCamera)) return;
+    FVector Center = FVector::ZeroVector;
+    for (const FAttractionNode& Node : Board->Nodes) Center += Node.Position;
+    if (!Board->Nodes.IsEmpty()) Center /= Board->Nodes.Num();
+    Center = Board->GetActorTransform().TransformPosition(Center);
+    TargetZoomZ = OverviewZoomZ;
+    Center.Z = OverviewZoomZ;
+    BoardCamera->SetActorLocationAndRotation(Center,FRotator(-90.0f,-90.0f,0.0f));
+    UCameraComponent* Camera = BoardCamera->GetCameraComponent();
+    Camera->SetRelativeTransform(FTransform::Identity);
+    Camera->ClearAdditiveOffset();
+    Camera->bUsePawnControlRotation = false;
+    Camera->bLockToHmd = false;
+    // This camera actor is the view target; a pawn transform must not offset it.
+    SetViewTarget(BoardCamera);
+    if (PlayerCameraManager) PlayerCameraManager->UpdateCamera(0.0f);
+}
 void AAttractionPlayerController::StartSwipe()
 {
+    CancelLeft();
     bSwiping = true;
     bHaveSwipePoint = CursorPoint(PreviousPoint,true);
 }
@@ -174,6 +193,7 @@ void AAttractionPlayerController::ResetBoard()
     bSwiping = false; bHaveSwipePoint = false;
     CancelLeft();
     if (IsValid(Board)) Board->ResetSimulation();
+    CenterCamera();
 }
 
 void AAttractionPlayerController::SliceSegment(const FVector& Start, const FVector& End)
@@ -196,9 +216,19 @@ void AAttractionPlayerController::PlayerTick(float DeltaTime)
 {
     Super::PlayerTick(DeltaTime);
     if (!IsValid(Board)) return;
-    CameraAltitude = FMath::FInterpTo(CameraAltitude,TargetAltitude,DeltaTime,7.f);
+    if (bRecenterOnFirstTick)
+    {
+        CenterCamera();
+        bRecenterOnFirstTick = false;
+    }
     if (BoardCamera)
-        BoardCamera->SetActorLocation(Board->GetActorLocation()+Board->GetActorQuat().GetAxisZ()*CameraAltitude);
+    {
+        FVector Location = BoardCamera->GetActorLocation();
+        Location.Z = FMath::FInterpTo(Location.Z,TargetZoomZ,DeltaTime,12.0f);
+        BoardCamera->SetActorLocation(Location);
+        // Deprojection must see this tick's camera, including the deferred re-center.
+        if (PlayerCameraManager) PlayerCameraManager->UpdateCamera(DeltaTime);
+    }
     FVector Point;
     const bool bValidPoint = CursorPoint(Point);
     if (LeftGesture!=ELeftGesture::None)
@@ -221,6 +251,6 @@ void AAttractionPlayerController::PlayerTick(float DeltaTime)
         }
     }
     if (bValidPoint) DrawDebugCircle(GetWorld(),Board->GetActorTransform().TransformPosition(Point+FVector(0,0,3)),
-        LeftGesture==ELeftGesture::Tray ? Board->DropletRadius : LeftGesture==ELeftGesture::Stir ? 350.f : 18.f,
+        18.f,
         48,FColor::White,false,-1,0,1,Board->GetActorTransform().GetUnitAxis(EAxis::X),Board->GetActorTransform().GetUnitAxis(EAxis::Y),false);
 }

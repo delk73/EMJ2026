@@ -57,7 +57,7 @@ custom = node(unreal.MaterialExpressionCustom, 300, 0)
 custom.set_editor_property("description", "Analytical liquid field and exact gradient normals")
 custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
 custom.set_editor_property("code", Path(__file__).with_name("LiquidMetaballs.hlsl").read_text())
-names = ["UV", "DataTex", "NodeCount", "TetherCount", "PlaneHalfExtent", "IsoThreshold", "SurfaceHeight"]
+names = ["UV", "DataTex", "NodeCount", "TetherCount", "PlaneHalfExtent", "IsoThreshold", "SurfaceHeight", "TargetLobe0", "TargetLobe1", "TargetLobe2", "RewardDisc", "RewardActive"]
 inputs = []
 for name in names:
     custom_input = unreal.CustomInput()
@@ -74,11 +74,17 @@ texture.set_editor_property("texture", fallback)
 texture.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
 connect(texture, "", custom, "DataTex")
 for index, (name, value) in enumerate((("NodeCount", 0.0), ("TetherCount", 0.0),
-        ("PlaneHalfExtent", 12000.0), ("IsoThreshold", 0.18), ("SurfaceHeight", 100.0))):
+        ("PlaneHalfExtent", 12000.0), ("IsoThreshold", 0.18), ("SurfaceHeight", 100.0), ("RewardActive", 0.0))):
     parameter = node(unreal.MaterialExpressionScalarParameter, -200, 450 + index * 130)
     parameter.set_editor_property("parameter_name", name)
     parameter.set_editor_property("default_value", value)
     connect(parameter, "", custom, name)
+for index, name in enumerate(("TargetLobe0", "TargetLobe1", "TargetLobe2", "RewardDisc")):
+    parameter = node(unreal.MaterialExpressionVectorParameter, -450, 1200 + index * 130)
+    parameter.set_editor_property("parameter_name", name)
+    parameter.set_editor_property("default_value", unreal.LinearColor(0, 0, 1, 0))
+    connect(parameter, "", custom, name)
+
 if not library.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR):
     raise RuntimeError("Could not connect emissive")
 errors = library.recompile_material(material)

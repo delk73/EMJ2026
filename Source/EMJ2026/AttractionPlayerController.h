@@ -13,20 +13,25 @@ public:
     virtual void BeginPlay() override;
     virtual void SetupInputComponent() override;
     virtual void PlayerTick(float DeltaTime) override;
-    int32 GetDragArchetypeIndex() const { return LeftGesture==ELeftGesture::Tray ? DragIndex : INDEX_NONE; }
+    int32 GetDragArchetypeIndex() const { return INDEX_NONE; }
     bool CanPreviewDrop() const { FVector P; return CursorPoint(P); }
 private:
     UPROPERTY() TObjectPtr<AAttractionSimulation> Board;
     UPROPERTY() TObjectPtr<class ACameraActor> BoardCamera;
-    enum class ELeftGesture : uint8 { None, Tray, Pending, Stir };
+    enum class ELeftGesture : uint8 { None, Agent, Patch, RewardPending, Reward };
     ELeftGesture LeftGesture = ELeftGesture::None;
     int32 DragIndex = INDEX_NONE;
     FVector2D PressScreen = FVector2D::ZeroVector;
     FVector LeftPoint = FVector::ZeroVector;
     bool bHaveLeftPoint = false;
-    double PressTime = 0;
-    float CameraAltitude = 1800.f;
-    float TargetAltitude = 1800.f;
+    FVector PressPoint = FVector::ZeroVector;
+    void DisableReward();
+    void NextStage();
+    static constexpr float MinZoomZ = 550.0f;
+    static constexpr float MaxZoomZ = 18000.0f;
+    static constexpr float OverviewZoomZ = 5200.0f;
+    float TargetZoomZ = OverviewZoomZ;
+    bool bRecenterOnFirstTick = false;
     bool bSwiping = false;
     bool bHaveSwipePoint = false;
     FVector PreviousPoint = FVector::ZeroVector;
@@ -38,6 +43,8 @@ private:
     void UpdateLeft();
     void ZoomIn();
     void ZoomOut();
+    void Zoom(float WheelAxis);
+    void CenterCamera();
     void StartSwipe();
     void EndSwipe();
     void ResetBoard();
