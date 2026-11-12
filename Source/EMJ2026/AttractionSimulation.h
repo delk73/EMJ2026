@@ -116,6 +116,8 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") float BuildProgress = 0;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") int32 AgentNode = INDEX_NONE;
     UFUNCTION(BlueprintCallable) void PaintReward(FVector2D Center);
+    // Explicit endpoints avoid retaining gesture state across separate clicks or viewport re-entry.
+    UFUNCTION(BlueprintCallable) void PaintRewardStroke(FVector2D Start, FVector2D End);
     UFUNCTION(BlueprintCallable) void ClearReward();
     UFUNCTION(BlueprintCallable) float SampleReward(FVector2D Position) const;
     UFUNCTION(BlueprintCallable) int32 PickLatticeNode(FVector Position) const;
@@ -172,6 +174,14 @@ private:
     int32 EdgeIncidence(int32 A, int32 B) const;
     bool HasTether(int32 A, int32 B) const;
     void DecayReward(float Dt);
+    bool FindAttractant(const FVector& Origin, FVector& Position, float& Maximum) const;
+    void PlanAgentRoute(const TArray<FBoundaryEdge>& Boundary, bool bPursuingReward, const FVector& Attractant);
+    uint32 RewardRevision = 0;
+    uint32 PlannedRewardRevision = 0;
+    bool bWasPursuingReward = false;
+    bool bRouteDirty = true;
+    FVector AgentTravelDirection = FVector::ZeroVector;
+    bool EvaluateFrontierCandidateInternal(int32 A, int32 B, FVector& Apex, int32& Weld, float& Score, bool bGeometryOnly) const;
     void CancelBuild();
     FVector AgentPosition() const;
     TArray<int32> AgentPath;

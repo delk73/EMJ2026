@@ -108,6 +108,7 @@ void AAttractionSimulation::BuildVisuals()
     if (!RewardTexture && !IsRunningCommandlet())
     {
         RewardTexture=UTexture2D::CreateTransient(RewardGridSize,RewardGridSize,PF_R32_FLOAT);
+        // Keep the continuous field independent of the nearest-filtered primitive table.
         RewardTexture->SRGB=false;RewardTexture->Filter=TF_Bilinear;
         RewardTexture->AddressX=TA_Clamp;RewardTexture->AddressY=TA_Clamp;
         RewardTexture->NeverStream=true;
@@ -136,12 +137,19 @@ void AAttractionSimulation::UpdateLiquidSurface()
     int32 NodeCount = FMath::Min(Nodes.Num(),MaxSimulationNodes);
     const bool bVisibleAgent=Nodes.IsValidIndex(AgentNode);
     const FVector Carrier=AgentPosition();
+    const auto PreviewBoundary=DraggedPatch.IsEmpty()?TArray<int32>():BoundaryVertices();
     for (int32 I=0; I<NodeCount; ++I)
     {
         const auto& N=Nodes[I];
         const float Q=bVisibleAgent?FMath::Clamp(1.0f-float(FVector::Distance(Carrier,N.Position))/(EdgeRestLength*0.8f),0.0f,1.0f):0.0f;
         const float Swell=Q*Q*(3-2*Q);
-        const float Energy=N.bConnectedToRoot?0.25f+0.7f*Swell:0.06f;
+        bool bSnapPreview=false;
+        if (!DraggedPatch.IsEmpty() && !DraggedPatch.Contains(I) && PreviewBoundary.Contains(I))
+            for (int32 J:DraggedPatch) if (PreviewBoundary.Contains(J) &&
+                FVector::DistSquared(N.Position,Nodes[J].Position)<=FMath::Square(0.85f*FMath::Max(100.0f,EdgeRestLength)))
+                {bSnapPreview=true;break;}
+        const float Energy=FMath::Clamp((N.bConnectedToRoot?0.25f:0.06f)+0.7f*Swell+
+            (DraggedPatch.Contains(I)?0.22f:bSnapPreview?0.32f:0.0f),0.0f,1.0f);
         // [0,1] is ordinary energy; [2,3] carries the root flag plus that energy.
         // Keep the root's support stable so its material core ring does not breathe.
         Records[I] = FVector4f(float(N.Position.X),float(N.Position.Y),
@@ -230,7 +238,7 @@ bool AAttractionSimulation::SliceTether(int32 TetherIndex)
     {return (Face.A==CutA||Face.B==CutA||Face.C==CutA)&&(Face.A==CutB||Face.B==CutB||Face.C==CutB);});
     CancelBuild();
     SuppressedPairs.Add(PairKey(T.A,T.B));
-    Tethers.RemoveAt(TetherIndex);
+    Tethers.RemoveAll([&](const FAttractionTether& E){return PairKey(E.A,E.B)==PairKey(CutA,CutB);});
     RemoveCutOrphans(CutA,CutB,PreviousCarrier);
     RefreshConnectivity();
     RepairAgentCarrier(PreviousCarrier);
@@ -382,20 +390,33 @@ bool SegmentsMeet(const FVector& A,const FVector& B,const FVector& C,const FVect
 
 void AAttractionSimulation::ClearReward()
 {
+    ++RewardRevision;
     RewardGrid.Init(0.0f,RewardGridSize*RewardGridSize);
     bRewardActive=false;
 }
 
 void AAttractionSimulation::PaintReward(FVector2D Center)
 {
-    if (!IsInsidePlayfield(FVector(Center,0))) return;
+    PaintRewardStroke(Center,Center);
+}
+
+void AAttractionSimulation::PaintRewardStroke(FVector2D Start,FVector2D End)
+{
+    if (!IsInsidePlayfield(FVector(Start,0))||!IsInsidePlayfield(FVector(End,0))) return;
     if (RewardGrid.Num()!=RewardGridSize*RewardGridSize) ClearReward();
+    ++RewardRevision;
     const float Radius=1.75f*FMath::Max(100.0f,EdgeRestLength);
     const float XExtent=FMath::Max(400.0f,PlayfieldHalfExtentX),YExtent=FMath::Max(400.0f,PlayfieldHalfExtentY);
+    const FVector2D Segment=End-Start;
+    const double LengthSquared=Segment.SizeSquared();
+    // Continuous interpolation of radial stamps: distance to the swept segment
+    // yields a soft ribbon even for a single board-wide cursor delta. The controller's
+    // existing quarter-radius stamp spacing remains compatible and gesture-local.
     for (int32 Y=0;Y<RewardGridSize;++Y) for (int32 X=0;X<RewardGridSize;++X)
     {
         const FVector2D P((2.0*X/(RewardGridSize-1)-1)*XExtent,(2.0*Y/(RewardGridSize-1)-1)*YExtent);
-        const float Q=FMath::Clamp(1.0f-float(FVector2D::Distance(P,Center))/Radius,0.0f,1.0f);
+        const double Alpha=LengthSquared>UE_SMALL_NUMBER?FMath::Clamp(FVector2D::DotProduct(P-Start,Segment)/LengthSquared,0.0,1.0):0.0;
+        const float Q=FMath::Clamp(1.0f-float(FVector2D::Distance(P,Start+Segment*Alpha))/Radius,0.0f,1.0f);
         float& Value=RewardGrid[Y*RewardGridSize+X];
         Value=FMath::Clamp(FMath::Max(Value,Q*Q*(3-2*Q)),0.0f,1.0f);
         bRewardActive |= Value>0.0001f;
@@ -418,7 +439,7 @@ void AAttractionSimulation::DecayReward(float Dt)
     bRewardActive=false;
     for (float& Value:RewardGrid)
     {
-        Value=FMath::Max(0.0f,Value-Dt/7.0f);
+        Value=FMath::Max(0.0f,Value-Dt/17.0f);
         bRewardActive |= Value>0.0001f;
     }
 }
@@ -455,8 +476,13 @@ TArray<AAttractionSimulation::FBoundaryEdge> AAttractionSimulation::BoundaryEdge
 
 bool AAttractionSimulation::EvaluateFrontierCandidate(int32 A,int32 B,FVector& Apex,int32& Weld,float& Score) const
 {
+    return EvaluateFrontierCandidateInternal(A,B,Apex,Weld,Score,false);
+}
+
+bool AAttractionSimulation::EvaluateFrontierCandidateInternal(int32 A,int32 B,FVector& Apex,int32& Weld,float& Score,bool bGeometryOnly) const
+{
     Apex=FVector::ZeroVector;Weld=INDEX_NONE;Score=-FLT_MAX;
-    if (!Nodes.IsValidIndex(A)||!Nodes.IsValidIndex(B)||!Nodes[A].bConnectedToRoot||!Nodes[B].bConnectedToRoot) return false;
+    if (!Nodes.IsValidIndex(A)||!Nodes.IsValidIndex(B)) return false;
     const TArray<FBoundaryEdge> Boundary=BoundaryEdges();
     const FBoundaryEdge* Edge=Boundary.FindByPredicate([&](const FBoundaryEdge& E){ return PairKey(E.A,E.B)==PairKey(A,B); });
     if (!Edge || !Nodes.IsValidIndex(Edge->Opposite)) return false;
@@ -512,12 +538,20 @@ bool AAttractionSimulation::EvaluateFrontierCandidate(int32 A,int32 B,FVector& A
     for (const auto& T:Triangles)
         if (InsideTriangle(Apex,Nodes[T.A].Position,Nodes[T.B].Position,Nodes[T.C].Position)) return false;
 
+    // A committed visual extrusion retains its edge through reward/target changes.
+    // All topology, crossing, capacity, length and angle checks above still apply.
+    if (bGeometryOnly) {Score=0;return true;}
     const FVector2D P(Apex),Half((Mid+Apex)*0.5);
     const float H=SampleTargetHeight(P),R=SampleReward(P),HM=SampleTargetHeight(Half),RM=SampleReward(Half);
     bool bEntirelyOutside=true;
     for (const auto& N:Nodes) if (SampleTargetHeight(FVector2D(N.Position))>=TargetThreshold) {bEntirelyOutside=false;break;}
-    const bool bApproach=bEntirelyOutside&&!bRewardActive;
-    if (H<TargetThreshold && R<0.05f && !bApproach) return false;
+    // Every candidate shares a target sensed from the carrier, so comparisons
+    // cannot switch paint peaks simply because the candidate lies on another side.
+    FVector Attractant;
+    float MaximumReward=0;
+    const bool bPursuingReward=FindAttractant(AgentPosition(),Attractant,MaximumReward);
+    const bool bApproach=bEntirelyOutside&&!bPursuingReward;
+    if (H<TargetThreshold && R<0.05f && !bApproach && !bPursuingReward) return false;
     const float E=Rest*0.25f;
     auto Field=[&](FVector2D Q){return SampleTargetHeight(Q)+1.5f*SampleReward(Q);};
     FVector Gradient(Field(FVector2D(Mid)+FVector2D(E,0))-Field(FVector2D(Mid)-FVector2D(E,0)),
@@ -538,6 +572,16 @@ bool AAttractionSimulation::EvaluateFrontierCandidate(int32 A,int32 B,FVector& A
     if (bApproach && H<TargetThreshold && Alignment<=0.0f) return false;
     Score=H+1.5f*R+0.35f*(HM+1.5f*RM);
     if (H<TargetThreshold || SampleTargetHeight(FVector2D(Mid))<TargetThreshold) Score+=0.35f*Alignment;
+    if (bPursuingReward)
+    {
+        const float Direction=FVector::DotProduct((Attractant-Mid).GetSafeNormal(),Normal);
+        const float Progress=float(FVector::Distance(Mid,Attractant)-FVector::Distance(Apex,Attractant))/Rest;
+        // Paint explicitly authorizes growth across empty target-field gaps, but
+        // never an outward step away from the chosen attractant to do ambient work.
+        if (Progress<=0.0f && R<0.05f) return false;
+        const float Proximity=1.0f/(1.0f+float(FVector::Distance(Apex,Attractant))/(Rest*6.0f));
+        Score=0.2f*(H+0.35f*HM)+4.5f*(2.0f*Proximity+Direction+Progress+R+0.35f*RM);
+    }
     return true;
 }
 
@@ -545,6 +589,7 @@ void AAttractionSimulation::CancelBuild()
 {
     AgentPath.Reset();PathIndex=0;TravelProgress=0;
     BuildA=BuildB=BuildWeld=INDEX_NONE;BuildProgress=0;bBuilding=false;
+    AgentTravelDirection=FVector::ZeroVector;bRouteDirty=true;
 }
 
 FVector AAttractionSimulation::AgentPosition() const
@@ -559,18 +604,27 @@ FVector AAttractionSimulation::AgentPosition() const
 
 void AAttractionSimulation::WorkAgents(float Dt)
 {
-    if (!DraggedPatch.IsEmpty()) return; // Keep drag snapshots and topology stable until release.
+    if (DraggedPatch.Contains(AgentNode)) return; // Freeze extrusion while its rigid component is held.
     if (!Nodes.IsValidIndex(AgentNode)) {CancelBuild();return;}
-    if (!Nodes[AgentNode].bConnectedToRoot) return; // Keep the recovered carrier on its own severed edge.
     const auto Boundary=CarrierBoundaryEdges();
     if (Boundary.IsEmpty()) {CancelBuild();return;}
+    FVector Attractant;float MaximumReward=0;
+    const bool bPursuingReward=FindAttractant(AgentPosition(),Attractant,MaximumReward);
+    bRouteDirty |= PlannedRewardRevision!=RewardRevision || bPursuingReward!=bWasPursuingReward;
+    PlannedRewardRevision=RewardRevision;bWasPursuingReward=bPursuingReward;
+    if (bRouteDirty && !(bBuilding && BuildProgress>0.0f))
+    {
+        bRouteDirty=false;
+        PlanAgentRoute(Boundary,bPursuingReward,Attractant);
+    }
     if (!AgentPath.IsEmpty())
     {
         const int32 Next=AgentPath[PathIndex];
         if (!Nodes.IsValidIndex(Next)||!Boundary.ContainsByPredicate([&](const FBoundaryEdge& E){return PairKey(E.A,E.B)==PairKey(AgentNode,Next);})) {CancelBuild();return;}
+        AgentTravelDirection=(Nodes[Next].Position-Nodes[AgentNode].Position).GetSafeNormal();
         const bool Last=PathIndex==AgentPath.Num()-1 && BuildA!=INDEX_NONE;
         const float End=Last?0.5f:1.0f;
-        TravelProgress=FMath::Min(End,TravelProgress+Dt*FMath::Max(100.0f,EdgeRestLength)/
+        TravelProgress=FMath::Min(End,TravelProgress+Dt*(bPursuingReward?2.5f:1.0f)*FMath::Max(100.0f,EdgeRestLength)/
             (0.35f*FMath::Max(1.0,float(FVector::Distance(Nodes[AgentNode].Position,Nodes[Next].Position)))));
         if (TravelProgress<End) return;
         if (Last)
@@ -582,17 +636,16 @@ void AAttractionSimulation::WorkAgents(float Dt)
             Nodes[AgentNode].AgentRole=EAttractionAgentRole::None;
             AgentNode=Next;Nodes[AgentNode].AgentRole=EAttractionAgentRole::Builder;
             TravelProgress=0;
-            if (++PathIndex>=AgentPath.Num()) {AgentPath.Reset();PathIndex=0;}
+            if (++PathIndex>=AgentPath.Num()) {AgentPath.Reset();PathIndex=0;bRouteDirty=true;}
         }
         return;
     }
     if (bBuilding)
     {
         FVector Apex;int32 Weld;float Score;
-        if (!EvaluateFrontierCandidate(BuildA,BuildB,Apex,Weld,Score)||Weld!=BuildWeld) {CancelBuild();return;}
+        if (!EvaluateFrontierCandidateInternal(BuildA,BuildB,Apex,Weld,Score,BuildProgress>0.0f)||Weld!=BuildWeld) {CancelBuild();return;}
         BuildApex=Apex;
-        const float LocalReward=FMath::Max(SampleReward(FVector2D(Apex)),SampleReward(FVector2D((Nodes[BuildA].Position+Nodes[BuildB].Position+Apex*2)*0.25)));
-        BuildProgress=FMath::Min(1.0f,BuildProgress+Dt*(LocalReward>0.1f?2.0f:1.0f)/0.45f);
+        BuildProgress=FMath::Min(1.0f,BuildProgress+Dt*(bPursuingReward?1.75f:1.0f)/0.45f);
         if (BuildProgress<1.0f) return;
         // Candidate was revalidated immediately above. Reserve all resources before
         // committing, so neither failed capacity nor cuts can leave half a triangle.
@@ -610,42 +663,167 @@ void AAttractionSimulation::WorkAgents(float Dt)
         CancelBuild();RefreshConnectivity();return;
     }
 
-    // Sorted-edge BFS gives deterministic reachable perimeter routes and tie breaks.
-    TArray<int32> Parent;Parent.Init(INDEX_NONE,Nodes.Num());Parent[AgentNode]=AgentNode;
-    TArray<int32> Queue={AgentNode};
-    for (int32 Q=0;Q<Queue.Num();++Q) for (const auto& E:Boundary)
+}
+
+bool AAttractionSimulation::FindAttractant(const FVector& Origin,FVector& Position,float& Maximum) const
+{
+    Position=FVector::ZeroVector;Maximum=0;
+    float StrongestPull=-1;
+    const float SensingScale=6.0f*FMath::Max(100.0f,EdgeRestLength);
+    for (int32 I=0;I<RewardGrid.Num();++I)
     {
-        const int32 J=E.A==Queue[Q]?E.B:E.B==Queue[Q]?E.A:INDEX_NONE;
-        if (J!=INDEX_NONE && Parent[J]==INDEX_NONE && Nodes[J].bConnectedToRoot) {Parent[J]=Queue[Q];Queue.Add(J);}
+        Maximum=FMath::Max(Maximum,RewardGrid[I]);
+        if (RewardGrid[I]<=0) continue;
+        // Sense actual local peaks, never a centroid between separate strokes.
+        const int32 X=I%RewardGridSize,Y=I/RewardGridSize;
+        bool bPeak=true;
+        for (int32 DY=-1;DY<=1 && bPeak;++DY) for (int32 DX=-1;DX<=1;++DX)
+        {
+            const int32 NX=X+DX,NY=Y+DY;
+            if (NX>=0&&NX<RewardGridSize&&NY>=0&&NY<RewardGridSize && RewardGrid[NY*RewardGridSize+NX]>RewardGrid[I])
+                {bPeak=false;break;}
+        }
+        if (!bPeak) continue;
+        const FVector Cell((2.0*(I%RewardGridSize)/(RewardGridSize-1)-1)*FMath::Max(400.0f,PlayfieldHalfExtentX),
+            (2.0*(I/RewardGridSize)/(RewardGridSize-1)-1)*FMath::Max(400.0f,PlayfieldHalfExtentY),0);
+        const float Pull=RewardGrid[I]/(1.0f+float(FVector::Distance(Origin,Cell))/SensingScale);
+        if (Pull>StrongestPull) {StrongestPull=Pull;Position=Cell;}
     }
-    float Best=-FLT_MAX;FVector BestApex=FVector::ZeroVector;int32 BestWeld=INDEX_NONE;
+    return Maximum>0.05f; // Row-major scan resolves exact peak/pull ties.
+}
+
+void AAttractionSimulation::PlanAgentRoute(const TArray<FBoundaryEdge>& Boundary,bool bPursuingReward,const FVector& Attractant)
+{
+    if (bBuilding && BuildProgress>0.0f) return; // Valid active extrusions are locked until commit or cut.
+    // Virtual source on the current carrier edge preserves position when fresh
+    // paint reverses pursuit mid-edge. Both endpoint costs include partial travel.
+    int32 SourceA=AgentNode,SourceB=INDEX_NONE;
+    float SourceAlpha=0;
+    if (bBuilding) {SourceA=BuildA;SourceB=BuildB;SourceAlpha=0.5f;}
+    else if (AgentPath.IsValidIndex(PathIndex)) {SourceB=AgentPath[PathIndex];SourceAlpha=TravelProgress;}
+    TArray<double> Distance;Distance.Init(DBL_MAX,Nodes.Num());
+    TArray<int32> Parent;Parent.Init(INDEX_NONE,Nodes.Num());
+    TArray<bool> Visited;Visited.Init(false,Nodes.Num());
+    Distance[SourceA]=0;
+    if (Nodes.IsValidIndex(SourceB))
+    {
+        const double Length=FVector::Distance(Nodes[SourceA].Position,Nodes[SourceB].Position);
+        Distance[SourceA]=SourceAlpha*Length;Distance[SourceB]=(1.0f-SourceAlpha)*Length;
+    }
+    // O(V^2 + VE) is bounded by 220 nodes. Ascending node IDs and sorted boundary
+    // edges resolve ties without unordered containers or floating heap ordering.
+    for (int32 Iteration=0;Iteration<Nodes.Num();++Iteration)
+    {
+        int32 Current=INDEX_NONE;
+        for (int32 I=0;I<Nodes.Num();++I)
+            if (!Visited[I] && Distance[I]<DBL_MAX && (Current==INDEX_NONE||Distance[I]<Distance[Current])) Current=I;
+        if (Current==INDEX_NONE) break;
+        Visited[Current]=true;
+        for (const auto& E:Boundary)
+        {
+            const int32 J=E.A==Current?E.B:E.B==Current?E.A:INDEX_NONE;
+            if (J==INDEX_NONE||Visited[J]) continue;
+            const double D=Distance[Current]+FVector::Distance(Nodes[Current].Position,Nodes[J].Position);
+            if (D<Distance[J]) {Distance[J]=D;Parent[J]=Current;}
+        }
+    }
+    int32 TargetA=INDEX_NONE,TargetB=INDEX_NONE,TargetWeld=INDEX_NONE;
+    FVector TargetApex=FVector::ZeroVector;
+    float Best=-FLT_MAX;double BestTravel=DBL_MAX;
     for (const auto& E:Boundary)
     {
+        if (Distance[E.A]==DBL_MAX && Distance[E.B]==DBL_MAX) continue;
         FVector Apex;int32 Weld;float Score;
-        if (Parent[E.A]!=INDEX_NONE && EvaluateFrontierCandidate(E.A,E.B,Apex,Weld,Score) && Score>Best+0.000001f)
-        {Best=Score;BuildA=E.A;BuildB=E.B;BestApex=Apex;BestWeld=Weld;}
+        if (!EvaluateFrontierCandidate(E.A,E.B,Apex,Weld,Score)) continue;
+        if (bPursuingReward)
+        {
+            if (BuildA!=INDEX_NONE&&BuildB!=INDEX_NONE&&PairKey(E.A,E.B)==PairKey(BuildA,BuildB)) Score+=0.35f;
+            // Bias the first step of this candidate's shortest route, rather than
+            // its straight-line chord through the lattice interior.
+            int32 First=Distance[E.A]<=Distance[E.B]?E.A:E.B;
+            int32 Next=First;
+            while (Parent[First]!=INDEX_NONE) {Next=First;First=Parent[First];}
+            FVector Direction=FVector::ZeroVector;
+            if (Nodes.IsValidIndex(SourceB) && (First==SourceB || SourceAlpha>UE_SMALL_NUMBER))
+            {
+                Direction=(Nodes[SourceB].Position-Nodes[SourceA].Position).GetSafeNormal();
+                if (First==SourceA) Direction=-Direction;
+            }
+            else if (Next!=First) Direction=(Nodes[Next].Position-Nodes[First].Position).GetSafeNormal();
+            else Direction=((Nodes[E.A].Position+Nodes[E.B].Position)*0.5-Nodes[First].Position).GetSafeNormal();
+            if (Nodes.IsValidIndex(SourceB)&&PairKey(SourceA,SourceB)==PairKey(E.A,E.B))
+                Direction=(Nodes[SourceB].Position-Nodes[SourceA].Position).GetSafeNormal()*(SourceAlpha<=0.5f?1.0f:-1.0f);
+            Score+=0.10f*FVector::DotProduct(AgentTravelDirection,Direction);
+        }
+        const double Length=FVector::Distance(Nodes[E.A].Position,Nodes[E.B].Position);
+        const double Travel=Nodes.IsValidIndex(SourceB)&&PairKey(SourceA,SourceB)==PairKey(E.A,E.B)?
+            FMath::Abs(0.5f-SourceAlpha)*Length:FMath::Min(Distance[E.A],Distance[E.B])+0.5*Length;
+        if (Score>Best+0.000001f || (FMath::Abs(Score-Best)<=0.000001f && Travel<BestTravel))
+        {Best=Score;BestTravel=Travel;TargetA=E.A;TargetB=E.B;TargetWeld=Weld;TargetApex=Apex;}
     }
-    if (BuildA!=INDEX_NONE)
+    if (bBuilding)
     {
-        BuildApex=BestApex;BuildWeld=BestWeld;
-        TArray<int32> Reverse;
-        for (int32 J=BuildA;J!=AgentNode;J=Parent[J]) Reverse.Add(J);
-        for (int32 I=Reverse.Num()-1;I>=0;--I) AgentPath.Add(Reverse[I]);
-        // The final half-edge brings the swell to the bud's exact midpoint origin.
-        AgentPath.Add(BuildB);PathIndex=0;TravelProgress=0;
+        if (TargetA!=INDEX_NONE && PairKey(TargetA,TargetB)==PairKey(BuildA,BuildB)) return;
+        // No progress yet: preserve the midpoint as the new route's virtual source.
+        bBuilding=false;
+    }
+    AgentPath.Reset();PathIndex=0;
+    BuildA=BuildB=BuildWeld=INDEX_NONE;
+    int32 Destination=INDEX_NONE,Across=INDEX_NONE;
+    if (TargetA!=INDEX_NONE)
+    {
+        const bool bUseA=Distance[TargetA]<=Distance[TargetB];
+        Destination=bUseA?TargetA:TargetB;Across=bUseA?TargetB:TargetA;
+        BuildA=Destination;BuildB=Across;BuildWeld=TargetWeld;BuildApex=TargetApex;
+        if (PairKey(SourceA,SourceB)==PairKey(TargetA,TargetB) && Nodes.IsValidIndex(SourceB))
+        {
+            // Already on the chosen edge: walk directly to its midpoint.
+            const bool bForward=SourceAlpha<=0.5f;
+            Nodes[AgentNode].AgentRole=EAttractionAgentRole::None;
+            AgentNode=bForward?SourceA:SourceB;Nodes[AgentNode].AgentRole=EAttractionAgentRole::Builder;
+            BuildA=AgentNode;BuildB=bForward?SourceB:SourceA;
+            AgentPath.Add(BuildB);TravelProgress=bForward?SourceAlpha:1.0f-SourceAlpha;
+            return;
+        }
+    }
+    else if (bPursuingReward)
+    {
+        // No legal extrusion (wire scraps/blocked geometry): pursue the nearest
+        // reachable boundary vertex, then wait there instead of ambient wandering.
+        double Nearest=DBL_MAX;
+        for (int32 I=0;I<Nodes.Num();++I) if (Distance[I]<DBL_MAX)
+        {
+            const double D=FVector::DistSquared(Nodes[I].Position,Attractant);
+            if (D<Nearest) {Nearest=D;Destination=I;}
+        }
     }
     else
     {
-        // Prefer continuing away from the last vertex. If the local perimeter was
-        // cut to a dead end, reverse rather than teleporting across a disconnected cut.
-        int32 Next=INDEX_NONE;
         for (const auto& E:Boundary)
         {
             const int32 J=E.A==AgentNode?E.B:E.B==AgentNode?E.A:INDEX_NONE;
-            if (J!=INDEX_NONE && (Next==INDEX_NONE || (J!=PreviousPatrolNode&&Next==PreviousPatrolNode))) Next=J;
+            if (J!=INDEX_NONE && (Destination==INDEX_NONE || (J!=PreviousPatrolNode&&Destination==PreviousPatrolNode))) Destination=J;
         }
-        if (Next!=INDEX_NONE) {PreviousPatrolNode=AgentNode;AgentPath.Add(Next);PathIndex=0;TravelProgress=0;}
+        PreviousPatrolNode=AgentNode;
     }
+    if (Destination==INDEX_NONE) {TravelProgress=0;return;}
+    TArray<int32> Reverse;
+    int32 Root=Destination;
+    while (Parent[Root]!=INDEX_NONE) {Reverse.Add(Root);Root=Parent[Root];}
+    // Start by completing the appropriate fraction of the source edge.
+    Nodes[AgentNode].AgentRole=EAttractionAgentRole::None;
+    if (Root==SourceB)
+    {
+        AgentNode=SourceA;AgentPath.Add(SourceB);TravelProgress=SourceAlpha;
+    }
+    else if (Nodes.IsValidIndex(SourceB) && SourceAlpha>0)
+    {
+        AgentNode=SourceB;AgentPath.Add(SourceA);TravelProgress=1.0f-SourceAlpha;
+    }
+    else {AgentNode=SourceA;TravelProgress=0;}
+    Nodes[AgentNode].AgentRole=EAttractionAgentRole::Builder;
+    for (int32 I=Reverse.Num()-1;I>=0;--I) AgentPath.Add(Reverse[I]);
+    if (Across!=INDEX_NONE) AgentPath.Add(Across);
 }
 
 TArray<int32> AAttractionSimulation::ComponentNodes(int32 NodeIndex) const
@@ -776,7 +954,6 @@ bool AAttractionSimulation::BeginPatchDrag(int32 NodeIndex)
     if (Max.X-Min.X>2*FMath::Max(400.0f,PlayfieldHalfExtentX) ||
         Max.Y-Min.Y>2*FMath::Max(400.0f,PlayfieldHalfExtentY)) return false;
     // A bud's temporary apex is presentation, not part of the rigid patch snapshot.
-    if (Patch.Contains(AgentNode)) RepairAgentCarrier(AgentPosition());
     DraggedPatch=Patch;PatchStartPositions.Reset();
     for (int32 I:DraggedPatch) {PatchStartPositions.Add(Nodes[I].Position);Nodes[I].Velocity=FVector::ZeroVector;}
     PatchTargetOffset=PatchCurrentOffset=FVector::ZeroVector;
@@ -799,9 +976,11 @@ void AAttractionSimulation::UpdatePatchDrag(FVector CursorDelta,float DeltaSecon
     PatchTargetOffset+=CursorDelta;
     PatchTargetOffset.X=FMath::Clamp(PatchTargetOffset.X,Lower.X,Upper.X);
     PatchTargetOffset.Y=FMath::Clamp(PatchTargetOffset.Y,Lower.Y,Upper.Y);
+    const FVector PreviousOffset=PatchCurrentOffset;
     PatchCurrentOffset=FMath::VInterpTo(PatchCurrentOffset,PatchTargetOffset,DeltaSeconds,18.0f);
     PatchCurrentOffset.X=FMath::Clamp(PatchCurrentOffset.X,Lower.X,Upper.X);
     PatchCurrentOffset.Y=FMath::Clamp(PatchCurrentOffset.Y,Lower.Y,Upper.Y);
+    if (bBuilding && DraggedPatch.Contains(AgentNode)) BuildApex+=PatchCurrentOffset-PreviousOffset;
     for (int32 I=0;I<DraggedPatch.Num();++I)
     {
         if (!Nodes.IsValidIndex(DraggedPatch[I])) continue;
@@ -903,6 +1082,7 @@ bool AAttractionSimulation::IsGraftGeometryValid(const TArray<FAttractionNode>& 
     {
         if (!P.IsValidIndex(F.A)||!P.IsValidIndex(F.B)||!P.IsValidIndex(F.C)||F.A==F.B||F.B==F.C||F.C==F.A) return false;
         if (!Keys.Contains(PairKey(F.A,F.B))||!Keys.Contains(PairKey(F.B,F.C))||!Keys.Contains(PairKey(F.C,F.A))) return false;
+        if (FMath::Abs(CrossXY(P[F.B].Position-P[F.A].Position,P[F.C].Position-P[F.A].Position))<0.01) return false;
         const int32 V[3]={F.A,F.B,F.C};
         for (int32 I=0;I<3;++I)
         {
@@ -930,24 +1110,77 @@ bool AAttractionSimulation::GraftComponent(const TArray<int32>& Patch)
     }
     Welds.Sort([](const FWeld& A,const FWeld& B)
     {return A.Distance!=B.Distance?A.Distance<B.Distance:A.Source!=B.Source?A.Source<B.Source:A.Target<B.Target;});
+    TArray<int32> Current;for (int32 I=0;I<Nodes.Num();++I) Current.Add(I);
+    TSet<int32> UsedSources,UsedTargets;
+    bool bWelded=false;
+    // Validate the complete seam before individual welds: coincident seam edges
+    // may only become legal when both endpoints collapse in the same transaction.
+    TArray<FWeld> Matching;
+    TSet<int32> MatchedSources,MatchedTargets;
+    for (const auto& W:Welds)
+        if (!MatchedSources.Contains(W.Source)&&!MatchedTargets.Contains(W.Target))
+        {Matching.Add(W);MatchedSources.Add(W.Source);MatchedTargets.Add(W.Target);}
+    for (int32 Count=Matching.Num();Count>=2;--Count)
+    {
+        TArray<int32> Representative,Compact;Compact.Init(INDEX_NONE,Nodes.Num());
+        for (int32 I=0;I<Nodes.Num();++I) Representative.Add(I);
+        for (int32 I=0;I<Count;++I) Representative[Matching[I].Source]=Matching[I].Target;
+        TArray<FAttractionNode> P;
+        for (int32 I=0;I<Nodes.Num();++I) if (Representative[I]==I) Compact[I]=P.Add(Nodes[I]);
+        auto Map=[&](int32 I){return Compact[Representative[I]];};
+        TArray<FAttractionTether> E;TSet<uint64> Keys;
+        for (auto Edge:Tethers)
+        {
+            Edge.A=Map(Edge.A);Edge.B=Map(Edge.B);
+            if (Edge.A==Edge.B||Keys.Contains(PairKey(Edge.A,Edge.B))) continue;
+            Keys.Add(PairKey(Edge.A,Edge.B));E.Add(Edge);
+        }
+        auto F=Triangles;
+        for (auto& Face:F) {Face.A=Map(Face.A);Face.B=Map(Face.B);Face.C=Map(Face.C);}
+        if (!IsGraftGeometryValid(P,E,F)) continue;
+        const FVector PreviousCarrier=AgentPosition();
+        const int32 NewAgent=Nodes.IsValidIndex(AgentNode)?Map(AgentNode):INDEX_NONE;
+        TSet<uint64> Suppression;
+        for (uint64 K:SuppressedPairs)
+        {
+            const int32 A=Map(int32(K>>32)),B=Map(int32(uint32(K)));
+            if (A!=B) Suppression.Add(PairKey(A,B));
+        }
+        Nodes=MoveTemp(P);Tethers=MoveTemp(E);Triangles=MoveTemp(F);SuppressedPairs=MoveTemp(Suppression);
+        for (const auto& Edge:Tethers) SuppressedPairs.Remove(PairKey(Edge.A,Edge.B));
+        for (auto& N:Nodes) {N.AgentRole=EAttractionAgentRole::None;N.AgentSlideTarget=INDEX_NONE;}
+        AgentNode=NewAgent;
+        if (Nodes.IsValidIndex(AgentNode)) Nodes[AgentNode].AgentRole=EAttractionAgentRole::Builder;
+        RefreshConnectivity();RepairAgentCarrier(PreviousCarrier);
+        for (int32 I=0;I<Current.Num();++I) Current[I]=Map(I);
+        for (int32 I=0;I<Count;++I) {UsedSources.Add(Matching[I].Source);UsedTargets.Add(Matching[I].Target);}
+        bWelded=true;
+        break;
+    }
+    // Original IDs survive candidate ordering. Compact each validated transaction,
+    // then update the original-to-current map before considering the next pair.
     for (const auto& W:Welds)
     {
-        const auto Other=ComponentNodes(W.Target);
-        // Two bare wires/points cannot retain a triangle by collapsing a vertex.
-        // Try a triangular seam below instead, so a cut seed can regain a face.
-        bool bHasFace=false;
-        for (const auto& F:Triangles) if (Patch.Contains(F.A)||Other.Contains(F.A)) {bHasFace=true;break;}
-        if (!bHasFace) continue;
+        if (UsedSources.Contains(W.Source)||UsedTargets.Contains(W.Target)) continue;
+        const int32 Source=Current[W.Source],Target=Current[W.Target];
+        if (Source==Target) continue;
+        const auto SourceComponent=ComponentNodes(Source),TargetComponent=ComponentNodes(Target);
+        if (!Triangles.ContainsByPredicate([&](const FAttractionTriangle& F)
+            {return SourceComponent.Contains(F.A)||TargetComponent.Contains(F.A);})) continue;
         auto ProposedNodes=Nodes;auto ProposedEdges=Tethers;auto ProposedFaces=Triangles;
-        const FVector Snap=Nodes[W.Target].Position-Nodes[W.Source].Position;
-        for (int32 I:Patch) {ProposedNodes[I].Position+=Snap;ProposedNodes[I].Velocity=FVector::ZeroVector;}
-        auto Remap=[&](int32 I){const int32 J=I==W.Source?W.Target:I;return J>W.Source?J-1:J;};
-        for (auto& E:ProposedEdges) {E.A=Remap(E.A);E.B=Remap(E.B);}
+        auto Remap=[&](int32 I){const int32 J=I==Source?Target:I;return J>Source?J-1:J;};
+        TSet<uint64> EdgeKeys;
+        for (int32 I=ProposedEdges.Num()-1;I>=0;--I)
+        {
+            auto& E=ProposedEdges[I];E.A=Remap(E.A);E.B=Remap(E.B);
+            if (E.A==E.B||EdgeKeys.Contains(PairKey(E.A,E.B))) ProposedEdges.RemoveAt(I);
+            else EdgeKeys.Add(PairKey(E.A,E.B));
+        }
         for (auto& F:ProposedFaces) {F.A=Remap(F.A);F.B=Remap(F.B);F.C=Remap(F.C);}
-        ProposedNodes.RemoveAt(W.Source);
+        ProposedNodes.RemoveAt(Source);
+        for (auto& N:ProposedNodes) {N.AgentSlideTarget=INDEX_NONE;N.AgentRole=EAttractionAgentRole::None;}
         if (!IsGraftGeometryValid(ProposedNodes,ProposedEdges,ProposedFaces)) continue;
-        FVector PreviousCarrier=AgentPosition();
-        if (Patch.Contains(AgentNode)) PreviousCarrier+=Snap;
+        const FVector PreviousCarrier=AgentPosition();
         const int32 RemappedAgent=Nodes.IsValidIndex(AgentNode)?Remap(AgentNode):INDEX_NONE;
         TSet<uint64> RemappedSuppression;
         for (uint64 K:SuppressedPairs)
@@ -958,11 +1191,13 @@ bool AAttractionSimulation::GraftComponent(const TArray<int32>& Patch)
         Nodes=MoveTemp(ProposedNodes);Tethers=MoveTemp(ProposedEdges);Triangles=MoveTemp(ProposedFaces);
         SuppressedPairs=MoveTemp(RemappedSuppression);
         for (const auto& E:Tethers) SuppressedPairs.Remove(PairKey(E.A,E.B));
+        for (int32& I:Current) I=Remap(I);
+        UsedSources.Add(W.Source);UsedTargets.Add(W.Target);bWelded=true;
         AgentNode=RemappedAgent;
         if (Nodes.IsValidIndex(AgentNode)) Nodes[AgentNode].AgentRole=EAttractionAgentRole::Builder;
         RefreshConnectivity();RepairAgentCarrier(PreviousCarrier);
-        return true;
     }
+    if (bWelded) return true;
     struct FSeam {int32 A,B,C;double Distance;};
     TArray<FSeam> Seams;
     for (const auto& E:CarrierBoundaryEdges()) for (int32 C:Vertices)

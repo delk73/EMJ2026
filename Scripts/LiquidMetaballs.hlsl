@@ -91,8 +91,13 @@ float Recess=0.22-0.065*Target;
 float2 GridUV=P/(2*max(BoardExtent.xy,float2(400,400)))+0.5;
 float InBoard=all(GridUV>=0)&&all(GridUV<=1) ? 1.0 : 0.0;
 float2 RewardUV=(saturate(GridUV)*63.0+0.5)/64.0;
-float Reward=RewardActive*InBoard*Texture2DSampleLevel(RewardTex,RewardTexSampler,RewardUV,0).r;
-float Backdrop=Recess+0.085*saturate(Reward);
+float Reward=RewardActive*InBoard*Texture2DSampleLevel(RewardTex,View.SharedBilinearClampedSampler,RewardUV,0).r;
+// Explicit linear-clamp sampling cannot inherit the primitive table/fallback's point sampler.
+// Rational contrast followed by smoothstep is C1 at both zero and full intensity;
+// unlike sqrt it has no infinite slope that magnifies low-valued texel edges.
+Reward=saturate(Reward);
+float RewardSoft=smoothstep(0.0,1.0,Reward/(0.2+0.8*Reward));
+float Backdrop=Recess+0.18*RewardSoft;
 float Grey = lerp(Backdrop, Liquid, Coverage);
 // Screen-space derivative AA is evaluated outside uniform record loops. The
 // marker stays inside the gel and cannot be washed out by a passing bright bud.
