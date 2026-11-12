@@ -15,6 +15,7 @@ struct FAttractionNode
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.01")) float Mass = 1.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Emit = FVector(1,0,0);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Receive = FVector(1,0,0);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float RepulsionScale = 1.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bPinned = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float CaptureRadius = 180.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) int32 Valence = 2;
@@ -28,8 +29,8 @@ struct FAttractionBondRule
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 TypeA = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 TypeB = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="1")) float RestLength = 140.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Stiffness = 12.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Damping = 2.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Stiffness = 4.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Damping = 3.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float BreakStrain = 0.8f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float MaxRelativeSpeed = 250.f;
 };
@@ -64,6 +65,9 @@ public:
     UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float FieldStrength = 800000.f;
     UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float Softening = 80.f;
     UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float Drag = 0.35f;
+    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float PullRange = 240.f;
+    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float CushionStrength = 300.f;
+    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float Viscosity = 2.f;
     UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float MaxAcceleration = 3000.f;
     UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float MaxSpeed = 1000.f;
     UPROPERTY(EditAnywhere, Category="Simulation") bool bRunning = true;
@@ -73,13 +77,31 @@ public:
     // Severed pairs remain suppressed until reset, so a cut cannot instantly reattach.
     UFUNCTION(BlueprintCallable, Category="Simulation") bool SliceTether(int32 TetherIndex);
     UFUNCTION(BlueprintCallable, Category="Simulation") int32 DropNode(FAttractionNode Profile, FVector LocalPosition);
+    // Player drop bounds; independent of the much larger neutral rendering backdrop.
+    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="400", ClampMax="4000")) float BoardHalfExtent = 1200.f;
+    UPROPERTY(VisibleAnywhere, Category="Liquid") float PlaneHalfExtent = 12000.f;
+    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="20")) float DropletRadius = 115.f;
+    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="10")) float FilamentRadius = 55.f;
+    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.01")) float IsoThreshold = 0.18f;
+    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.1")) float SurfaceHeight = 100.f;
 private:
-    UPROPERTY(Transient) TArray<TObjectPtr<class UStaticMeshComponent>> NodeVisuals;
-    UPROPERTY() TObjectPtr<class UStaticMesh> SphereMesh;
+    UPROPERTY(VisibleAnywhere, Category="Liquid") TObjectPtr<class UStaticMeshComponent> LiquidPlane;
+    UPROPERTY() TSoftObjectPtr<class UMaterialInterface> LiquidMaterialAsset;
+    UPROPERTY(Transient) TObjectPtr<class UTexture2D> LiquidDataTexture;
+    UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> LiquidMID;
+    struct FPinchingFilament
+    {
+        FVector A, B;
+        float Radius = 0;
+        float Amplitude = 0;
+        float Age = 0;
+    };
+    // Presentation only: severed springs stop applying force immediately.
+    TArray<FPinchingFilament> PinchingFilaments;
     TSet<uint64> SuppressedPairs;
     double Accumulator = 0;
     void BuildVisuals();
-    void UpdateVisuals();
+    void UpdateLiquidSurface();
     void Step(float Dt);
     static uint64 PairKey(int32 A, int32 B);
 };

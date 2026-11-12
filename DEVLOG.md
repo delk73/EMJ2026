@@ -26,3 +26,22 @@
 * **Next Immediate Step:** Observe drop, swipe and reset in PIE for three cycles and 30 seconds, then record viewport results.
 
 ---
+
+### [2026-11-12 09:55] — Liquid heightfield, soft forces and macro zoom
+
+* **Intent:** Present the attraction system as a blended greyscale liquid with gentler motion and smooth tactical-to-macro zoom.
+* **Changes Made:** Updated `AttractionSimulation.h/.cpp` for one flat plane, a per-frame 256x256 BGRA texture, compact droplet/filament height kernels, strain thinning, 0.22-second slice pinching, central-difference normals, diffuse/specular/rim/meniscus shading, Gaussian pull/cushion forces and viscous damping. Updated `AttractionPlayerController.h/.cpp` for FInterpTo zoom (600-4200 above board), current-camera perspective rays, greyscale overlays and Balanced/High-Pull/Repulsive Buffer force profiles. Added RHI dependency in `EMJ2026.Build.cs`, `Content/Materials/M_LiquidHeightfield.uasset`, `T_LiquidDefault.uasset`, and material-generation/setup-check scripts. Expanded `SIMULATION_TEST.md`; existing gym map unchanged.
+* **Verification Status:** `[VERIFIED IN CODE/COMPILE]` Final `.\preflight.ps1` passed UHT/C++/link and clean NullRHI boot (exit 0; `Saved/Logs/PreflightBuild.log`, `PreflightSmoke.log`). Rendering-enabled material commandlet compiled/saved the unlit shader (exit 0; `LiquidMaterial.log`); corrected NullRHI compilation and sampler mismatch during setup. Read-only gym commandlet passed one-plane/material and six-node drop/reset checks (exit 0; `LiquidSetup.log`). No interactive editor process was running; no map saved. Existing Fab/non-Win64 SDK warnings remain. `[UNVERIFIED - NEEDS VIEWPORT TEST]` Liquid appearance, sloshing, pinching, render-upload performance and cursor alignment over the full zoom range have not been observed.
+* **Next Immediate Step:** Open Content Browser > Maps > AttractionGym; World Settings > GameMode Override = AttractionGameMode; Play dropdown > Selected Viewport > Play. Follow the Slice 3 checklist in `SIMULATION_TEST.md`: test merging/highlights, RMB neck pinching, wheel zoom to 600/4200, and off-center drop/swipe alignment at 600/1800/4200. Use its scratch-level two-node fixture to verify strain thinning; record 30 seconds of viewport results.
+
+---
+
+### [2026-11-12 10:19] — Analytical GPU liquid renderer replacement
+
+* **Intent:** Remove CPU bitmap aliasing and extend the neutral backdrop through maximum zoom.
+* **Changes Made:** Replaced rasterization in `AttractionSimulation.h/.cpp` with occupied-row uploads to a nearest-filtered, non-sRGB, no-mip 256x3 RGBA32F primitive table and MID counts/extent parameters. Expanded the plane to 24000x24000 while retaining 1200-unit drop bounds. Regenerated `Content/Materials/M_LiquidHeightfield.uasset` using updated `Scripts/create_liquid_material.py` and new `LiquidMetaballs.hlsl`: analytical radial/capsule fields, exact gradients including variable-width pinch derivatives, greyscale lighting and fwidth edge coverage. Deferred material loading avoids the startup-rooted graph-edit assertion encountered during regeneration; backups are in `Saved/Backups`. Updated `check_liquid_setup.py`, added `check_liquid_gradients.py`, and revised `SIMULATION_TEST.md`. Physics, profiles, controls, gym map and existing startup-map settings were preserved. Old `T_LiquidDefault` is unused, retained without references from this renderer.
+* **Verification Status:** `[VERIFIED IN CODE/COMPILE]` Rendering-enabled material regeneration, final `.\preflight.ps1` (compile + clean NullRHI boot), and read-only gym wiring/drop/reset checks passed, exit 0. Logs: `Saved/Logs/LiquidAnalyticalMaterial.log`, `PreflightBuild.log`, `PreflightSmoke.log`, `LiquidAnalyticalSetup.log`. Numerical derivative check passed 16000 comparisons, maximum absolute error 9.48e-11. Editor was closed before builds; no map was saved.
+* **Verification Status:** `[UNVERIFIED - NEEDS VIEWPORT TEST]` Native-resolution edge quality, GPU data sampling/performance, highlights, pinching and backdrop coverage have not been observed in PIE.
+* **Next Immediate Step:** Content Browser > Maps > AttractionGym; Play dropdown > Selected Viewport > Play. Inspect close-up edges at zoom 600 and all four corners at 4200; test merge/swipe/reset and off-center cursor alignment for 30 seconds using `SIMULATION_TEST.md`, then record viewport results.
+
+---

@@ -18,6 +18,8 @@ private:
     UPROPERTY() TObjectPtr<AAttractionSimulation> Board;
     UPROPERTY() TObjectPtr<class ACameraActor> BoardCamera;
     int32 ProfileIndex = 0;
+    float CameraAltitude = 1800.f;
+    float TargetAltitude = 1800.f;
     bool bSwiping = false;
     bool bHaveSwipePoint = false;
     FVector PreviousPoint = FVector::ZeroVector;
@@ -25,6 +27,8 @@ private:
     FAttractionNode ActiveProfile() const;
     void Drop();
     void NextProfile();
+    void ZoomIn();
+    void ZoomOut();
     void StartSwipe();
     void EndSwipe();
     void ResetBoard();
