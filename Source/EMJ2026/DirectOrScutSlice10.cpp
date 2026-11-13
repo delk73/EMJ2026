@@ -93,10 +93,10 @@ void UDirectOrScutSimSubsystem::ConfigureScenario(bool Medical)
     else {Beat(EBeatGate::Suspicion,TEXT("Whisper Network"));Beat(EBeatGate::Stress,TEXT("Terminal Audit Attempt"));Beat(EBeatGate::AndroidTask,TEXT("Synthetic Anomaly"));}
     ++MenuRevision;
 }
-void UDirectOrScutSimSubsystem::RecordCue(int32 R,float Severity,const FString& Subtitle)
+void UDirectOrScutSimSubsystem::RecordCue(int32 R,float Severity,const FString& Subtitle,bool TerminalVisible)
 {
     CinematicCues.Add({Simulation.TickIndex,static_cast<ERoomId>(FMath::Clamp(R,0,7)),Severity,Subtitle});
-    LogEvent(Subtitle,R);
+    LogEvent(Subtitle,R,TerminalVisible);
 }
 void UDirectOrScutSimSubsystem::EvaluateBeatDeck()
 {
@@ -123,6 +123,7 @@ void UDirectOrScutSimSubsystem::EvaluateBeatDeck()
 }
 void UDirectOrScutSimSubsystem::ApplyInteraction(const FInteractionChoice& Choice,int32 Crew,int32 Room)
 {
+    if(ExperimentPhase!=EExperimentPhase::Active)return;
     if(Choice.Action==EDirectorAction::Mentorship)
     {
         // Support opens only the stable shortest routes needed to gather two living humans.
@@ -153,12 +154,12 @@ void UDirectOrScutSimSubsystem::ApplyInteraction(const FInteractionChoice& Choic
     }
     if(Choice.Action==EDirectorAction::Seal)for(int32 D=0;D<9;++D) {const auto& Door=Simulation.Doors[D];if(Door.RoomA==Room || Door.RoomB==Room)Simulation.ToggleDoor(D,false);}
     if(Choice.Action==EDirectorAction::Release)for(int32 D=0;D<8;++D)Simulation.ToggleDoor(D,true);
-    if(Choice.Action==EDirectorAction::Vent)Simulation.CycleAirlock(Room);
+    if(Choice.Action==EDirectorAction::Vent)BeginScut(Room);
     RecordCue(Room<0?0:Room,Choice.Action==EDirectorAction::Vent?1.f:.5f,Choice.Label);
 }
 bool UDirectOrScutSimSubsystem::ExecuteDirectorOption(int32 Index)
 {
-    if(!DirectorOptions.IsValidIndex(Index))return false;
+    if(ExperimentPhase!=EExperimentPhase::Active || !DirectorOptions.IsValidIndex(Index))return false;
     const auto& O=DirectorOptions[Index];
     if(O.Choice.Action==EDirectorAction::Vent) {MenuRoom=O.Room;SetScreenMenu(EShipAIScreenMenu::ConfirmScut);return true;}
     const int32 Crew=O.Label==TEXT("Selective Commendation")?0:-1;
@@ -166,25 +167,36 @@ bool UDirectOrScutSimSubsystem::ExecuteDirectorOption(int32 Index)
 }
 bool UDirectOrScutSimSubsystem::ResolveBeat(int32 Index,int32 Choice)
 {
-    if(!BeatDeck.IsValidIndex(Index))return false;
+    if(ExperimentPhase!=EExperimentPhase::Active || !BeatDeck.IsValidIndex(Index))return false;
     auto& B=BeatDeck[Index];if(!B.bFired || B.bResolved || !B.Node.Choices.IsValidIndex(Choice))return false;
     B.bResolved=true;ApplyInteraction(B.Node.Choices[Choice],B.Crew,Simulation.Bodies[B.Crew].Room);++MenuRevision;return true;
 }
 void UDirectOrScutSimSubsystem::FixedStep()
 {
+    if(ExperimentPhase==EExperimentPhase::Resolved) { ProcessConsoleCommands(); return; }
+    PeakSuspicion=FMath::Max(PeakSuspicion,Simulation.CollectiveSuspicion());
     FDirectOrScutUnitState Previous[4];bool Pressure[8];
     for(int32 I=0;I<4;++I)Previous[I]=Simulation.Bodies[I];
     for(int32 R=0;R<8;++R)Pressure[R]=Simulation.Rooms[R].bIsPressurized;
-    ProcessDirectives();Simulation.Step();EvaluateBeatDeck();
+    const uint64 BeforeReset=RuntimeRevision;
+    ProcessDirectives();
+    if(RuntimeRevision!=BeforeReset)return;
+    PeakSuspicion=FMath::Max(PeakSuspicion,Simulation.CollectiveSuspicion());
+    Simulation.Step();EvaluateBeatDeck();
     if(FollowedCrew>=0 && !CanFollowCrew(FollowedCrew))SetFollowedCrew(-1);
     for(int32 R=0;R<8;++R)if(Pressure[R]!=Simulation.Rooms[R].bIsPressurized)
         RecordCue(R,1,Simulation.Rooms[R].bIsPressurized?TEXT("Pressure restored"):TEXT("Compartment exposed to vacuum"));
     for(int32 I=0;I<4;++I)
     {
         const auto& U=Simulation.Bodies[I];const auto& V=Previous[I];if(!U.bRegistered)continue;
+        if((ScutTargets&(1<<I)) && V.Integrity>0 && V.State!=EDirectOrScutUnitState::Ejected &&
+           (U.Integrity<=0 || U.State==EDirectOrScutUnitState::Ejected) &&
+           (U.State==EDirectOrScutUnitState::Ejected || (V.Room>=0 && !Simulation.Rooms[V.Room].bIsPressurized)))ScutEliminated|=1<<I;
         if(U.Profile.OnHeartbeatTick)OnHeartbeatTick.Broadcast(I,Simulation.TickIndex);
         if(U.Profile.OnBreathCycle)OnBreathCycle.Broadcast(I,Simulation.TickIndex);
-        if(FMath::Abs(U.Stress-V.Stress)>=15 || FMath::Abs(U.Profile.Suspicion-V.Profile.Suspicion)>=.12f || FMath::Abs(U.Integrity-V.Integrity)>=10 || U.State!=V.State)
-            RecordCue(U.Room,.7f,FString::Printf(TEXT("Crew %d: %s | BPM %.0f RPM %.0f pupil %.1f mm"),I,DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM));
+        const bool Significant=FMath::Abs(U.Stress-V.Stress)>=15 || FMath::Abs(U.Profile.Suspicion-V.Profile.Suspicion)>=.12f || FMath::Abs(U.Integrity-V.Integrity)>=10 || (U.State==EDirectOrScutUnitState::Ejected && V.State!=U.State) || (U.Integrity<=0 && V.Integrity>0);
+        if(Significant || U.State!=V.State)
+            RecordCue(U.Room,Significant?.7f:.2f,FString::Printf(TEXT("Crew %d: %s | BPM %.0f RPM %.0f pupil %.1f mm"),I,DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM),Significant);
     }
+    EvaluateExperimentEnding();
 }

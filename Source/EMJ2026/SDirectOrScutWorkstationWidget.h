@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
+#include "Styling/SlateTypes.h"
 class UDirectOrScutSimSubsystem;
 class ACompartmentCameraRig;
 class SEditableTextBox;
@@ -39,7 +40,18 @@ private:
     TSharedPtr<SVerticalBox> Root,Log,MenuList;
     TSharedPtr<SOverlay> Body;
     TSharedPtr<SRetainerWidget> Retainer;
-    TSharedPtr<SScrollBox> LogScroll;
+    TSharedPtr<SScrollBox> LogScroll,MenuScroll;
+    FScrollBarStyle SlimScrollStyle;
+    TArray<TSharedPtr<SWidget>> MenuEntries;
+    int32 ActiveCategory=0,HighlightedChoice=0;
+    bool bLogAutoScroll=true;
+    double CopiedUntil=0;
+    uint64 SeenRuntimeRevision=MAX_uint64;
+    void SelectCategory(int32 Category);
+    void ExecuteHighlighted();
+    void RefreshLog();
+    FReply CopyLog();
+    TSharedRef<SWidget> BuildTerminal(const FText& Draft);
     FSlateBrush Brushes[9];
     int32 LastFeed=-1;
     int32 LastFollowedCrew=-1, LastFollowRoom=-1;
@@ -47,7 +59,7 @@ private:
     uint64 SeenEvents=MAX_uint64;
     double LastTap=-1;
     TCHAR SuppressPromptChar=0;
-    float DrawerSlide=0,MenuRefreshClock=0;
+    float MenuRefreshClock=0;
     uint64 SeenMenuRevision=MAX_uint64;
     TArray<FString> History,Completions,MenuLabels;
     TArray<bool> MenuEnabled;
@@ -55,10 +67,11 @@ private:
     FString HistoryDraft,LastCompletion;
     void BrowseHistory(int32 Direction);
     void Autocomplete();
-    float DrawerHeight() const;
     void RebuildMenu();
     void RefreshMenuChoices();
     void Rebuild();
+    TSharedRef<SWidget> BuildEvaluationDossier();
+    bool bShowingEvaluation=false;
     TSharedRef<SWidget> Video(int32 Feed);
     void Commit(const FText&,ETextCommit::Type);
 };

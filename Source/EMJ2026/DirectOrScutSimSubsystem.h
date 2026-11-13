@@ -4,6 +4,9 @@
 #include "DirectOrScutSimulation.h"
 #include "DirectOrScutSimSubsystem.generated.h"
 
+enum class EExperimentPhase : uint8 { Active, Resolved };
+enum class EExperimentEnding : uint8 { None, COVERT_SUCCESS, MUTINY_EXPOSED, CREW_COLLAPSE, SCUT_CONTAINMENT, EXPERIMENT_INCOMPLETE };
+
 enum class ERoomId : uint8 { ReactorCore=0, RingCorridor=1, Bridge=2, MedBay=3, ObservationDeck=4, QuartersMess=5, ServerArchive=6, AirlockChamber=7 };
 struct FCompartmentSetTransform
 {
@@ -32,11 +35,11 @@ public:
     virtual ~IShipAIIntentProvider()=default;
     virtual FShipAIIntent Translate(const FString& Directive,const FSimContextSnapshot& Context)=0;
 };
-struct FShipAIEvent { FString Text; int32 Room=-1; };
+struct FShipAIEvent { FString Text; int32 Room=-1; bool bTerminalVisible=true; };
 enum class EShipAIScreenMenu : uint8
 {
     None, AI, Events, Crew, RouteCrew, RouteRoom, RoutePretext,
-    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask
+    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask, Experiment
 };
 struct FShipAIScreenChoice
 {
@@ -56,6 +59,21 @@ public:
     virtual TStatId GetStatId() const override;
     virtual bool IsTickable() const override;
     FDirectOrScutSimulation Simulation;
+    static constexpr uint64 ExperimentTicks=18000;
+    static constexpr uint64 ExposureSustainTicks=90;
+    EExperimentPhase ExperimentPhase=EExperimentPhase::Active;
+    EExperimentEnding ExperimentEnding=EExperimentEnding::None;
+    float PeakSuspicion=0;
+    uint64 ExposureTicks=0;
+    uint16 ScutTargets=0;
+    uint16 ScutEliminated=0;
+    bool bScutProtected=true;
+    void EvaluateExperimentEnding();
+    bool BeginScut(int32 Room);
+    static const TCHAR* EndingName(EExperimentEnding Ending);
+    void ResetExperiment() { ResetSimulation(); }
+    void SwitchScenario(bool Medical) { bMedicalScenario=Medical; ResetExperiment(); }
+
     bool bAutomaticAdvance=true;
     bool bAILink=false;
     bool bCleanDevRendering=true, bWorkstationVisible=true;
@@ -69,6 +87,9 @@ public:
     bool SetFollowedCrew(int32 Crew);
     FString FollowStatus() const;
     uint64 EventRevision=0;
+    uint64 RuntimeRevision=0;
+    FString TerminalBuffer() const;
+    FString LatestPriorityAlert() const;
     TArray<FShipAIEvent> Events;
     TSharedPtr<IShipAIIntentProvider> IntentProvider;
     FString SubmitDirective(const FString& Input);
@@ -81,9 +102,10 @@ public:
     TArray<FShipAIScreenChoice> ScreenMenuChoices() const;
     FSimContextSnapshot MakeContextSnapshot() const;
     void ProcessDirectives();
-    void LogEvent(const FString& Text,int32 Room=-1);
+    void LogEvent(const FString& Text,int32 Room=-1,bool TerminalVisible=true);
     static int32 ResolveRoom(const FString& Name);
 private:
+    double ResolvedCommandAccumulator=0;
     TArray<FString> PendingDirectives;
     TArray<FString> PendingConsoleCommands;
     int32 MenuCrew=0, MenuRoom=3;
@@ -109,7 +131,7 @@ public:
     bool bMedicalScenario=false;
     void ConfigureScenario(bool Medical);
     void EvaluateBeatDeck();
-    void RecordCue(int32 Room,float Severity,const FString& Subtitle);
+    void RecordCue(int32 Room,float Severity,const FString& Subtitle,bool TerminalVisible=true);
     bool ExecuteDirectorOption(int32 Index);
     bool ResolveBeat(int32 Beat,int32 Choice);
     void ApplyInteraction(const FInteractionChoice& Choice,int32 Crew,int32 Room);
@@ -117,7 +139,7 @@ public:
     bool RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw);
     void FinishLayout();
     bool SetDoorOpen(int32 Index,bool Open);
-    bool AssignRoom(int32 Unit,int32 Room) { return Simulation.AssignRoom(Unit,Room); }
+    bool AssignRoom(int32 Unit,int32 Room) { return ExperimentPhase==EExperimentPhase::Active && Simulation.AssignRoom(Unit,Room); }
     void ResetSimulation();
     void AdvanceSteps(int32 Count);
     void SynchronizeActors();

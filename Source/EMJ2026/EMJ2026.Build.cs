@@ -10,7 +10,7 @@ public class EMJ2026 : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "GeometryFramework", "GeometryScriptingCore", "GeometryCore" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "RHI", "Slate", "SlateCore", "UMG", "Json", "RenderCore" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "RHI", "ApplicationCore", "Slate", "SlateCore", "UMG", "Json", "RenderCore" });
         if (Target.bBuildEditor) PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "MaterialEditor", "AssetRegistry" });
 
 		// Uncomment if you are using Slate UI

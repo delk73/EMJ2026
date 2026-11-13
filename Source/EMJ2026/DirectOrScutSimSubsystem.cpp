@@ -43,10 +43,15 @@ TStatId UDirectOrScutSimSubsystem::GetStatId() const { RETURN_QUICK_DECLARE_CYCL
 void UDirectOrScutSimSubsystem::Tick(float Delta)
 {
     if (!FMath::IsFinite(Delta) || Delta<=0) return;
+    if(ExperimentPhase==EExperimentPhase::Resolved) {
+        ResolvedCommandAccumulator+=Delta;
+        if(ResolvedCommandAccumulator+1.e-9>=Simulation.FixedDelta) {ResolvedCommandAccumulator=0;ProcessConsoleCommands();}
+        return;
+    }
     Simulation.Accumulator+=Delta;
     int32 Budget=240;
-    while (Simulation.Accumulator+1.e-9>=Simulation.FixedDelta && Budget-->0)
-    { FixedStep(); Simulation.Accumulator-=Simulation.FixedDelta; }
+    while (ExperimentPhase==EExperimentPhase::Active && Simulation.Accumulator+1.e-9>=Simulation.FixedDelta && Budget-->0)
+    { FixedStep(); Simulation.Accumulator=FMath::Max(0.,Simulation.Accumulator-Simulation.FixedDelta); }
     SynchronizeActors();
 }
 void UDirectOrScutSimSubsystem::RegisterDoor(ADoorActor* Door)
@@ -79,7 +84,7 @@ void UDirectOrScutSimSubsystem::FinishLayout()
 }
 bool UDirectOrScutSimSubsystem::SetDoorOpen(int32 I,bool Open)
 {
-    if (!Simulation.SetDoorOpen(I,Open)) return false;
+    if (ExperimentPhase!=EExperimentPhase::Active || !Simulation.SetDoorOpen(I,Open)) return false;
     if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(Open);
     SynchronizeActors(); return true;
 }
@@ -106,10 +111,15 @@ void UDirectOrScutSimSubsystem::AdvanceSteps(int32 Count)
 }
 void UDirectOrScutSimSubsystem::ResetSimulation()
 {
+    ResolvedCommandAccumulator=0;
+    ++RuntimeRevision;
+    ExperimentPhase=EExperimentPhase::Active; ExperimentEnding=EExperimentEnding::None;
+    PeakSuspicion=0; ExposureTicks=0; ScutTargets=0; ScutEliminated=0; bScutProtected=true;
+    ++EventRevision;
     PendingConsoleCommands.Reset(); MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None; ++MenuRevision;
     PendingDirectives.Reset(); Events.Reset(); bAILink=false; RequestedFeed=-1; FollowedCrew=-1; ++FollowRevision;
     CommandRecords.Reset(); CinematicCues.Reset(); ConfigureScenario(bMedicalScenario);
-    Simulation.ResetRuntime();
+    Simulation.ResetRuntime(); Simulation.Scenario.ShiftDuration=600;
     for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(false);
     SynchronizeActors();
 }
@@ -124,14 +134,14 @@ int32 UDirectOrScutSimSubsystem::ResolveRoom(const FString& Name)
     if (Name.Equals(TEXT("airlock"),ESearchCase::IgnoreCase)) return 7;
     return -1;
 }
-void UDirectOrScutSimSubsystem::LogEvent(const FString& Text,int32 Room)
+void UDirectOrScutSimSubsystem::LogEvent(const FString& Text,int32 Room,bool TerminalVisible)
 {
-    if (Events.Num()>=64) Events.RemoveAt(0);
     ++EventRevision;
-    Events.Add({FString::Printf(TEXT("[%06llu] %s"),Simulation.TickIndex,*Text),Room});
+    Events.Add({FString::Printf(TEXT("[%06llu] %s"),Simulation.TickIndex,*Text),Room,TerminalVisible});
 }
 FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
 {
+    if(ExperimentPhase==EExperimentPhase::Resolved)return TEXT("Experiment resolved. Use reset_experiment or scenario behavioral|medical.");
     FString Line=Input.TrimStartAndEnd().ToLower();
     if (Line==TEXT("llm") || Line==TEXT("ai link")) { bAILink=true; return TEXT("AI-LINK> Local offline intent provider ready. Use explicit Ship AI commands."); }
     if (Line==TEXT("cmd") || Line==TEXT("exit")) { bAILink=false; return TEXT("CMD> Deterministic control restored."); }
@@ -200,7 +210,7 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
         }
         else if (((Op==TEXT("vent") || Op==TEXT("scut")) && R==7) || (Op==TEXT("flush") && R>=0))
         {
-            Simulation.CycleAirlock(R);
+            BeginScut(R);
             LogEvent(TEXT("Ship AI: atmospheric purge initiated. SCUT telemetry active."),R);
         }
         else LogEvent(TEXT("Syntax: direct <name|role> <ROOM> [pretext]; alert <ROOM> <fault|leak|drill>; calm; protocol <ROOM>; open/close/seal <door|ROOM|all>; vent airlock; flush <ROOM>; cam <1-8>; status; crew; rooms; llm; cmd"));
@@ -236,4 +246,19 @@ FString UDirectOrScutSimSubsystem::FollowStatus() const
     if(!CanFollowCrew(FollowedCrew))return TEXT("FOLLOW OFF");
     const TCHAR* Names[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};
     return FString::Printf(TEXT("FOLLOWING: %s [%s]"),Names[FollowedCrew],DirectOrScut::RoomName(Simulation.Bodies[FollowedCrew].Room));
+}
+
+FString UDirectOrScutSimSubsystem::TerminalBuffer() const
+{
+    FString Result;
+    for(const auto& E:Events)if(E.bTerminalVisible) { Result+=E.Text;Result+=TEXT("\n"); }
+    return Result;
+}
+FString UDirectOrScutSimSubsystem::LatestPriorityAlert() const
+{
+    for(int32 I=CinematicCues.Num()-1;I>=0;--I)if(CinematicCues[I].Severity>=.7f) {
+        const auto& C=CinematicCues[I];
+        return FString::Printf(TEXT("[%06.1fs] %s"),C.Tick/30.,*C.Subtitle);
+    }
+    return TEXT("NO PRIORITY ALERTS");
 }
