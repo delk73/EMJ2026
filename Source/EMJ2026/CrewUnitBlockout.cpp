@@ -1,0 +1,36 @@
+#include "CrewUnitBlockout.h"
+#include "DirectOrScutGeometry.h"
+#include "Components/DynamicMeshComponent.h"
+#include "UDynamicMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/Material.h"
+ACrewUnitBlockout::ACrewUnitBlockout()
+{
+    Body=CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("Body")); RootComponent=Body;
+    AutoPossessAI=EAutoPossessAI::Disabled;
+}
+void ACrewUnitBlockout::BeginPlay()
+{
+    Super::BeginPlay(); DirectOrScut::Materials(Body);
+    auto* M=Body->GetDynamicMesh();
+    const float W=bAndroid ? 85.f : 80.f;
+    const float H=bAndroid ? 185.f : 180.f;
+    // Footprint is exactly W x W; base is Z=0. Faceted round human / square android.
+    auto Profile=DirectOrScut::Octagon(W,W,bAndroid ? 8.f : 23.43146f);
+    DirectOrScut::Prism(M,Profile,12,FTransform::Identity,7);
+    DirectOrScut::Prism(M,DirectOrScut::Octagon(56,54,bAndroid ? 5 : 16),65,FTransform(FVector(0,0,12)),bAndroid ? 1 : SuitSlot);
+    DirectOrScut::Prism(M,Profile,61,FTransform(FVector(0,0,77)),bAndroid ? 1 : SuitSlot);
+    DirectOrScut::Prism(M,DirectOrScut::Octagon(56,56,bAndroid ? 4 : 16),H-138,FTransform(FVector(0,0,138)),1);
+    DirectOrScut::Box(M,FVector(-29,0,H-22),FVector(4,46,bAndroid ? 7.f : 19.f),bAndroid ? 4 : 7);
+    DirectOrScut::Box(M,FVector(-W/2+0.25f,0,111),FVector(0.5,42,9),3);
+    if (bAndroid)
+    {
+        auto* Chrome=UMaterialInstanceDynamic::Create(Body->GetMaterial(1)->GetMaterial(),this);
+        Chrome->SetScalarParameterValue(TEXT("Metallic"),1.f);
+        Chrome->SetScalarParameterValue(TEXT("Roughness"),.18f);
+        Body->SetMaterial(9,Chrome);
+        for (float Y : {-28.f,28.f}) DirectOrScut::Box(M,FVector(0,Y,50),FVector(32,15,62),9);
+        DirectOrScut::Box(M,FVector(0,0,145),FVector(52,52,12),9);
+    }
+    DirectOrScut::Finish(Body);
+}
