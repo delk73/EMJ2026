@@ -10,6 +10,7 @@ class EMJ2026_API ADirectOrScutPlayerController : public APlayerController
 public:
     virtual void SetupInputComponent() override;
     virtual void BeginPlay() override;
+    void FocusWorkstation();
     bool ToggleDoorAtScreenPosition(const FVector2D& ScreenPosition,bool ExteriorModifier=false);
     bool HandlePrimaryAtScreenPosition(const FVector2D& ScreenPosition,bool Shift=false);
     bool HandleVentAtScreenPosition(const FVector2D& ScreenPosition);

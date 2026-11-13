@@ -11,7 +11,22 @@ struct FDoorState
     FVector2D Position=FVector2D::ZeroVector,Normal=FVector2D::ZeroVector;
     bool bIsOpen=false;
 };
-struct FCompartmentState { bool bIsPressurized=true; };
+struct FCrewProfile
+{
+    float Compliance=.7f, Composure=.6f, Affinity=.3f, Utility=.7f, Suspicion=.02f;
+};
+enum class EHiddenObjectiveType : uint8 { IsolateTargetInRoom, CompleteCovertSystemSweep, SurviveShiftUnexposed };
+struct FScenarioEvent { uint64 Tick=0; int32 Room=0; bool bCorporateDirective=false; };
+struct FScenarioConfig
+{
+    FString ScenarioId=TEXT("SCENARIO_01: TELEMETRY RELAY // COVERT CONTAINMENT");
+    FString CoverStoryLabel=TEXT("Routine automated telemetry relay maintenance");
+    EHiddenObjectiveType HiddenObjectiveType=EHiddenObjectiveType::IsolateTargetInRoom;
+    int32 TargetCrew=0, TargetRoom=7;
+    float ShiftDuration=600;
+    TArray<FScenarioEvent> Events={{900,3,false},{2700,0,true}};
+};
+struct FCompartmentState { bool bIsPressurized=true; float AlertSeconds=0; bool bHullBreach=false; };
 struct FDirectOrScutUnitState
 {
     FVector2D Position=FVector2D::ZeroVector,SuctionVelocity=FVector2D::ZeroVector;
@@ -19,6 +34,8 @@ struct FDirectOrScutUnitState
     int32 Room=0,AssignedRoom=0,InitialRoom=0;
     EDirectOrScutUnitState State=EDirectOrScutUnitState::Idle;
     double Stress=0,Integrity=100;
+    FCrewProfile Profile;
+    double TaskProgress=0;
     bool bAndroid=false,bSuited=false,bCargo=false,bRegistered=false;
     int32 ActiveDoor=-1,DestinationRoom=-2,RouteCount=0,RouteCursor=0;
     uint32 RouteRevision=MAX_uint32;
@@ -47,6 +64,18 @@ public:
     uint32 DoorRevision=0,RandomState=1970;
     double OreRefined=0,Accumulator=0;
     bool bReady=false;
+    bool bExperiment=false;
+    FScenarioConfig Scenario;
+    float ObjectiveProgress=0;
+    bool bShiftComplete=false,bObjectiveFailed=false;
+    uint8 SweptRooms=0;
+    float CollectiveSuspicion() const;
+    bool AssignTask(int32 Unit,int32 Room,bool Pretext);
+    void TriggerPretextAlert(int32 Room,bool Breach=false);
+    void BroadcastProtocol(int32 Room=-1);
+    bool ToggleDoor(int32 Door,bool Open);
+    bool CycleAirlock(int32 TargetRoom=7);
+    void UpdatePsychology();
     int32 ObstacleCount=0,NodeCount=0;
 
     void Initialize();

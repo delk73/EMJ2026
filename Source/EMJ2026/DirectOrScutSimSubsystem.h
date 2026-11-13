@@ -4,6 +4,19 @@
 #include "DirectOrScutSimulation.h"
 #include "DirectOrScutSimSubsystem.generated.h"
 
+struct FSimContextSnapshot
+{
+    uint64 Tick=0;
+    FString CompactJson;
+};
+struct FShipAIIntent { FString Command,Pretext; };
+class IShipAIIntentProvider
+{
+public:
+    virtual ~IShipAIIntentProvider()=default;
+    virtual FShipAIIntent Translate(const FString& Directive,const FSimContextSnapshot& Context)=0;
+};
+struct FShipAIEvent { FString Text; int32 Room=-1; };
 class ADoorActor;
 class ACrewUnitBlockout;
 UCLASS()
@@ -18,6 +31,19 @@ public:
     virtual bool IsTickable() const override;
     FDirectOrScutSimulation Simulation;
     bool bAutomaticAdvance=true;
+    bool bAILink=false;
+    int32 RequestedFeed=-1;
+    uint64 EventRevision=0;
+    TArray<FShipAIEvent> Events;
+    TSharedPtr<IShipAIIntentProvider> IntentProvider;
+    FString SubmitDirective(const FString& Input);
+    FSimContextSnapshot MakeContextSnapshot() const;
+    void ProcessDirectives();
+    void LogEvent(const FString& Text,int32 Room=-1);
+    static int32 ResolveRoom(const FString& Name);
+private:
+    TArray<FString> PendingDirectives;
+public:
     void RegisterDoor(ADoorActor* Door);
     void RegisterCrew(ACrewUnitBlockout* Crew);
     void RegisterCargo(AActor* Actor,int32 Index,int32 Room);

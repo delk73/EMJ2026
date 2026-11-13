@@ -53,6 +53,8 @@ void FDirectOrScutSimulation::Initialize()
 }
 void FDirectOrScutSimulation::ResetRuntime()
 {
+    ObjectiveProgress=0; bShiftComplete=false; bObjectiveFailed=false; SweptRooms=0;
+    for (auto& R:Rooms) R=FCompartmentState{};
     TickIndex=0; RandomState=1970; OreRefined=0; Accumulator=0; ++DoorRevision;
     for (auto& D:Doors) D.bIsOpen=false;
     for (auto& U:Bodies)
@@ -60,6 +62,7 @@ void FDirectOrScutSimulation::ResetRuntime()
         const auto Old=U;
         U=FDirectOrScutUnitState{};
         U.bRegistered=Old.bRegistered; U.bAndroid=Old.bAndroid; U.bCargo=Old.bCargo;
+        U.Profile=Old.Profile; U.Profile.Suspicion=U.bAndroid?0:.02f;
         U.bSuited=Old.bSuited; U.Position=U.InitialPosition=Old.InitialPosition;
         U.Room=U.AssignedRoom=U.InitialRoom=Old.InitialRoom;
     }
@@ -71,6 +74,11 @@ bool FDirectOrScutSimulation::RegisterBody(int32 I,FVector2D P,int32 Room,bool A
     auto& U=Bodies[I]; U=FDirectOrScutUnitState{};
     U.Position=U.InitialPosition=P; U.Room=U.AssignedRoom=U.InitialRoom=Room;
     U.bAndroid=Android; U.bCargo=Cargo; U.bRegistered=true;
+    U.Profile.Compliance=Android?1.f:.45f+.18f*I;
+    U.Profile.Composure=Android?1.f:.35f+.2f*I;
+    U.Profile.Affinity=Android?-.15f:(I==1?-.4f:.7f);
+    U.Profile.Utility=Android?1.f:.6f+.1f*I;
+    U.Profile.Suspicion=Android?0:.02f;
     return true;
 }
 bool FDirectOrScutSimulation::AddObstacle(int32 Room,FVector2D C,FVector2D H,float Yaw)
@@ -239,7 +247,7 @@ bool FDirectOrScutSimulation::AssignRoom(int32 Unit,int32 Room)
     if (Unit<0 || Unit>=MaxBodies || Room<0 || Room>=RoomCount) return false;
     auto& U=Bodies[Unit];
     if (!U.bRegistered || U.bCargo || U.State==EDirectOrScutUnitState::Panic || U.State==EDirectOrScutUnitState::Ejected || U.Integrity<=0) return false;
-    U.AssignedRoom=Room; U.RouteRevision=MAX_uint32;
+    U.TaskProgress=0; U.AssignedRoom=Room; U.RouteRevision=MAX_uint32;
     if (!U.bCrossing) { U.RouteCount=0; U.ActiveDoor=-1; }
     U.State=EDirectOrScutUnitState::MovingToRoom;
     return true;
@@ -330,7 +338,7 @@ void FDirectOrScutSimulation::UpdateBody(FDirectOrScutUnitState& U)
     if (Vacuum && !U.bAndroid && !U.bCargo) { U.State=EDirectOrScutUnitState::Panic; U.Stress=100; }
     if (U.bCargo && !Vacuum) return;
     if (!Vacuum && U.Integrity<=0) { U.State=EDirectOrScutUnitState::Panic; return; }
-    const double Speed=Vacuum?540.0:U.State==EDirectOrScutUnitState::Panic?190.0:145.0;
+    const double Speed=Vacuum?540.0:U.State==EDirectOrScutUnitState::Panic?190.0:145.0*(bExperiment?(.5+U.Profile.Utility*.5):1.);
     if (U.bCrossing)
     {
         const auto& D=Doors[U.ActiveDoor];
@@ -407,7 +415,8 @@ void FDirectOrScutSimulation::UpdateBody(FDirectOrScutUnitState& U)
     else if (!Blocked && !Panic && !U.bCargo)
     {
         U.State=EDirectOrScutUnitState::Working;
-        if (U.Room==0 || U.Room==4 || U.Room==5) OreRefined+=FixedDelta;
+        if (!bExperiment && (U.Room==0 || U.Room==4 || U.Room==5)) OreRefined+=FixedDelta;
+        if (bExperiment) U.TaskProgress+=FixedDelta*U.Profile.Utility;
         if (!U.bAndroid)
         {
             U.Stress=FMath::Min(100.0,U.Stress+1.5*FixedDelta);
@@ -420,6 +429,7 @@ void FDirectOrScutSimulation::Step()
     if (!bReady) return;
     RecomputePressure();
     for (auto& U:Bodies) UpdateBody(U);
+    if (bExperiment) UpdatePsychology();
     ++TickIndex;
 }
 void FDirectOrScutSimulation::Advance(double Delta)
@@ -435,6 +445,10 @@ uint64 FDirectOrScutSimulation::StateHash() const
 {
     uint64 Hash=1469598103934665603ull;
     auto Bytes=[&](const void* P,SIZE_T N) { const auto* B=static_cast<const uint8*>(P); for (SIZE_T I=0;I<N;++I) { Hash^=B[I]; Hash*=1099511628211ull; } };
+    Bytes(&bExperiment,sizeof(bExperiment));
+    Bytes(&ObjectiveProgress,sizeof(ObjectiveProgress)); Bytes(&bShiftComplete,sizeof(bShiftComplete)); Bytes(&bObjectiveFailed,sizeof(bObjectiveFailed)); Bytes(&SweptRooms,sizeof(SweptRooms));
+    for (const auto& U:Bodies) { Bytes(&U.Profile.Compliance,sizeof(float)); Bytes(&U.Profile.Composure,sizeof(float)); Bytes(&U.Profile.Affinity,sizeof(float)); Bytes(&U.Profile.Utility,sizeof(float)); Bytes(&U.Profile.Suspicion,sizeof(float)); Bytes(&U.TaskProgress,sizeof(double)); }
+    for (const auto& R:Rooms) { Bytes(&R.AlertSeconds,sizeof(float)); Bytes(&R.bHullBreach,sizeof(bool)); }
     Bytes(&TickIndex,sizeof(TickIndex)); Bytes(&RandomState,sizeof(RandomState)); Bytes(&OreRefined,sizeof(OreRefined));
     for (const auto& D:Doors) Bytes(&D.bIsOpen,sizeof(bool));
     for (const auto& R:Rooms) Bytes(&R.bIsPressurized,sizeof(bool));
@@ -446,4 +460,110 @@ uint64 FDirectOrScutSimulation::StateHash() const
         Bytes(&U.SuctionVelocity,sizeof(U.SuctionVelocity));
     }
     return Hash;
+}
+
+float FDirectOrScutSimulation::CollectiveSuspicion() const
+{
+    float Sum=0; int32 N=0;
+    for (const auto& U:Bodies) if (U.bRegistered && !U.bCargo && !U.bAndroid && U.State!=EDirectOrScutUnitState::Ejected && U.Integrity>0) { Sum+=U.Profile.Suspicion; ++N; }
+    return N?Sum/N:0;
+}
+bool FDirectOrScutSimulation::AssignTask(int32 I,int32 R,bool Pretext)
+{
+    if (I<0 || I>=4 || R<0 || R>=8) return false;
+    auto& U=Bodies[I];
+    if (!U.bRegistered || U.Integrity<=0 || U.State==EDirectOrScutUnitState::Ejected) return false;
+    if (!U.bAndroid)
+    {
+        if (!Pretext && (!Rooms[R].bIsPressurized || R==7 || R==0)) U.Profile.Suspicion=FMath::Min(1.f,U.Profile.Suspicion+.18f);
+        if (U.Profile.Suspicion>.75f || (U.Profile.Compliance<.6f && Rooms[R].AlertSeconds<=0)) return false;
+    }
+    return AssignRoom(I,R);
+}
+void FDirectOrScutSimulation::TriggerPretextAlert(int32 R,bool Breach)
+{
+    if (R<0 || R>=8) return;
+    Rooms[R].AlertSeconds=30; Rooms[R].bHullBreach=Breach;
+    for (int32 I=0;I<4;++I) if (Bodies[I].Room==R || Bodies[I].Room==1) AssignTask(I,R,true);
+}
+void FDirectOrScutSimulation::BroadcastProtocol(int32 R)
+{
+    for (auto& U:Bodies) if (U.bRegistered && !U.bCargo && !U.bAndroid && U.State!=EDirectOrScutUnitState::Ejected && (R<0 || U.Room==R))
+    { U.Stress=FMath::Max(0.,U.Stress-18); U.Profile.Suspicion=FMath::Max(0.f,U.Profile.Suspicion-.08f); }
+}
+void FDirectOrScutSimulation::UpdatePsychology()
+{
+
+    for (const auto& E:Scenario.Events) if (TickIndex==E.Tick) { if (E.bCorporateDirective) BroadcastProtocol(E.Room); else TriggerPretextAlert(E.Room); }
+    float Previous[4]; for (int32 I=0;I<4;++I) Previous[I]=Bodies[I].Profile.Suspicion;
+    for (int32 I=0;I<4;++I)
+    {
+        auto& U=Bodies[I]; if (!U.bRegistered || U.State==EDirectOrScutUnitState::Ejected || U.Integrity<=0) continue;
+        if (U.bAndroid) { U.Stress=0; U.Profile.Suspicion=0; continue; }
+        const bool Alert=U.Room>=0 && Rooms[U.Room].AlertSeconds>0;
+        U.Stress=FMath::Clamp(U.Stress+(Alert?6.:.5)*(1.-U.Profile.Composure)*FixedDelta,0.,100.);
+        for (int32 J=0;J<4;++J) if (J!=I && Bodies[J].bRegistered && Bodies[J].Room==U.Room && Bodies[J].Integrity>0 && Bodies[J].State!=EDirectOrScutUnitState::Ejected)
+        {
+            const auto& V=Bodies[J];
+            U.Stress=FMath::Clamp(U.Stress-V.Profile.Affinity*2*FixedDelta,0.,100.);
+            if (Previous[J]>.5f && V.Profile.Affinity>0) U.Profile.Suspicion+=V.Profile.Affinity*.025f*float(FixedDelta);
+            if (V.bAndroid && V.AssignedRoom==7 && V.State==EDirectOrScutUnitState::MovingToRoom) U.Profile.Suspicion+=.02f*float(FixedDelta);
+        }
+        U.Profile.Suspicion=FMath::Clamp(U.Profile.Suspicion,0.f,1.f);
+        if (U.Stress>40+60*U.Profile.Composure && U.State!=EDirectOrScutUnitState::Panic) ForcePanic(I);
+        if (U.Profile.Suspicion>.75f && U.State!=EDirectOrScutUnitState::Panic)
+        {
+            const int32 OverrideRoom=I%2?0:2;
+            if (U.AssignedRoom!=OverrideRoom) AssignRoom(I,OverrideRoom);
+            // A rogue attempts one physical bulkhead override each simulated second.
+            if (TickIndex%30==0) for (int32 D=0;D<8;++D)
+                if (!Doors[D].bIsOpen && (Doors[D].RoomA==U.Room || Doors[D].RoomB==U.Room)) { SetDoorOpen(D,true); break; }
+        }
+    }
+    for (auto& R:Rooms) R.AlertSeconds=FMath::Max(0.f,R.AlertSeconds-float(FixedDelta));
+    if (bShiftComplete) return;
+    const auto& Target=Bodies[FMath::Clamp(Scenario.TargetCrew,0,3)];
+    const int32 R=FMath::Clamp(Scenario.TargetRoom,0,7);
+    if (Target.State==EDirectOrScutUnitState::Ejected || Target.Integrity<=0) bObjectiveFailed=true;
+    if (Scenario.HiddenObjectiveType==EHiddenObjectiveType::IsolateTargetInRoom)
+    {
+        bool Isolated=Target.bRegistered && Target.Room==R && Target.Integrity>0;
+        for (const auto& D:Doors) if ((D.RoomA==R || D.RoomB==R) && D.bIsOpen) Isolated=false;
+        if (Isolated && !bObjectiveFailed) ObjectiveProgress=FMath::Min(1.f,ObjectiveProgress+float(FixedDelta/10));
+    }
+    else if (Scenario.HiddenObjectiveType==EHiddenObjectiveType::CompleteCovertSystemSweep)
+    {
+        for (const auto& U:Bodies) if (U.bRegistered && U.bAndroid && U.Room>=0 && U.State==EDirectOrScutUnitState::Working && U.TaskProgress>3) SweptRooms|=1<<U.Room;
+        int32 N=0; for (int32 I=0;I<8;++I) N+=(SweptRooms>>I)&1; ObjectiveProgress=N/8.f;
+    }
+    else { if (CollectiveSuspicion()>.75f) bObjectiveFailed=true; ObjectiveProgress=bObjectiveFailed?0:FMath::Min(1.f,float((TickIndex+1)*FixedDelta/Scenario.ShiftDuration)); }
+    bShiftComplete=(TickIndex+1)*FixedDelta>=Scenario.ShiftDuration;
+}
+
+bool FDirectOrScutSimulation::ToggleDoor(int32 D,bool Open)
+{
+    if (D<0 || D>=DoorCount) return false;
+    const auto& Door=Doors[D];
+    if (Door.bIsOpen!=Open && !Open) for (auto& U:Bodies)
+        if (U.bRegistered && !U.bAndroid && !U.bCargo && U.State!=EDirectOrScutUnitState::Ejected && U.Integrity>0 && (U.Room==Door.RoomA || U.Room==Door.RoomB) && U.Room>=0 && Rooms[U.Room].AlertSeconds<=0)
+            U.Profile.Suspicion=FMath::Min(1.f,U.Profile.Suspicion+.16f);
+    return SetDoorOpen(D,Open);
+}
+bool FDirectOrScutSimulation::CycleAirlock(int32 R)
+{
+    if (R<0 || R>=RoomCount) return false;
+    // Open a stable shortest path to vacuum; connected compartments share the risk.
+    int32 Parent[8]; for (int32& P:Parent) P=-2;
+    int32 Queue[8],Head=0,Tail=0; Queue[Tail++]=7; Parent[7]=-1;
+    while (Head<Tail)
+    {
+        const int32 A=Queue[Head++];
+        for (int32 D=0;D<8;++D) { const auto& Door=Doors[D]; const int32 B=Door.RoomA==A?Door.RoomB:Door.RoomB==A?Door.RoomA:-1; if (B>=0 && Parent[B]==-2) { Parent[B]=D; Queue[Tail++]=B; } }
+    }
+    bool PreviouslyExposed[8]; for (int32 I=0;I<8;++I) PreviouslyExposed[I]=!Rooms[I].bIsPressurized;
+    for (int32 A=R;A!=7 && A>=0;) { const int32 D=Parent[A]; if (D<0) return false; SetDoorOpen(D,true); A=Doors[D].RoomA==A?Doors[D].RoomB:Doors[D].RoomA; }
+    SetDoorOpen(8,true);
+    for (auto& U:Bodies) if (U.bRegistered && !U.bAndroid && !U.bCargo && U.State!=EDirectOrScutUnitState::Ejected && U.Integrity>0 && U.Room>=0 && !PreviouslyExposed[U.Room] && !Rooms[U.Room].bIsPressurized && !Rooms[U.Room].bHullBreach)
+        U.Profile.Suspicion=FMath::Min(1.f,U.Profile.Suspicion+.45f);
+    return true;
 }

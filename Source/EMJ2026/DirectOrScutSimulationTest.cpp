@@ -26,7 +26,9 @@ public:
         if (Width<100 || Height<100 || Sim->Simulation.TickIndex<60) return false;
         Sim->bAutomaticAdvance=false;
         auto& M=Sim->Simulation;
-        Test->TestTrue(TEXT("Live PIE autorun produced ore"),M.OreRefined>0);
+        Test->TestEqual(TEXT("Slice 9 disables legacy ore production"),M.OreRefined,0.);
+        // Remaining fixtures verify the committed Slice 8 movement rules in isolation.
+        M.bExperiment=false;
         Test->TestEqual(TEXT("Exactly four crew actors"),M.Bodies[3].bRegistered,true);
         Test->TestTrue(TEXT("Loose cargo registered"),M.Bodies[4].bCargo && M.Bodies[5].bCargo);
         Test->TestTrue(TEXT("Landmark footprints exported"),M.ObstacleCount>20);

@@ -2,6 +2,8 @@
 #include "DirectOrScutSimSubsystem.h"
 #include "DirectOrScutCargoMarker.h"
 #include "DirectOrScutHUD.h"
+#include "Framework/Application/SlateApplication.h"
+#include "SDirectOrScutWorkstationWidget.h"
 #include "DirectOrScutHullActor.h"
 #include "DirectOrScutGeometry.h"
 #include "Components/BoxComponent.h"
@@ -24,15 +26,29 @@
 
 void ADirectOrScutPlayerController::SetupInputComponent()
 {
-    Super::SetupInputComponent(); InputComponent->BindKey(EKeys::LeftMouseButton,IE_Pressed,this,&ADirectOrScutPlayerController::ClickDoor);
-    InputComponent->BindKey(EKeys::RightMouseButton,IE_Pressed,this,&ADirectOrScutPlayerController::ClickVent);
-    InputComponent->BindKey(EKeys::F1,IE_Pressed,this,&ADirectOrScutPlayerController::DebugPanic);
+    // Slice 9 routes operator interaction through the covert workstation only.
+    Super::SetupInputComponent();
 }
 void ADirectOrScutPlayerController::BeginPlay()
 {
-    Super::BeginPlay(); bShowMouseCursor=true; SetInputMode(FInputModeGameAndUI());
+    Super::BeginPlay(); bShowMouseCursor=true;
+    FocusWorkstation();
+    GetWorldTimerManager().SetTimerForNextTick(this,&ADirectOrScutPlayerController::FocusWorkstation);
     bAutoManageActiveCameraTarget=false;
     for (TActorIterator<ACameraActor> It(GetWorld());It;++It) if (It->ActorHasTag(TEXT("DirectOrScutCamera"))) { SetViewTarget(*It); break; }
+}
+void ADirectOrScutPlayerController::FocusWorkstation()
+{
+    if (!IsLocalController()) return;
+    auto* HUD=Cast<ADirectOrScutHUD>(GetHUD());
+    const auto Widget=HUD?HUD->GetWorkstation():nullptr;
+    bShowMouseCursor=true;
+    FInputModeGameAndUI Mode;
+    Mode.SetHideCursorDuringCapture(false);
+    Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    if (Widget.IsValid()) Mode.SetWidgetToFocus(Widget);
+    SetInputMode(Mode);
+    if (Widget.IsValid() && FSlateApplication::IsInitialized()) FSlateApplication::Get().SetKeyboardFocus(Widget,EFocusCause::SetDirectly);
 }
 bool ADirectOrScutPlayerController::ToggleDoorAtScreenPosition(const FVector2D& Pixel,bool ExteriorModifier)
 {
@@ -136,10 +152,28 @@ void ADirectOrScutGameMode::BeginPlay()
                 GAreScreenMessagesEnabled=false;
                 if (auto* PC=Cast<ADirectOrScutPlayerController>(GetWorld()->GetFirstPlayerController())) PC->SelectedUnit=0;
             }
-            const TCHAR* Name=Chunk2Capture?TEXT("DirectOrScut/Chunk2.png"):TEXT("DirectOrScut/Blockout.png");
+            const TCHAR* Name=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9aCapture"))?TEXT("DirectOrScut/Slice9a.png"):FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture"))?TEXT("DirectOrScut/Slice9.png"):Chunk2Capture?TEXT("DirectOrScut/Chunk2.png"):TEXT("DirectOrScut/Blockout.png");
             FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/Name,true,false);
         },10.f,false);
-        GetWorldTimerManager().SetTimer(Exit,[](){ FPlatformMisc::RequestExit(false); },15.f,false);
+        const bool Slice9Capture=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture"));
+        if (Slice9Capture)
+        {
+            auto Select=[this](int32 Feed,bool Grid,bool Full)
+            {
+                auto* PC=GetWorld()->GetFirstPlayerController(); auto* HUD=PC?Cast<ADirectOrScutHUD>(PC->GetHUD()):nullptr;
+                if (!HUD || !HUD->GetWorkstation()) return;
+                auto UI=HUD->GetWorkstation(); UI->SelectFeed(Feed,false);
+                if (Grid) UI->ShowGrid(); else if (!UI->bFullscreen) UI->ToggleExpanded();
+            };
+            FTimerHandle Room,RoomShot,Grid,GridShot,Vacuum,VacuumShot;
+            GetWorldTimerManager().SetTimer(Room,[Select](){Select(2,false,false);},11.f,false);
+            GetWorldTimerManager().SetTimer(RoomShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9Room.png"),true,false);},12.f,false);
+            GetWorldTimerManager().SetTimer(Grid,[Select](){Select(0,true,false);},13.f,false);
+            GetWorldTimerManager().SetTimer(GridShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9Grid.png"),true,false);},14.f,false);
+            GetWorldTimerManager().SetTimer(Vacuum,[this,Select](){Select(7,false,true); GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()->SubmitDirective(TEXT("scut airlock"));},15.f,false);
+            GetWorldTimerManager().SetTimer(VacuumShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9Vacuum.png"),true,false);},16.f,false);
+        }
+        GetWorldTimerManager().SetTimer(Exit,[](){ FPlatformMisc::RequestExit(false); },Slice9Capture?18.f:15.f,false);
     }
     if (FParse::Param(FCommandLine::Get(),TEXT("ScutValidate")))
     {
