@@ -6,45 +6,8 @@ namespace
 const int32 RoomOrder[]={0,2,3,4,5,6,7,1};
 const TCHAR* CrewNames[]={TEXT("vale"),TEXT("chen"),TEXT("ortiz"),TEXT("ash")};
 const TCHAR* CrewRoles[]={TEXT("engineer"),TEXT("medic"),TEXT("technician"),TEXT("android")};
-const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("vent"),TEXT("scut"),TEXT("flush"),TEXT("fx"),TEXT("view")};
-bool LivingHuman(const FDirectOrScutUnitState& U) { return U.bRegistered && !U.bCargo && !U.bAndroid && U.Integrity>0 && U.State!=EDirectOrScutUnitState::Ejected; }
-struct FEventPlan
-{
-    uint8 Affected=0;
-    int32 Room=-1;
-    FCrewProfile Profiles[4];
-    double Stress[4]{};
-    float SuspicionDelta=0,StressDelta=0,ComplianceDelta=0,AffinityDelta=0,UtilityDelta=0;
-};
-// Both UI previews and fixed-tick execution use this pure plan, including eligibility and clamps.
-FEventPlan PlanEvent(const FDirectOrScutSimulation& M,int32 Choice)
-{
-    FEventPlan P;
-    if (Choice==1) P.Room=3;
-    if (Choice==3)
-        for (int32 R=0;R<8 && P.Room<0;++R)
-        {
-            int32 Count=0; for (int32 I=0;I<4;++I) Count+=LivingHuman(M.Bodies[I]) && M.Bodies[I].Room==R?1:0;
-            if (Count>=2) P.Room=R;
-        }
-    for (int32 I=0;I<4;++I)
-    {
-        const auto& U=M.Bodies[I]; P.Profiles[I]=U.Profile; P.Stress[I]=U.Stress;
-        if (!LivingHuman(U)) continue;
-        const bool Affects=Choice==2 || (Choice==1 && U.Room==3) || (Choice==3 && P.Room>=0 && U.Room==P.Room) || (Choice==4 && P.Affected==0);
-        if (!Affects) continue;
-        P.Affected|=1<<I; auto& W=P.Profiles[I]; auto& S=P.Stress[I];
-        if (Choice==1) { S+=6*(1-W.Composure); W.Compliance+=.03f; W.Suspicion-=.025f; }
-        if (Choice==2) { S-=18; W.Suspicion-=.08f; }
-        if (Choice==3) { S-=6; W.Affinity+=.1f; W.Suspicion-=.02f; }
-        if (Choice==4) { P.Room=U.Room; S+=4; W.Utility+=.05f; W.Compliance+=.03f; W.Suspicion+=.01f; }
-        W.Compliance=FMath::Clamp(W.Compliance,0.f,1.f); W.Affinity=FMath::Clamp(W.Affinity,-1.f,1.f);
-        W.Utility=FMath::Clamp(W.Utility,0.f,1.f); W.Suspicion=FMath::Clamp(W.Suspicion,0.f,1.f); S=FMath::Clamp(S,0.,100.);
-        P.SuspicionDelta+=W.Suspicion-U.Profile.Suspicion; P.StressDelta+=float(S-U.Stress);
-        P.ComplianceDelta+=W.Compliance-U.Profile.Compliance; P.AffinityDelta+=W.Affinity-U.Profile.Affinity; P.UtilityDelta+=W.Utility-U.Profile.Utility;
-    }
-    return P;
-}
+const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("vent"),TEXT("scut"),TEXT("flush"),TEXT("fx"),TEXT("view"),TEXT("scenario"),TEXT("follow")};
+
 }
 bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString& Input)
 {
@@ -68,8 +31,16 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
     for (const FString& Input:Commands)
     {
         const FString Line=Input.ToLower(); TArray<FString> T; Line.ParseIntoArrayWS(T); if (T.IsEmpty()) continue;
-        if (T[0]==TEXT("fx")) { if(T.Num()==2 && (T[1]==TEXT("clean") || T[1]==TEXT("crt"))) { bCleanDevRendering=T[1]==TEXT("clean"); LogEvent(bCleanDevRendering?TEXT("FX: CLEAN"):TEXT("FX: CRT")); } else LogEvent(TEXT("Syntax: fx clean|crt")); continue; }
+        if (T[0]==TEXT("fx")) { if(T.Num()==2 && (T[1]==TEXT("clean") || T[1]==TEXT("crt"))) { bCleanDevRendering=true; LogEvent(bCleanDevRendering?TEXT("FX: CLEAN"):TEXT("FX: CRT")); } else LogEvent(TEXT("Syntax: fx clean|crt")); continue; }
         if (T[0]==TEXT("view")) { if(T.Num()==2 && (T[1]==TEXT("3d") || T[1]==TEXT("crt"))) bWorkstationVisible=T[1]==TEXT("crt"); else LogEvent(TEXT("Syntax: view 3d|crt")); continue; }
+        if(T[0]==TEXT("scenario")) {if(T.Num()==2 && (T[1]==TEXT("behavioral") || T[1]==TEXT("medical"))) {ConfigureScenario(T[1]==TEXT("medical"));LogEvent(Simulation.Scenario.ScenarioId);}else LogEvent(TEXT("Syntax: scenario behavioral|medical"));continue;}
+        if(T[0]==TEXT("follow"))
+        {
+            int32 Crew=-2;
+            if(T.Num()==2) {if(T[1]==TEXT("off"))Crew=-1;else for(int32 I=0;I<4;++I)if(T[1]==CrewNames[I] || T[1]==CrewRoles[I])Crew=I;}
+            if(Crew==-2 || !SetFollowedCrew(Crew))LogEvent(TEXT("Syntax: follow vale|chen|ortiz|ash|off; target must be living and aboard."));
+            continue;
+        }
         if (Line==TEXT("menu back")) { MenuBack(); continue; }
         if (Line==TEXT("clear")) { Events.Reset(); ++EventRevision; continue; }
         LogEvent(TEXT("CMD> ")+Input);
@@ -94,18 +65,19 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString& Topic) const
 {
     if (Topic.IsEmpty() || Topic==TEXT("?")) return TEXT(
         "SYSTEM\nhelp / ? : command reference; help command : exact syntax\nclear : wipe scrollback\nstatus : hidden objective, shift clock and suspicion\ncrew : crew weights, room and condition\nrooms : pressure and sensor alerts\n\n"
-        "CAMERAS\ncam 1-8 : select compartment feed\n1-8 select; F / double tap / double click inspect; G / Tab / Esc grid\n\n"
-        "MENUS\nmenu ai : numbered Ship AI operations\nmenu events : scenario events and live stat-delta previews\nmenu doors : room bulkheads and confirmed SCUT\nmenu crew : live crew weights matrix\nmenu close : dismiss screen menu\nchoose 1-9 : execute a numbered screen choice\n\n"
+        "CAMERAS\ncam 1-8 : select compartment feed\nArrows / 1-8 select; Enter / F inspect; G / Tab / Esc grid\nfollow crew|off : track crew across compartments\n\n"
+        "MENUS\nscenario behavioral|medical : select beat deck\nmenu ai : numbered Ship AI operations\nmenu events : scenario events and live stat-delta previews\nmenu doors : room bulkheads and confirmed SCUT\nmenu crew : live crew weights matrix\nmenu close : dismiss screen menu\nchoose 1-9 : execute a numbered screen choice\n\n"
         "DIRECTIVES\ndirect : route a named specialist under a maintenance pretext\nalert : localized fault, leak or drill sensor pretext\ncalm : reassure all human crew\nprotocol : reassure a compartment\n\n"
         "CONTAINMENT\nopen / close / seal : compartment bulkheads or door 0-8\nseal all : seal every bulkhead and exterior hatch\nvent / scut airlock : explicit atmospheric purge\nflush : open a path from a compartment to vacuum\n\n"
-        "DEV VIEW\nfx clean|crt : rendering mode (F9)\nview 3d|crt : show scene or workstation (F10)\n\nCONSOLE\nBacktick opens/retracts; Shift+backtick toggles 42% / 90% height\nEnter / slash opens prompt; Esc retracts\nUp / Down history; Tab cycles verb, crew and room completions\nAll console commands and menu choices execute on the next 30 Hz tick.");
+        "DEV VIEW\nfx clean : neutral rendering (F9)\nview 3d|crt : show scene or workstation (F10)\n\nCONSOLE\nBacktick opens/retracts; Shift+backtick toggles 42% / 90% height\nEnter / F inspects; slash opens prompt; Esc retracts\nUp / Down history; Tab cycles verb, crew and room completions\nAll console commands and menu choices execute on the next 30 Hz tick.");
     FString Syntax;
     if (Topic==TEXT("help")) Syntax=TEXT("help | ? | help command\nExample: help direct");
     else if (Topic==TEXT("clear")) Syntax=TEXT("clear\nErase scrollback; command history is preserved.");
     else if (Topic==TEXT("status")) Syntax=TEXT("status\nShow scenario, objective, shift clock and collective suspicion.");
     else if (Topic==TEXT("crew")) Syntax=TEXT("crew\nShow Compliance, Composure, Affinity, Utility, Suspicion, Stress, Integrity and room.");
     else if (Topic==TEXT("rooms")) Syntax=TEXT("rooms\nShow all compartment pressure states and alert clocks.");
-    else if (Topic==TEXT("cam")) Syntax=TEXT("cam 1-8\n1 REACTOR_CORE, 2 BRIDGE, 3 MED_BAY, 4 ORE_CRUSHER, 5 SMELTER_FOUNDRY, 6 DOCKING_BAY, 7 AIRLOCK_CHAMBER, 8 RING_CORRIDOR");
+    else if(Topic==TEXT("follow")) Syntax=TEXT("follow vale|chen|ortiz|ash|off\nFollow living crew across compartments in grid or fullscreen. Tile and dossier badges activate tracking; STOP FOLLOW stops it.");
+    else if (Topic==TEXT("cam")) Syntax=TEXT("cam 1-8\n1 REACTOR_CORE, 2 BRIDGE, 3 MED_BAY, 4 OBSERVATION_DECK, 5 QUARTERS_MESS, 6 SERVER_ARCHIVE, 7 AIRLOCK_CHAMBER, 8 RING_CORRIDOR");
     else if (Topic==TEXT("menu")) Syntax=TEXT("menu ai | menu events | menu crew | menu close\nUse number keys or click a choice. Esc closes the overlay.");
     else if (Topic==TEXT("choose")) Syntax=TEXT("choose number\nUse a displayed choice from 1 through 9. Unavailable event choices do not execute.");
     else if (Topic==TEXT("direct")) Syntax=TEXT("direct crew room [pretext]\nExample: direct ash MED_BAY telemetry\nLow-compliance crew need a physical sensor trigger; rogue crew refuse.");
@@ -116,7 +88,7 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString& Topic) const
     else if (Topic==TEXT("vent") || Topic==TEXT("scut")) Syntax=Topic+TEXT(" airlock\nPurges AIRLOCK_CHAMBER; newly exposed, unbreached human witnesses gain Suspicion.");
     else if (Topic==TEXT("flush")) Syntax=TEXT("flush room\nExample: flush AIRLOCK_CHAMBER\nOpens a stable shortest door path to vacuum. Connected rooms can also vent.");
     else return TEXT("Unknown reference topic. Type help to list public commands.");
-    Syntax+=TEXT("\n\nCrew identifiers: vale / engineer; chen / medic; ortiz / technician; ash / android.\nRooms: REACTOR_CORE, BRIDGE, MED_BAY, ORE_CRUSHER, SMELTER_FOUNDRY, DOCKING_BAY, AIRLOCK_CHAMBER, RING_CORRIDOR. Alias: airlock.");
+    Syntax+=TEXT("\n\nCrew identifiers: vale / engineer; chen / medic; ortiz / technician; ash / android.\nRooms: REACTOR_CORE, BRIDGE, MED_BAY, OBSERVATION_DECK, QUARTERS_MESS, SERVER_ARCHIVE, AIRLOCK_CHAMBER, RING_CORRIDOR. Alias: airlock.");
     return Syntax;
 }
 TArray<FString> UDirectOrScutSimSubsystem::CompleteConsoleCommand(const FString& Input) const
@@ -132,7 +104,9 @@ TArray<FString> UDirectOrScutSimSubsystem::CompleteConsoleCommand(const FString&
     else
     {
         const FString Verb=Tokens[0].ToLower();
-        if (Verb==TEXT("fx") && Index==1) Candidates={TEXT("clean"),TEXT("crt")};
+        if(Verb==TEXT("follow") && Index==1) {for(int32 I=0;I<4;++I)Candidates.Add(CrewNames[I]);Candidates.Add(TEXT("off"));}
+        else if(Verb==TEXT("scenario") && Index==1)Candidates={TEXT("behavioral"),TEXT("medical")};
+        else if (Verb==TEXT("fx") && Index==1) Candidates={TEXT("clean"),TEXT("crt")};
         else if (Verb==TEXT("view") && Index==1) Candidates={TEXT("3d"),TEXT("crt")};
         else if (Verb==TEXT("menu") && Index==1) Candidates={TEXT("ai"),TEXT("events"),TEXT("crew"),TEXT("doors"),TEXT("close")};
         else if (Verb==TEXT("direct") && Index==1) { for(int32 I=0;I<4;++I) { Candidates.Add(CrewNames[I]);Candidates.Add(CrewRoles[I]); } }
@@ -192,22 +166,16 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
     case EShipAIScreenMenu::AlertKind:Add(TEXT("Thermal"));Add(TEXT("Telemetry"));Add(TEXT("Pressure"));break;
     case EShipAIScreenMenu::Protocol:Add(TEXT("All crew / calm"));for(int32 R:RoomOrder) Add(DirectOrScut::RoomName(R));break;
     case EShipAIScreenMenu::Containment:Add(TEXT("Open compartment bulkheads"));Add(TEXT("Seal compartment bulkheads"));Add(TEXT("Seal all"));Add(TEXT("Cycle airlock / SCUT"),TEXT("Purge AIRLOCK_CHAMBER; connected open rooms can vent."));Add(TEXT("Flush compartment"),TEXT("Opens a path to vacuum; affects connected rooms."));break;
-    case EShipAIScreenMenu::Crew:for(int32 I=0;I<4;++I) Add(TEXT("FOCUS CAM"),TEXT(""),Simulation.Bodies[I].bRegistered && Simulation.Bodies[I].State!=EDirectOrScutUnitState::Ejected);break;
+    case EShipAIScreenMenu::Crew:for(int32 I=0;I<4;++I) Add(TEXT("FOCUS CAM"),TEXT(""),CanFollowCrew(I));break;
     case EShipAIScreenMenu::Events:
     {
-        const TCHAR* Names[]={TEXT("Telemetry sensor drill / MED_BAY"),TEXT("Corporate reassurance protocol"),TEXT("Emergent roommate reconciliation"),TEXT("Crew systems rehearsal")};
-        for(int32 I=1;I<=4;++I)
+        bool Pending=false;
+        for(const auto& B:BeatDeck)if(B.bFired && !B.bResolved)
         {
-            const auto P=PlanEvent(Simulation,I);
-            FString Detail=FString::Printf(TEXT("Immediate totals: SUS %+.0f%% | STRESS %+.0f%% | COMP %+.0f%% | AFF %+.0f%% | UTIL %+.0f%%"),P.SuspicionDelta*100,P.StressDelta,P.ComplianceDelta*100,P.AffinityDelta*100,P.UtilityDelta*100);
-            FString Targets;
-            for(int32 J=0;J<4;++J) if(P.Affected&(1<<J)) {if(!Targets.IsEmpty())Targets+=TEXT(", ");Targets+=CrewNames[J];}
-            Detail+=Targets.IsEmpty()?TEXT("\nAffected crew: none at current telemetry."):TEXT("\nAffected crew: ")+Targets;
-            if(I==1) Detail+=FString::Printf(TEXT("\nMED_BAY alert: %.1fs; scheduled anomalies remaining: "),Simulation.Rooms[3].AlertSeconds);
-            if(I==1) { int32 Remaining=0;for(const auto& E:Simulation.Scenario.Events) Remaining+=E.Tick>=Simulation.TickIndex?1:0;Detail+=FString::FromInt(Remaining); }
-            if(I==3) Detail+=P.Room>=0?FString(TEXT("\nShared room: "))+DirectOrScut::RoomName(P.Room):TEXT("\nUnavailable: no living human roommates share a compartment.");
-            Add(Names[I-1],Detail,I==1 || P.Affected!=0);
+            for(const auto& Choice:B.Node.Choices)Add(B.Node.Subtitle+TEXT(" / ")+Choice.Label,FString::Printf(TEXT("STRESS %+.0f | SUS %+.0f%% | COMP %+.0f%% | AFF %+.0f%%"),Choice.Delta.Stress,Choice.Delta.Suspicion*100,Choice.Delta.Compliance*100,Choice.Delta.Affinity*100));
+            Pending=true;break;
         }
+        if(!Pending)for(const auto& O:DirectorOptions)Add(O.Label,FString::Printf(TEXT("%s | STRESS %+.0f | SUS %+.0f%% | COMP %+.0f%% | AFF %+.0f%% | UTIL %+.0f%%"),O.bSupport?TEXT("Autonomy / Support"):TEXT("Containment / Control"),O.Choice.Delta.Stress,O.Choice.Delta.Suspicion*100,O.Choice.Delta.Compliance*100,O.Choice.Delta.Affinity*100,O.Choice.Delta.Utility*100));
         break;
     }
     default:break;
@@ -249,17 +217,13 @@ void UDirectOrScutSimSubsystem::SelectScreenChoice(int32 N)
         if(N==1) ExecuteScreenDirective(FString(TEXT("direct ash "))+DirectOrScut::RoomName(MenuRoom)+TEXT(" shadow_crew"));
         else if(N==2) { for(auto& U:Simulation.Bodies) if(U.bRegistered && U.Room==MenuRoom && !U.bAndroid) U.Profile.Suspicion=FMath::Max(0.f,U.Profile.Suspicion-.05f); LogEvent(TEXT("Ash scrubbed room logs: up to -5% SUS for occupants"),MenuRoom);MenuParents.Reset();ActiveMenu=EShipAIScreenMenu::None;SetScreenMenu(EShipAIScreenMenu::AI); }
         else ExecuteScreenDirective(FString(TEXT("open "))+DirectOrScut::RoomName(MenuRoom));break;
-    case EShipAIScreenMenu::Crew: { const int32 R=Simulation.Bodies[N-1].Room;for(int32 I=0;I<8;++I)if(RoomOrder[I]==R)RequestedFeed=I+1;SetScreenMenu(EShipAIScreenMenu::None);break; }
+    case EShipAIScreenMenu::Crew: { SetFollowedCrew(N-1);const int32 R=Simulation.Bodies[N-1].Room;for(int32 I=0;I<8;++I)if(RoomOrder[I]==R)RequestedFeed=I+1;SetScreenMenu(EShipAIScreenMenu::None);break; }
     case EShipAIScreenMenu::Events:ExecuteScenarioEvent(N);break;
     default:break;
     }
 }
 void UDirectOrScutSimSubsystem::ExecuteScenarioEvent(int32 Choice)
 {
-    const auto P=PlanEvent(Simulation,Choice);
-    if(Choice!=1 && !P.Affected) {LogEvent(TEXT("No eligible crew interaction for that event."));return;}
-    if(Choice==1) Simulation.TriggerPretextAlert(3);
-    for(int32 I=0;I<4;++I) if(P.Affected&(1<<I)) {Simulation.Bodies[I].Profile=P.Profiles[I];Simulation.Bodies[I].Stress=P.Stress[I];}
-    LogEvent(FString::Printf(TEXT("Scenario event %d executed: Suspicion %+.3f Stress %+.1f Compliance %+.3f Affinity %+.3f Utility %+.3f. Ongoing simulation continues."),Choice,P.SuspicionDelta,P.StressDelta,P.ComplianceDelta,P.AffinityDelta,P.UtilityDelta),P.Room);
-    ++MenuRevision;
+    for(int32 I=0;I<BeatDeck.Num();++I)if(BeatDeck[I].bFired && !BeatDeck[I].bResolved) {ResolveBeat(I,Choice-1);return;}
+    ExecuteDirectorOption(Choice-1);++MenuRevision;
 }

@@ -11,8 +11,10 @@ class EMJ2026_API ACompartmentCameraRig : public AActor
     GENERATED_BODY()
 public:
     ACompartmentCameraRig();
+    virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
     virtual void Tick(float Delta) override;
+    void InitializeFeeds();
     void SetVisibleFeeds(int32 Primary,int32 Alert,bool Grid);
     static int32 RoomForFeed(int32 Feed);
     static int32 FeedForRoom(int32 Room);

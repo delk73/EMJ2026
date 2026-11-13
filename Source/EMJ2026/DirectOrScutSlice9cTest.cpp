@@ -70,13 +70,13 @@ public:
         case 13: Test->TestTrue(TEXT("SCUT opens vacuum route"),S->Simulation.Doors[8].bIsOpen);Key(EKeys::Five);break;
         case 14: Menu(EShipAIScreenMenu::AndroidRoom);Key(EKeys::One);break;
         case 15: Menu(EShipAIScreenMenu::AndroidTask);Click(1);break;
-        case 16: Test->TestEqual(TEXT("Shadow task routes Ash"),S->Simulation.Bodies[3].AssignedRoom,0);Key(EKeys::F9);Test->TestFalse(TEXT("F9 CRT"),S->bCleanDevRendering);Key(EKeys::F9);Key(EKeys::F10);break;
+        case 16: Test->TestEqual(TEXT("Shadow task routes Ash"),S->Simulation.Bodies[3].AssignedRoom,0);Key(EKeys::F9);Test->TestTrue(TEXT("F9 remains clean"),S->bCleanDevRendering);Key(EKeys::F9);Key(EKeys::F10);break;
         case 17: Test->TestFalse(TEXT("F10 scene"),S->bWorkstationVisible);Key(EKeys::F10);break;
         case 18: Test->TestTrue(TEXT("F10 workstation recovery"),S->bWorkstationVisible);Key(EKeys::Enter);Command(TEXT("menu events"));break;
         case 19: Menu(EShipAIScreenMenu::Events);Test->TestFalse(TEXT("Menu retracts drawer"),UI->bConsoleOpen);Test->TestTrue(TEXT("Delta previews"),S->ScreenMenuChoices().Num()>1 && S->ScreenMenuChoices()[1].Detail.Contains(TEXT("SUS")));Click(2);break;
         case 20: Key(EKeys::F3);break;
         case 21: Menu(EShipAIScreenMenu::Crew);Key(EKeys::Four);break;
-        case 22: Test->TestEqual(TEXT("Crew focus camera"),UI->ActiveFeed,ACompartmentCameraRig::FeedForRoom(S->Simulation.Bodies[3].Room));Test->TestFalse(TEXT("Crew focus expands"),UI->bGrid);Step(TEXT("fx crt"));Test->TestFalse(TEXT("fx command"),S->bCleanDevRendering);Step(TEXT("fx clean"));Step(TEXT("view 3d"));Test->TestFalse(TEXT("view command"),S->bWorkstationVisible);Step(TEXT("view crt"));Key(EKeys::G);break;
+        case 22: Test->TestEqual(TEXT("Crew focus camera"),UI->ActiveFeed,ACompartmentCameraRig::FeedForRoom(S->Simulation.Bodies[3].Room));Test->TestFalse(TEXT("Crew focus expands"),UI->bGrid);Step(TEXT("fx crt"));Test->TestTrue(TEXT("Legacy fx alias remains clean"),S->bCleanDevRendering);Step(TEXT("fx clean"));Step(TEXT("view 3d"));Test->TestFalse(TEXT("view command"),S->bWorkstationVisible);Step(TEXT("view crt"));Key(EKeys::G);break;
         case 23: Test->TestTrue(TEXT("G grid"),UI->bGrid);FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9cPIE.png"),true,false);break;
         case 26: Key(EKeys::F1);break;
         case 27: FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9cMenuPIE.png"),true,false);break;
@@ -103,9 +103,9 @@ public:
         case 56: Key(EKeys::Escape);Key(EKeys::F10);break;
         case 57: FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9cScenePIE.png"),true,false);break;
         case 60: Key(EKeys::F10);Key(EKeys::F9);break;
-        case 61: for(TActorIterator<ACompartmentCameraRig> It(W);It;++It) {Test->TestFalse(TEXT("Rig CRT mode"),It->bCleanDevRendering);for(int32 F=1;F<=8;++F)Test->TestEqual(TEXT("CRT shader enabled"),It->FeedMaterials[F]->K2_GetScalarParameterValue(TEXT("CleanDev")),0.f);}FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9cCrtPIE.png"),true,false);break;
+        case 61: for(TActorIterator<ACompartmentCameraRig> It(W);It;++It) {Test->TestTrue(TEXT("Rig remains clean"),It->bCleanDevRendering);for(int32 F=1;F<=8;++F)Test->TestNull(TEXT("No custom feed shader"),It->FeedMaterials[F].Get());}FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9cCrtPIE.png"),true,false);break;
         case 64: Key(EKeys::F9);break;
-        case 65: for(TActorIterator<ACompartmentCameraRig> It(W);It;++It)for(int32 F=1;F<=8;++F)Test->TestEqual(TEXT("Clean shader restored"),It->FeedMaterials[F]->K2_GetScalarParameterValue(TEXT("CleanDev")),1.f);return true;
+        case 65: for(TActorIterator<ACompartmentCameraRig> It(W);It;++It)for(int32 F=1;F<=8;++F)Test->TestNull(TEXT("Direct render target feed"),It->FeedMaterials[F].Get());return true;
         }
         S->AdvanceSteps(1);++Stage;return false;
     }

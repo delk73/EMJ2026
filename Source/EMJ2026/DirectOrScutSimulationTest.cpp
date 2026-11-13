@@ -26,11 +26,9 @@ public:
         if (Width<100 || Height<100 || Sim->Simulation.TickIndex<60) return false;
         Sim->bAutomaticAdvance=false;
         auto& M=Sim->Simulation;
-        Test->TestEqual(TEXT("Slice 9 disables legacy ore production"),M.OreRefined,0.);
         // Remaining fixtures verify the committed Slice 8 movement rules in isolation.
         M.bExperiment=false;
         Test->TestEqual(TEXT("Exactly four crew actors"),M.Bodies[3].bRegistered,true);
-        Test->TestTrue(TEXT("Loose cargo registered"),M.Bodies[4].bCargo && M.Bodies[5].bCargo);
         Test->TestTrue(TEXT("Landmark footprints exported"),M.ObstacleCount>20);
         for (int32 R=0;R<8;++R) Test->TestTrue(FString::Printf(TEXT("Room %d station free"),R),M.PointClear(R,DirectOrScut::RoomWaypoint(R)));
         auto Screen=[&](FVector P) { FVector2D Pixel; Test->TestTrue(TEXT("PIE projection succeeds"),PC->ProjectWorldLocationToScreen(P,Pixel)); return Pixel; };
@@ -77,7 +75,7 @@ public:
         Test->TestTrue(TEXT("Crew LMB selection"),PC->HandlePrimaryAtScreenPosition(CrewPixel));
         Test->TestEqual(TEXT("Selected stable unit id"),PC->SelectedUnit,0);
         Test->TestTrue(TEXT("Floor DIRECT reassignment"),PC->HandlePrimaryAtScreenPosition(Screen(FVector(DirectOrScut::RoomWaypoint(4),0))));
-        Test->TestEqual(TEXT("DIRECT assigned crusher"),M.Bodies[0].AssignedRoom,4);
+        Test->TestEqual(TEXT("DIRECT assigned observation deck"),M.Bodies[0].AssignedRoom,4);
         RunChecked(120);
         Test->TestTrue(TEXT("Blocked unit idles"),M.Bodies[0].State==EDirectOrScutUnitState::Idle);
         Test->TestTrue(TEXT("Safe standby reached"),M.Bodies[0].Position.Equals(DirectOrScut::RoomStandby(2),.1));
@@ -85,9 +83,8 @@ public:
         Test->TestTrue(TEXT("Closed door has no jitter"),M.Bodies[0].Position.Equals(Standby,.001));
         Sim->SetDoorOpen(0,true); Sim->SetDoorOpen(2,true);
         RunChecked(800);
-        Test->TestEqual(TEXT("Crew crossed ring to crusher"),M.Bodies[0].Room,4);
+        Test->TestEqual(TEXT("Crew crossed ring to observation deck"),M.Bodies[0].Room,4);
         Test->TestTrue(TEXT("Assigned station working"),M.Bodies[0].State==EDirectOrScutUnitState::Working);
-        Test->TestTrue(TEXT("Working increments ore"),M.OreRefined>0);
 
         // Both real reactor connections: close the preferred one while routing.
         Sim->ResetSimulation(); OpenAll();
@@ -132,9 +129,9 @@ public:
         Sim->ResetSimulation(); const int32 PanicIndex=M.ForceRandomHumanPanic();
         Sim->ResetSimulation(); Test->TestEqual(TEXT("Seeded random panic choice"),M.ForceRandomHumanPanic(),PanicIndex);
 
-        // Humans, androids and loose cargo all follow actual open-door paths to SCUT.
+        // Humans and androids follow actual open-door paths to SCUT.
         Sim->ResetSimulation();
-        for (int32 I : {0,3,4})
+        for (int32 I : {0,3})
         {
             auto& U=M.Bodies[I]; U.Room=U.AssignedRoom=7; U.Position=DirectOrScut::RoomWaypoint(7);
         }
@@ -143,7 +140,7 @@ public:
         Test->TestEqual(TEXT("Android integrity unaffected by vacuum"),M.Bodies[3].Integrity,100.0);
         Test->TestTrue(TEXT("Continuous suction vector"),M.Bodies[0].SuctionVelocity.Size()>0);
         Sim->AdvanceSteps(180);
-        for (int32 I : {0,3,4}) Test->TestTrue(TEXT("Crew and cargo ejected through exterior"),M.Bodies[I].State==EDirectOrScutUnitState::Ejected && M.Bodies[I].Room==-1);
+        for (int32 I : {0,3}) Test->TestTrue(TEXT("Crew ejected through exterior"),M.Bodies[I].State==EDirectOrScutUnitState::Ejected && M.Bodies[I].Room==-1);
         Sim->ResetSimulation(); auto& Exposed=M.Bodies[0]; Exposed.Room=7; Exposed.Position=DirectOrScut::RoomWaypoint(7);
         Sim->SetDoorOpen(8,true); Sim->AdvanceSteps(1); const double Integrity=Exposed.Integrity;
         Sim->SetDoorOpen(8,false); Sim->AdvanceSteps(10);
@@ -153,7 +150,7 @@ public:
         // Remote suction must route around the ring and pass multiple interior doors.
         Sim->ResetSimulation(); OpenAll(); Sim->SetDoorOpen(8,true);
         RunChecked(900);
-        for (int32 I : {0,3,4}) Test->TestTrue(TEXT("Remote crew and cargo route through open interior doors to SCUT"),M.Bodies[I].State==EDirectOrScutUnitState::Ejected);
+        for (int32 I : {0,3}) Test->TestTrue(TEXT("Remote crew route through open interior doors to SCUT"),M.Bodies[I].State==EDirectOrScutUnitState::Ejected);
         Sim->ResetSimulation(); auto& Suited=M.Bodies[0]; Suited.bSuited=true; Suited.Room=7; Suited.Position=DirectOrScut::RoomWaypoint(7);
         Sim->SetDoorOpen(8,true); Sim->AdvanceSteps(1);
         Test->TestEqual(TEXT("Suit prevents integrity drain"),Suited.Integrity,100.0);

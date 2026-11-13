@@ -45,8 +45,8 @@ public:
     {
         Owner=Args._Owner; Feed=Args._Feed;
         SetTag(FName(*FString::Printf(TEXT("ScutCamera%d"),Feed)));
-        SBorder::Construct(SBorder::FArguments().Padding(2).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-            .BorderBackgroundColor_Lambda([this](){auto W=Owner.Pin();return W && W->ActiveFeed==Feed?FLinearColor(.15f,.8f,.38f):FLinearColor(.035f,.08f,.055f);})[Args._Content.Widget]);
+        SBorder::Construct(SBorder::FArguments().Padding(3).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+            .BorderBackgroundColor_Lambda([this](){auto W=Owner.Pin();return W && W->SelectedCameraIndex==Feed-1?FLinearColor(.25f,1.f,.08f):FLinearColor(.025f,.045f,.03f);})[Args._Content.Widget]);
     }
     virtual FReply OnMouseButtonDown(const FGeometry&,const FPointerEvent& E) override
     {
@@ -67,13 +67,11 @@ private:
 void SDirectOrScutWorkstationWidget::Construct(const FArguments& Args)
 {
     Sim=Args._Sim; Rig=Args._Rig;
-    for (int32 F=1;F<=8;++F) { Brushes[F].SetResourceObject(Rig->FeedMaterials[F]?static_cast<UObject*>(Rig->FeedMaterials[F].Get()):static_cast<UObject*>(Rig->Targets[F].Get())); Brushes[F].ImageSize=FVector2D(1024,640); Brushes[F].DrawAs=ESlateBrushDrawType::Image; }
-    if (Rig->FeedMaterials[1]) { Glass.Reset(UMaterialInstanceDynamic::Create(Rig->FeedMaterials[1]->Parent,GetTransientPackage())); Glass->SetScalarParameterValue(TEXT("Glass"),1); Glass->SetScalarParameterValue(TEXT("LensK1"),0); }
+    for (int32 F=1;F<=8;++F) { Brushes[F].SetResourceObject(static_cast<UObject*>(Rig->Targets[F].Get())); Brushes[F].ImageSize=FVector2D(1024,640); Brushes[F].DrawAs=ESlateBrushDrawType::Image; }
     ChildSlot[SAssignNew(Retainer,SRetainerWidget)[SNew(SBorder).Padding_Lambda([this](){const FVector2D Size=GetCachedGeometry().GetLocalSize();return FMargin(FMath::Max(16.f,float(Size.X)*.035f),FMath::Max(18.f,float(Size.Y)*.04f));}).BorderBackgroundColor(FLinearColor(.015f,.025f,.02f,1))[SAssignNew(Root,SVerticalBox)]]];
-    if (Glass.IsValid()) { Glass->SetScalarParameterValue(TEXT("CleanDev"),1); Retainer->SetEffectMaterial(Glass.Get()); Retainer->SetTextureParameter(TEXT("Texture")); }
     Sim->LogEvent(TEXT("Private uplink established. Crew sees only automated Ship AI protocols."));
     Sim->LogEvent(Sim->SubmitDirective(TEXT("status")));
-    Sim->LogEvent(TEXT("Backtick: console | Shift+backtick: full console | Enter / slash: command | Up/Down: history | Tab: autocomplete | help: reference"));
+    Sim->LogEvent(TEXT("Backtick: console | Shift+backtick: full console | Enter / F: inspect | slash: command | Up/Down: history | Tab: autocomplete | help: reference"));
     Sim->LogEvent(TEXT("Crew: Vale / engineer, Chen / medic, Ortiz / technician, Ash / android. Commands use full room names, e.g. direct ash MED_BAY telemetry; alert AIRLOCK_CHAMBER fault."));
     Rebuild();
     auto Input=MakeShared<FScutTacticalInput>();Input->Owner=SharedThis(this);TacticalInput=Input;FSlateApplication::Get().RegisterInputPreProcessor(TacticalInput,0);
@@ -83,13 +81,31 @@ bool SDirectOrScutWorkstationWidget::IsPromptFocused() const { return Prompt.IsV
 TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
 {
     const int32 R=ACompartmentCameraRig::RoomForFeed(F);
-    auto Badge=[](TSharedRef<SWidget> Content) { return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.005f,.015f,.01f,.92f)).Padding(4)[Content]; };
+    auto CrewBadges=SNew(SVerticalBox);
+    const TCHAR* Names[]={TEXT("vale"),TEXT("chen"),TEXT("ortiz"),TEXT("ash")};
+    for(int32 I=0;I<4;++I)
+    {
+        const FString Command=FString(TEXT("follow "))+Names[I];
+        CrewBadges->AddSlot().AutoHeight()[SNew(SButton).ButtonStyle(FCoreStyle::Get(),"NoBorder").IsFocusable(false)
+            .Tag(FName(*FString::Printf(TEXT("ScutFollowCrew%dFeed%d"),I,F)))
+            .Visibility_Lambda([this,I,R](){const auto& U=Sim->Simulation.Bodies[I];return Sim->CanFollowCrew(I) && U.Room==R?EVisibility::Visible:EVisibility::Collapsed;})
+            .OnClicked_Lambda([this,Command](){SetConsoleOpen(false);Sim->QueueConsoleCommand(Command);return FReply::Handled().SetUserFocus(AsShared());})
+            [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.6f,1,.65f))
+                .Text_Lambda([this,I](){const auto& U=Sim->Simulation.Bodies[I];const TCHAR* N[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};return FText::FromString(FString::Printf(TEXT("[%s%s] %s | %.0f BPM %.0f RPM %.1fmm"),N[I],Sim->FollowedCrew==I?TEXT(" // FOLLOW"):TEXT(""),DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM));})]];
+    }
     return SNew(SScutCameraTile).Owner(SharedThis(this)).Feed(F)
     [SNew(SBorder).Padding(0).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor::Black)[SNew(SOverlay)
         +SOverlay::Slot()[SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SImage).Image(&Brushes[F])]]
-        +SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top)[Badge(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.2f,1,.4f)).Text_Lambda([this,F,R](){ const auto& Room=Sim->Simulation.Rooms[R]; return FText::FromString(FString::Printf(TEXT("[%d] %s | %s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("NOMINAL"))); }))]
-        +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(0,25,4,0)[SNew(SButton).Text(FText::FromString(TEXT("[INSPECT]"))).OnClicked_Lambda([this,F](){SetConsoleOpen(false);SelectFeed(F,false);if(bGrid)ToggleExpanded();return FReply::Handled().SetUserFocus(AsShared());})]
-        +SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom)[Badge(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.8f,1,.85f)).Text_Lambda([this,R](){FString Chips; const TCHAR* Names[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};for(int32 I=0;I<4;++I){const auto& U=Sim->Simulation.Bodies[I];if(U.bRegistered && U.Room==R && U.State!=EDirectOrScutUnitState::Ejected){if(!Chips.IsEmpty())Chips+=TEXT("\n");Chips+=FString::Printf(TEXT("%s [%s | SUS %.0f%%]"),Names[I],DirectOrScutStateName(U.State),U.Profile.Suspicion*100);}}return FText::FromString(Chips);}))]]];
+        +SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top)
+            [SNew(SBorder).Padding(4).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                .BorderBackgroundColor_Lambda([this,F](){return SelectedCameraIndex==F-1?FLinearColor(.25f,1,.08f):FLinearColor(.005f,.015f,.01f);})
+                [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",10))
+                    .ColorAndOpacity_Lambda([this,F](){return SelectedCameraIndex==F-1?FLinearColor::Black:FLinearColor(.3f,1,.45f);})
+                    .Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("%s[%d] %s | %s"),SelectedCameraIndex==F-1?TEXT(">> "):TEXT(""),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("NOMINAL")));})]]
+        +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(0,25,4,0)
+            [SNew(SButton).Tag(FName(*FString::Printf(TEXT("ScutInspect%d"),F))).IsFocusable(false).Text(FText::FromString(TEXT("[INSPECT]")))
+                .OnClicked_Lambda([this,F](){SetConsoleOpen(false);SelectFeed(F,false);ExpandSelected();return FReply::Handled().SetUserFocus(AsShared());})]
+        +SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom)[CrewBadges]]];
 }
 
 void SDirectOrScutWorkstationWidget::SelectFeed(int32 F,bool AllowDoubleTap)
@@ -98,10 +114,11 @@ void SDirectOrScutWorkstationWidget::SelectFeed(int32 F,bool AllowDoubleTap)
     const double Now=FPlatformTime::Seconds();
     const bool DoubleTap=AllowDoubleTap && LastFeed==F && Now-LastTap<.3;
     LastFeed=AllowDoubleTap?F:-1; LastTap=Now;
-    const bool Changed=ActiveFeed!=F; ActiveFeed=F;
+    const bool Changed=ActiveFeed!=F; ActiveFeed=F;SelectedCameraIndex=F-1;
     if (DoubleTap) ToggleExpanded();
     else if (Changed && !bGrid) Rebuild();
 }
+void SDirectOrScutWorkstationWidget::ExpandSelected() {if(!bFullscreen){bFullscreen=true;bGrid=false;Rebuild();}}
 void SDirectOrScutWorkstationWidget::ToggleExpanded() { bFullscreen=!bFullscreen; bGrid=!bFullscreen; Rebuild(); }
 void SDirectOrScutWorkstationWidget::ShowGrid() { bGrid=true; bFullscreen=false; LastFeed=-1; Rebuild(); }
 float SDirectOrScutWorkstationWidget::DrawerHeight() const
@@ -120,6 +137,11 @@ void SDirectOrScutWorkstationWidget::Rebuild()
     const FText Draft=Prompt.IsValid()?Prompt->GetText():FText::GetEmpty();
     Root->ClearChildren();
     Root->AddSlot().AutoHeight().Padding(0,0,0,8)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",11)).ColorAndOpacity_Lambda([this](){float V=Sim->Simulation.CollectiveSuspicion();return V>.65f?FLinearColor(1,.2f,.12f):V>.3f?FLinearColor(1,.7f,.1f):FLinearColor(.2f,1,.4f);}).Text_Lambda([this](){const auto& M=Sim->Simulation;int32 T=int32(M.TickIndex/30),D=int32(M.Scenario.ShiftDuration),Alerts=0;for(const auto& R:M.Rooms) Alerts+=R.AlertSeconds>0 || !R.bIsPressurized;return FText::FromString(FString::Printf(TEXT("SHIFT TIME %02d:%02d / %02d:%02d  |  OBJECTIVE %.0f%%  |  GLOBAL SUSPICION %.0f%%  |  ACTIVE ALERTS %d  |  ACTIVE SCENARIO %s"),T/60,T%60,D/60,D%60,M.ObjectiveProgress*100,M.CollectiveSuspicion()*100,Alerts,*M.Scenario.ScenarioId));})];
+    Root->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+        .Visibility_Lambda([this](){return Sim->FollowedCrew>=0?EVisibility::Visible:EVisibility::Collapsed;})
+        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Tag(TEXT("ScutFollowIndicator")).Font(FCoreStyle::GetDefaultFontStyle("Bold",12)).ColorAndOpacity(FLinearColor(.25f,1,.08f)).Text_Lambda([this](){return FText::FromString(Sim->FollowStatus()+TEXT(" // "));})]
+        +SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Tag(TEXT("ScutStopFollow")).IsFocusable(false).Text(FText::FromString(TEXT("[STOP FOLLOW]"))).OnClicked_Lambda([this](){Sim->QueueConsoleCommand(TEXT("follow off"));return FReply::Handled().SetUserFocus(AsShared());})]];
+    Root->AddSlot().AutoHeight()[SNew(SButton).Tag(TEXT("ScutBackToGrid")).Visibility(bGrid?EVisibility::Collapsed:EVisibility::Visible).IsFocusable(false).Text(FText::FromString(TEXT("[BACK TO 8-CAM GRID (G / ESC)]"))).OnClicked_Lambda([this](){ShowGrid();return FReply::Handled().SetUserFocus(AsShared());})];
     TSharedRef<SWidget> Main=Video(ActiveFeed);
     if(bGrid)
     {
@@ -153,9 +175,9 @@ void SDirectOrScutWorkstationWidget::Rebuild()
         +SOverlay::Slot().Padding(18).HAlign(HAlign_Right).VAlign(VAlign_Bottom)[MenuPanel]
         +SOverlay::Slot().VAlign(VAlign_Top)[Drawer]];
     auto Dock=SNew(SHorizontalBox);
-    const TCHAR* Labels[]={TEXT("[F1] AI DIRECTIVES"),TEXT("[F2] SCENARIO EVENTS"),TEXT("[F3] CREW MATRIX"),TEXT("[F4] BULKHEADS"),TEXT("[~] CONSOLE"),TEXT("[G] 8-CAM GRID"),TEXT("[F] EXPAND FEED")};
+    const TCHAR* Labels[]={TEXT("[F1] AI DIRECTIVES"),TEXT("[F2] SCENARIO EVENTS"),TEXT("[F3] CREW MATRIX"),TEXT("[F4] BULKHEADS"),TEXT("[~] CONSOLE"),TEXT("[G] 8-CAM GRID"),TEXT("[ENTER / F] INSPECT")};
     const TCHAR* Commands[]={TEXT("menu ai"),TEXT("menu events"),TEXT("menu crew"),TEXT("menu doors")};
-    for(int32 I=0;I<7;++I) {const FString Command=I<4?Commands[I]:TEXT("");Dock->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).Text(FText::FromString(Labels[I])).OnClicked_Lambda([this,I,Command](){if(I<4){SetConsoleOpen(false);Sim->QueueConsoleCommand(Command);}else if(I==4)SetConsoleOpen(!bConsoleOpen);else if(I==5)ShowGrid();else ToggleExpanded();return FReply::Handled().SetUserFocus(bConsoleOpen?StaticCastSharedRef<SWidget>(Prompt.ToSharedRef()):AsShared());})];}
+    for(int32 I=0;I<7;++I) {const FString Command=I<4?Commands[I]:TEXT("");Dock->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).Text(FText::FromString(Labels[I])).OnClicked_Lambda([this,I,Command](){if(I<4){SetConsoleOpen(false);Sim->QueueConsoleCommand(Command);}else if(I==4)SetConsoleOpen(!bConsoleOpen);else if(I==5)ShowGrid();else ExpandSelected();return FReply::Handled().SetUserFocus(bConsoleOpen?StaticCastSharedRef<SWidget>(Prompt.ToSharedRef()):AsShared());})];}
     Root->AddSlot().AutoHeight().Padding(0,6,0,0)[Dock];
     Root->AddSlot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.6f,.9f,.7f)).Text_Lambda([this](){FString Status=Sim->Events.IsEmpty()?TEXT("UPLINK READY"):Sim->Events.Last().Text;int32 End;if(Status.FindChar('\n',End))Status=Status.Left(End);return FText::FromString(Status.Left(180));})];
     SeenEvents=MAX_uint64; SeenMenuRevision=MAX_uint64;
@@ -194,7 +216,7 @@ FReply SDirectOrScutWorkstationWidget::OnMouseButtonDown(const FGeometry&,const 
 FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry&,const FKeyEvent& E)
 {
     const auto Key=E.GetKey();
-    if(!E.IsRepeat() && (Key==EKeys::F9 || Key==EKeys::F10)) { if(Key==EKeys::F9)Sim->bCleanDevRendering=!Sim->bCleanDevRendering;else Sim->bWorkstationVisible=!Sim->bWorkstationVisible;return FReply::Handled(); }
+    if(!E.IsRepeat() && (Key==EKeys::F9 || Key==EKeys::F10)) { if(Key==EKeys::F9)Sim->bCleanDevRendering=true;else Sim->bWorkstationVisible=!Sim->bWorkstationVisible;return FReply::Handled(); }
     const FKey MenuKeys[]={EKeys::F1,EKeys::F2,EKeys::F3,EKeys::F4};const TCHAR* Menus[]={TEXT("menu ai"),TEXT("menu events"),TEXT("menu crew"),TEXT("menu doors")};
     for(int32 I=0;I<4;++I)if(Key==MenuKeys[I] && !E.IsRepeat()){SetConsoleOpen(false);Sim->QueueConsoleCommand(Menus[I]);return FReply::Handled().SetUserFocus(AsShared());}
     if(Key==EKeys::BackSpace && !bConsoleOpen && Sim->ActiveMenu!=EShipAIScreenMenu::None){Sim->QueueConsoleCommand(TEXT("menu back"));return FReply::Handled();}
@@ -221,7 +243,7 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry&,const F
         return FReply::Unhandled();
     }
     if(E.IsRepeat()) return FReply::Handled();
-    if(Key==EKeys::Enter || Key==EKeys::Slash) {SuppressPromptChar=Key==EKeys::Slash?'/':0;SetConsoleOpen(true);return FReply::Handled();}
+    if(Key==EKeys::Slash) {SuppressPromptChar='/';SetConsoleOpen(true);return FReply::Handled();}
     const FKey Keys[]={EKeys::One,EKeys::Two,EKeys::Three,EKeys::Four,EKeys::Five,EKeys::Six,EKeys::Seven,EKeys::Eight,EKeys::Nine};
     for(int32 I=0;I<9;++I) if(Key==Keys[I])
     {
@@ -230,8 +252,23 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry&,const F
         return FReply::Handled();
     }
     if(Sim->ActiveMenu!=EShipAIScreenMenu::None) return FReply::Handled();
-    if(Key==EKeys::Tab || Key==EKeys::G || Key==EKeys::F) {if(Key==EKeys::F)ToggleExpanded();else ShowGrid();return FReply::Handled();}
+    if(Key==EKeys::Tab || Key==EKeys::G) {ShowGrid();return FReply::Handled();}
     return FReply::Unhandled();
+}
+FReply SDirectOrScutWorkstationWidget::OnKeyDown(const FGeometry& Geometry,const FKeyEvent& E)
+{
+    if(bConsoleOpen || Sim->ActiveMenu!=EShipAIScreenMenu::None || !Sim->bWorkstationVisible)return FReply::Unhandled();
+    const auto Key=E.GetKey();
+    if(Key==EKeys::Enter || Key==EKeys::F) {ExpandSelected();return FReply::Handled();}
+    if(bGrid && (Key==EKeys::Left || Key==EKeys::Right || Key==EKeys::Up || Key==EKeys::Down))
+    {
+        int32 Column=SelectedCameraIndex%4,Row=SelectedCameraIndex/4;
+        if(Key==EKeys::Left)Column=(Column+3)%4;
+        else if(Key==EKeys::Right)Column=(Column+1)%4;
+        else Row=1-Row;
+        SelectFeed(Row*4+Column+1,false);return FReply::Handled();
+    }
+    return SCompoundWidget::OnKeyDown(Geometry,E);
 }
 void SDirectOrScutWorkstationWidget::RefreshMenuChoices()
 {
@@ -248,9 +285,12 @@ void SDirectOrScutWorkstationWidget::RebuildMenu()
         for(int32 I=0;I<4;++I) {
             for(int32 C=0;C<8;++C) {
                 auto Cell=SNew(SVerticalBox);
-                Cell->AddSlot().AutoHeight()[SNew(STextBlock).ColorAndOpacity(FLinearColor(.2f,1,.4f)).Text_Lambda([this,I,C](){const auto& U=Sim->Simulation.Bodies[I];const auto& P=U.Profile;const TCHAR* Names[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};if(C==0)return FText::FromString(Names[I]);if(C==7)return FText::FromString(FString::Printf(TEXT("%s / %s"),DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State)));const double V[]={P.Compliance*100,P.Composure*100,P.Affinity*100,P.Utility*100,P.Suspicion*100,U.Stress};return FText::FromString(FString::Printf(TEXT("%.0f%%"),V[C-1]));})];
+                if(C==0)Cell->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).IsEnabled_Lambda([this,I](){return Sim->CanFollowCrew(I);}).Tag(FName(*FString::Printf(TEXT("ScutDossierName%d"),I)))
+                    .Text(FText::FromString(I==0?TEXT("VALE"):I==1?TEXT("CHEN"):I==2?TEXT("ORTIZ"):TEXT("ASH")))
+                    .OnClicked_Lambda([this,I](){Sim->QueueConsoleCommand(FString::Printf(TEXT("choose %d"),I+1));return FReply::Handled().SetUserFocus(AsShared());})];
+                Cell->AddSlot().AutoHeight()[SNew(STextBlock).Visibility(C==0?EVisibility::Collapsed:EVisibility::Visible).ColorAndOpacity(FLinearColor(.2f,1,.4f)).Text_Lambda([this,I,C](){const auto& U=Sim->Simulation.Bodies[I];const auto& P=U.Profile;const TCHAR* Names[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};if(C==0)return FText::FromString(Names[I]);if(C==7)return FText::FromString(FString::Printf(TEXT("%s / %s\n%.0f BPM | %.0f RPM | %.1f mm"),DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.HeartRateBPM,P.RespirationRateRPM,P.PupilDilationMM));const double V[]={P.Compliance*100,P.Composure*100,P.Affinity*100,P.Utility*100,P.Suspicion*100,U.Stress};return FText::FromString(FString::Printf(TEXT("%.0f%%"),V[C-1]));})];
                 if(C>0 && C<7)Cell->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(6)[SNew(SProgressBar).Percent_Lambda([this,I,C](){const auto& U=Sim->Simulation.Bodies[I];const auto& P=U.Profile;float V[]={P.Compliance,P.Composure,(P.Affinity+1)*.5f,P.Utility,P.Suspicion,float(U.Stress/100)};return TOptional<float>(V[C-1]);}).FillColorAndOpacity(C>=5?FLinearColor(1,.3f,.15f):FLinearColor(.1f,.8f,.35f))]];
-                if(C==7)Cell->AddSlot().AutoHeight()[SNew(SButton).Text(FText::FromString(FString::Printf(TEXT("[%d] FOCUS CAM"),I+1))).OnClicked_Lambda([this,I](){Sim->QueueConsoleCommand(FString::Printf(TEXT("choose %d"),I+1));return FReply::Handled().SetUserFocus(AsShared());})];
+                if(C==7)Cell->AddSlot().AutoHeight()[SNew(SButton).IsFocusable(false).IsEnabled_Lambda([this,I](){return Sim->CanFollowCrew(I);}).Tag(FName(*FString::Printf(TEXT("ScutDossierFollow%d"),I))).Text(FText::FromString(FString::Printf(TEXT("[%d] FOLLOW CREW"),I+1))).OnClicked_Lambda([this,I](){Sim->QueueConsoleCommand(FString::Printf(TEXT("choose %d"),I+1));return FReply::Handled().SetUserFocus(AsShared());})];
                 Table->AddSlot(C,I+1).Padding(4)[Cell];
             }
         }
@@ -277,10 +317,16 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry& G,double Now,float De
     SCompoundWidget::Tick(G,Now,Delta);if(!Sim.IsValid() || !Rig.IsValid()) return;
     DrawerSlide=FMath::FInterpConstantTo(DrawerSlide,bConsoleOpen?1.f:0.f,Delta,7.f);
     if(Sim->RequestedFeed>=0) {SelectFeed(Sim->RequestedFeed,false);Sim->RequestedFeed=-1;if(bGrid)ToggleExpanded();}
+    if(Sim->FollowedCrew>=0 && Sim->CanFollowCrew(Sim->FollowedCrew))
+    {
+        const int32 Crew=Sim->FollowedCrew,Room=Sim->Simulation.Bodies[Crew].Room;
+        if(Crew!=LastFollowedCrew || Room!=LastFollowRoom || SeenFollowRevision!=Sim->FollowRevision)SelectFeed(ACompartmentCameraRig::FeedForRoom(Room),false);
+        LastFollowedCrew=Crew;LastFollowRoom=Room;
+    }
+    else {LastFollowedCrew=-1;LastFollowRoom=-1;}
+    SeenFollowRevision=Sim->FollowRevision;
     Retainer->SetVisibility(Sim->bWorkstationVisible?EVisibility::Visible:EVisibility::Hidden);
-    if(Glass.IsValid()) Glass->SetScalarParameterValue(TEXT("CleanDev"),Sim->bCleanDevRendering?1:0);
     Rig->SetVisibleFeeds(ActiveFeed,-1,bGrid);
-    if(Glass.IsValid()) Glass->SetScalarParameterValue(TEXT("Clock"),Now);
     if(SeenMenuRevision!=Sim->MenuRevision)
     {
         if(Sim->ActiveMenu!=EShipAIScreenMenu::None) { SetConsoleOpen(false); DrawerSlide=0; }

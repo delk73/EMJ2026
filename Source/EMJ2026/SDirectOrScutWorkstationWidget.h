@@ -18,9 +18,12 @@ public:
     TSharedPtr<class IInputProcessor> TacticalInput;
     virtual bool SupportsKeyboardFocus() const override { return true; }
     virtual FReply OnPreviewKeyDown(const FGeometry&,const FKeyEvent&) override;
+    virtual FReply OnKeyDown(const FGeometry&,const FKeyEvent&) override;
     virtual FReply OnMouseButtonDown(const FGeometry&,const FPointerEvent&) override;
     virtual void Tick(const FGeometry&,double,float) override;
     int32 ActiveFeed=1;
+    int32 SelectedCameraIndex=0;
+    void ExpandSelected();
     bool bGrid=true,bFullscreen=false;
     void SelectFeed(int32 Feed,bool AllowDoubleTap=true);
     void ToggleExpanded();
@@ -37,9 +40,10 @@ private:
     TSharedPtr<SOverlay> Body;
     TSharedPtr<SRetainerWidget> Retainer;
     TSharedPtr<SScrollBox> LogScroll;
-    TStrongObjectPtr<UMaterialInstanceDynamic> Glass;
     FSlateBrush Brushes[9];
     int32 LastFeed=-1;
+    int32 LastFollowedCrew=-1, LastFollowRoom=-1;
+    uint64 SeenFollowRevision=MAX_uint64;
     uint64 SeenEvents=MAX_uint64;
     double LastTap=-1;
     TCHAR SuppressPromptChar=0;

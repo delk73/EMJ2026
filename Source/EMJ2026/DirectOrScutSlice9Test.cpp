@@ -42,7 +42,7 @@ public:
         Test->TestEqual(TEXT("Android suspicion immune"),M.Bodies[3].Profile.Suspicion,0.f);
         S->ResetSimulation(); M.Bodies[0].Room=7; M.Bodies[0].Position=FVector2D(0,-1700); S->AdvanceSteps(90); Test->TestTrue(TEXT("Hidden isolation objective advances"),M.ObjectiveProgress>0);
         const auto Snapshot=S->MakeContextSnapshot(); Test->TestTrue(TEXT("Prompt snapshot includes psychology and objective"),Snapshot.CompactJson.Contains(TEXT("composure")) && Snapshot.CompactJson.Contains(TEXT("objective")));
-        S->ResetSimulation(); auto A=MakeUnique<FDirectOrScutSimulation>(M),B=MakeUnique<FDirectOrScutSimulation>(M); for (int32 I=0;I<300;++I) A->Advance(1./30); for (int32 I=0;I<600;++I) B->Advance(1./60); Test->TestEqual(TEXT("30/60Hz frame partition replay with psychology"),A->StateHash(),B->StateHash()); Test->TestEqual(TEXT("No ore economy in experiment"),A->OreRefined,0.);
+        S->ResetSimulation(); auto A=MakeUnique<FDirectOrScutSimulation>(M),B=MakeUnique<FDirectOrScutSimulation>(M); for (int32 I=0;I<300;++I) A->Advance(1./30); for (int32 I=0;I<600;++I) B->Advance(1./60); Test->TestEqual(TEXT("30/60Hz frame partition replay with psychology"),A->StateHash(),B->StateHash());
         S->ResetSimulation();
         M.Bodies[0].Room=2; M.Bodies[1].Room=2; M.Bodies[0].Profile.Suspicion=.9f; M.Bodies[0].Profile.Affinity=1;
         const float CoworkerBefore=M.Bodies[1].Profile.Suspicion; S->AdvanceSteps(30);

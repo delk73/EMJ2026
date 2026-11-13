@@ -11,8 +11,8 @@ namespace DirectOrScut
 const TArray<FStation>& Stations()
 {
     static const TArray<FStation> Table = {
-        {TEXT("BRIDGE"),0,1}, {TEXT("MED_BAY"),1,6}, {TEXT("ORE_CRUSHER"),2,3},
-        {TEXT("SMELTER_FOUNDRY"),4,3}, {TEXT("DOCKING_BAY"),5,3}, {TEXT("AIRLOCK_CHAMBER"),6,4}};
+        {TEXT("BRIDGE"),0,1}, {TEXT("MED_BAY"),1,6}, {TEXT("OBSERVATION_DECK"),2,3},
+        {TEXT("QUARTERS_MESS"),4,3}, {TEXT("SERVER_ARCHIVE"),5,3}, {TEXT("AIRLOCK_CHAMBER"),6,4}};
     return Table;
 }
 FVector Radial(float Degrees, float Radius)

@@ -1,6 +1,6 @@
 #include "DirectOrScutGameMode.h"
 #include "DirectOrScutSimSubsystem.h"
-#include "DirectOrScutCargoMarker.h"
+#include "GameFramework/SpectatorPawn.h"
 #include "DirectOrScutHUD.h"
 #include "Framework/Application/SlateApplication.h"
 #include "SDirectOrScutWorkstationWidget.h"
@@ -31,8 +31,24 @@ void ADirectOrScutPlayerController::SetupInputComponent()
     InputComponent->BindKey(EKeys::F9,IE_Pressed,this,&ADirectOrScutPlayerController::ToggleDevFX);
     InputComponent->BindKey(EKeys::F10,IE_Pressed,this,&ADirectOrScutPlayerController::ToggleDevView);
 }
-void ADirectOrScutPlayerController::ToggleDevFX() { auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();S->bCleanDevRendering=!S->bCleanDevRendering; }
+void ADirectOrScutPlayerController::ToggleDevFX() { auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();S->bCleanDevRendering=true; }
 void ADirectOrScutPlayerController::ToggleDevView() { auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();S->bWorkstationVisible=!S->bWorkstationVisible;if(S->bWorkstationVisible)FocusWorkstation(); }
+void ADirectOrScutPlayerController::PlayerTick(float D)
+{
+    Super::PlayerTick(D);
+    auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
+    if(!S || S->bWorkstationVisible==bWasWorkstationVisible)return;
+    bWasWorkstationVisible=S->bWorkstationVisible;
+    if(bWasWorkstationVisible) {FocusWorkstation();return;}
+    if(!GetPawn()) {auto* P=GetWorld()->SpawnActor<ASpectatorPawn>();Possess(P);}
+    if(APawn* P=GetPawn())
+    {
+        const int32 Room=S->RequestedFeed>0?S->RequestedFeed==8?1:S->RequestedFeed==1?0:S->RequestedFeed:0;
+        P->SetActorLocation(UDirectOrScutSimSubsystem::DefaultSetTransform(Room).WorldOrigin+FVector(-950,0,210));
+        SetControlRotation(FRotator::ZeroRotator);SetViewTarget(P);
+    }
+    bShowMouseCursor=false;SetInputMode(FInputModeGameOnly());
+}
 void ADirectOrScutPlayerController::BeginPlay()
 {
     Super::BeginPlay(); bShowMouseCursor=true;
@@ -108,23 +124,21 @@ void ADirectOrScutPlayerController::DebugPanic()
 }
 ADirectOrScutGameMode::ADirectOrScutGameMode()
 {
-    PlayerControllerClass=ADirectOrScutPlayerController::StaticClass(); DefaultPawnClass=nullptr; HUDClass=ADirectOrScutHUD::StaticClass();
+    PlayerControllerClass=ADirectOrScutPlayerController::StaticClass(); DefaultPawnClass=ASpectatorPawn::StaticClass(); HUDClass=ADirectOrScutHUD::StaticClass();
 }
 void ADirectOrScutGameMode::BeginPlay()
 {
     Super::BeginPlay();
-    GetWorld()->SpawnActor<ADirectOrScutHullActor>();
-    for (int32 I=0;I<2;++I)
+    // Uncooked PIE can duplicate editor-only actors; remove the tagged overview helper before rendering.
+    for(TActorIterator<ADirectionalLight> It(GetWorld());It;++It)if(It->ActorHasTag(TEXT("ScutEditorOverview")))
     {
-        const float A=DirectOrScut::Stations()[4].Face*45.f;
-        const FVector P=DirectOrScut::Radial(A,DirectOrScut::PodCenterRadius()-260)+DirectOrScut::Radial(A+90,I==0?-180.f:180.f);
-        auto* Cargo=GetWorld()->SpawnActorDeferred<ADirectOrScutCargoMarker>(ADirectOrScutCargoMarker::StaticClass(),FTransform(P),nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-        Cargo->SimBodyIndex=4+I; Cargo->FinishSpawning(FTransform(P));
+        It->GetLightComponent()->SetVisibility(false);It->Destroy();
     }
+    if(!TActorIterator<ADirectOrScutHullActor>(GetWorld())) GetWorld()->SpawnActor<ADirectOrScutHullActor>();
     const FRotator View(-45,-135,0);
     auto* Camera=GetWorld()->SpawnActor<ACameraActor>(-View.Vector()*4500,View);
     Camera->Tags.Add(TEXT("DirectOrScutCamera"));
-    auto* C=Camera->GetCameraComponent(); C->ProjectionMode=ECameraProjectionMode::Orthographic; C->OrthoWidth=4200;
+    auto* C=Camera->GetCameraComponent(); C->ProjectionMode=ECameraProjectionMode::Perspective; C->FieldOfView=73.7398f;
     // Fixed aspect preserves the complete ship at 4200uu, including on wide monitors.
     C->bConstrainAspectRatio=true; C->AspectRatio=1.15f;
     C->PostProcessSettings.bOverride_AutoExposureMethod=true; C->PostProcessSettings.AutoExposureMethod=AEM_Manual;
@@ -132,17 +146,6 @@ void ADirectOrScutGameMode::BeginPlay()
     C->PostProcessSettings.bOverride_AutoExposureApplyPhysicalCameraExposure=true;
     C->PostProcessSettings.AutoExposureApplyPhysicalCameraExposure=false;
     C->PostProcessSettings.bOverride_BloomIntensity=true; C->PostProcessSettings.BloomIntensity=.2f;
-    auto* Key=GetWorld()->SpawnActor<ADirectionalLight>(FVector(0,0,1000),FRotator(-65,-35,0));
-    Key->GetLightComponent()->SetIntensity(2.4f);
-    Key->GetLightComponent()->bUseTemperature=true;
-    Key->GetLightComponent()->SetTemperature(5800.f);
-    CastChecked<UDirectionalLightComponent>(Key->GetLightComponent())->LightSourceAngle=2.f;
-    Key->GetLightComponent()->SetLightColor(FLinearColor::White);
-    auto* Fill=GetWorld()->SpawnActor<ADirectionalLight>(FVector(0,0,1000),FRotator(-55,145,0));
-    Fill->GetLightComponent()->SetIntensity(.8f);
-    Fill->GetLightComponent()->SetCastShadows(false);
-    Fill->GetLightComponent()->bUseTemperature=true;
-    Fill->GetLightComponent()->SetTemperature(5800.f);
     for (FConstPlayerControllerIterator It=GetWorld()->GetPlayerControllerIterator();It;++It) if (auto* PC=It->Get()) PC->SetViewTarget(Camera);
     if (FParse::Param(FCommandLine::Get(),TEXT("ScutCapture")))
     {

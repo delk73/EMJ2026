@@ -33,7 +33,7 @@ bool UDirectOrScutSimSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 }
 void UDirectOrScutSimSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    Super::Initialize(Collection); Simulation.Initialize(); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
+    Super::Initialize(Collection); for(int32 R=0;R<8;++R) CompartmentSets.Add(static_cast<ERoomId>(R),DefaultSetTransform(R)); Simulation.Initialize(); ConfigureScenario(false); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
 }
 bool UDirectOrScutSimSubsystem::IsTickable() const
 {
@@ -46,7 +46,7 @@ void UDirectOrScutSimSubsystem::Tick(float Delta)
     Simulation.Accumulator+=Delta;
     int32 Budget=240;
     while (Simulation.Accumulator+1.e-9>=Simulation.FixedDelta && Budget-->0)
-    { ProcessDirectives(); Simulation.Step(); Simulation.Accumulator-=Simulation.FixedDelta; }
+    { FixedStep(); Simulation.Accumulator-=Simulation.FixedDelta; }
     SynchronizeActors();
 }
 void UDirectOrScutSimSubsystem::RegisterDoor(ADoorActor* Door)
@@ -60,13 +60,8 @@ void UDirectOrScutSimSubsystem::RegisterCrew(ACrewUnitBlockout* Crew)
     const int32 I=Crew->SimUnitIndex;
     if (I<0 || I>=4) return;
     BodyActors[I]=Crew;
-    Simulation.RegisterBody(I,FVector2D(Crew->GetActorLocation()),I+2,Crew->bAndroid);
+    Simulation.RegisterBody(I,FVector2D(DirectOrScut::CrewSpawnPoint(I)),I+2,Crew->bAndroid);
     Simulation.Bodies[I].bSuited=Crew->bSuited;
-}
-void UDirectOrScutSimSubsystem::RegisterCargo(AActor* Actor,int32 I,int32 Room)
-{
-    if (I<4 || I>=12) return;
-    BodyActors[I]=Actor; Simulation.RegisterBody(I,FVector2D(Actor->GetActorLocation()),Room,false,true);
 }
 bool UDirectOrScutSimSubsystem::RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw)
 {
@@ -97,7 +92,8 @@ void UDirectOrScutSimSubsystem::SynchronizeActors()
         {
             const auto& U=Simulation.Bodies[I];
             if (!U.bRegistered) continue;
-            Actor->SetActorLocation(FVector(U.Position,0),false);
+            Actor->SetActorLocation(ToSetWorld(U.Room,U.Position),false);
+            if(const auto* Stage=CompartmentSets.Find(static_cast<ERoomId>(U.Room)))Actor->SetActorRotation(FRotator(0,Stage->Yaw,0));
             if (U.State==EDirectOrScutUnitState::Ejected) Actor->SetActorEnableCollision(false);
             else Actor->SetActorEnableCollision(true);
         }
@@ -105,13 +101,14 @@ void UDirectOrScutSimSubsystem::SynchronizeActors()
 }
 void UDirectOrScutSimSubsystem::AdvanceSteps(int32 Count)
 {
-    for (int32 I=0;I<Count;++I) { ProcessDirectives(); Simulation.Step(); }
+    for (int32 I=0;I<Count;++I) { FixedStep(); }
     SynchronizeActors();
 }
 void UDirectOrScutSimSubsystem::ResetSimulation()
 {
     PendingConsoleCommands.Reset(); MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None; ++MenuRevision;
-    PendingDirectives.Reset(); Events.Reset(); bAILink=false; RequestedFeed=-1;
+    PendingDirectives.Reset(); Events.Reset(); bAILink=false; RequestedFeed=-1; FollowedCrew=-1; ++FollowRevision;
+    CommandRecords.Reset(); CinematicCues.Reset(); ConfigureScenario(bMedicalScenario);
     Simulation.ResetRuntime();
     for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(false);
     SynchronizeActors();
@@ -152,7 +149,7 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
         FString Result;
         const TCHAR* Names[]={TEXT("VALE / engineer"),TEXT("CHEN / medic"),TEXT("ORTIZ / technician"),TEXT("ASH / android")};
         for (int32 I=0;I<4;++I) { const auto& U=Simulation.Bodies[I]; const auto& P=U.Profile;
-            Result+=FString::Printf(TEXT("%s %s %s Cmp %.2f Cps %.2f Aff %.2f Utl %.2f Sus %.2f Stress %.0f Integrity %.0f\n"),Names[I],DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.Compliance,P.Composure,P.Affinity,P.Utility,P.Suspicion,U.Stress,U.Integrity); }
+            Result+=FString::Printf(TEXT("%s %s %s Cmp %.2f Cps %.2f Aff %.2f Utl %.2f Sus %.2f Stress %.0f Integrity %.0f BPM %.0f RPM %.0f Pupil %.1fmm\n"),Names[I],DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.Compliance,P.Composure,P.Affinity,P.Utility,P.Suspicion,U.Stress,U.Integrity,P.HeartRateBPM,P.RespirationRateRPM,P.PupilDilationMM); }
         return Result;
     }
     if (Line==TEXT("rooms")) { FString Result; for (int32 R=0;R<8;++R) Result+=FString::Printf(TEXT("%s %s alert %.0fs\n"),DirectOrScut::RoomName(R),Simulation.Rooms[R].bIsPressurized?TEXT("PRESSURIZED"):TEXT("VACUUM"),Simulation.Rooms[R].AlertSeconds); return Result; }
@@ -162,6 +159,8 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
 }
 void UDirectOrScutSimSubsystem::ProcessDirectives()
 {
+    for(const auto& Line:PendingDirectives)CommandRecords.Add({Simulation.TickIndex,Line,false});
+    for(const auto& Line:PendingConsoleCommands)CommandRecords.Add({Simulation.TickIndex,Line,true});
     ProcessSimulationDirectives();
     ProcessConsoleCommands();
 }
@@ -218,4 +217,23 @@ FSimContextSnapshot UDirectOrScutSimSubsystem::MakeContextSnapshot() const
     Writer->WriteArrayEnd(); Writer->WriteArrayStart(TEXT("rooms"));
     for (int32 R=0;R<8;++R) { Writer->WriteObjectStart(); Writer->WriteValue(TEXT("name"),DirectOrScut::RoomName(R)); Writer->WriteValue(TEXT("pressurized"),Simulation.Rooms[R].bIsPressurized); Writer->WriteValue(TEXT("alert"),Simulation.Rooms[R].AlertSeconds); Writer->WriteObjectEnd(); }
     Writer->WriteArrayEnd(); Writer->WriteObjectEnd(); Writer->Close(); return S;
+}
+
+// Camera tracking is operator state; it never mutates crew orders or AI-LINK intent.
+bool UDirectOrScutSimSubsystem::CanFollowCrew(int32 Crew) const
+{
+    if(Crew<0 || Crew>=4)return false;
+    const auto& U=Simulation.Bodies[Crew];
+    return U.bRegistered && U.Room>=0 && U.Room<8 && U.Integrity>0 && U.State!=EDirectOrScutUnitState::Ejected;
+}
+bool UDirectOrScutSimSubsystem::SetFollowedCrew(int32 Crew)
+{
+    if(Crew!=-1 && !CanFollowCrew(Crew))return false;
+    FollowedCrew=Crew;++FollowRevision;LogEvent(Crew<0?TEXT("Follow mode stopped."):FollowStatus());return true;
+}
+FString UDirectOrScutSimSubsystem::FollowStatus() const
+{
+    if(!CanFollowCrew(FollowedCrew))return TEXT("FOLLOW OFF");
+    const TCHAR* Names[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};
+    return FString::Printf(TEXT("FOLLOWING: %s [%s]"),Names[FollowedCrew],DirectOrScut::RoomName(Simulation.Bodies[FollowedCrew].Room));
 }

@@ -1,9 +1,13 @@
 #include "DirectOrScutBakeCommandlet.h"
 #if WITH_EDITOR
 #include "DirectOrScutGameMode.h"
+#include "DirectOrScutHullActor.h"
+#include "CompartmentCameraRig.h"
+#include "Engine/DirectionalLight.h"
+#include "Components/DirectionalLightComponent.h"
 #include "DirectOrScutGeometry.h"
 #include "Materials/Material.h"
-#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionTextureObjectParameter.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
@@ -14,6 +18,9 @@
 #include "Misc/PackageName.h"
 #include "FileHelpers.h"
 #include "GameFramework/WorldSettings.h"
+#include "Editor.h"
+#include "LevelEditorViewport.h"
+#include "Settings/LevelEditorViewportSettings.h"
 #endif
 UDirectOrScutBakeCommandlet::UDirectOrScutBakeCommandlet()
 {
@@ -24,7 +31,7 @@ int32 UDirectOrScutBakeCommandlet::Main(const FString& Params)
 #if WITH_EDITOR
     const TCHAR* Hex[]={TEXT("D8D5CE"),TEXT("EAE7E0"),TEXT("F5F8FF"),TEXT("D97A1E"),TEXT("D92020"),TEXT("2C3035"),TEXT("24C8D8"),TEXT("22252A"),TEXT("32D879")};
     const float Rough[]={.32f,.38f,.32f,.45f,.3f,.55f,.35f,.6f,.3f};
-    if (!Params.Contains(TEXT("CrtOnly")))
+    if (!Params.Contains(TEXT("CrtOnly")) && !Params.Contains(TEXT("MapOnly")))
     for (int32 I=0;I<DirectOrScut::MaterialCount;++I)
     {
         FString Name=FString::Printf(TEXT("M_Slot%d"),I), Path=TEXT("/Game/DirectOrScut/Materials/")+Name;
@@ -34,76 +41,63 @@ int32 UDirectOrScutBakeCommandlet::Main(const FString& Params)
         const bool bNew=M==nullptr;
         if (bNew) M=NewObject<UMaterial>(Package,*Name,RF_Public|RF_Standalone);
         else UMaterialEditingLibrary::DeleteAllMaterialExpressions(M);
-        auto* Color=CastChecked<UMaterialExpressionConstant3Vector>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionConstant3Vector::StaticClass()));
-        Color->Constant=FLinearColor(FColor::FromHex(Hex[I]));
+        auto* Color=CastChecked<UMaterialExpressionVectorParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionVectorParameter::StaticClass()));
+        Color->ParameterName=TEXT("BaseTint");Color->DefaultValue=FLinearColor(FColor::FromHex(Hex[I]));
         UMaterialEditingLibrary::ConnectMaterialProperty(Color,TEXT(""),MP_BaseColor);
         auto Scalar=[&](float Value,EMaterialProperty Property)
         {
             auto* E=CastChecked<UMaterialExpressionScalarParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionScalarParameter::StaticClass()));
             E->DefaultValue=Value; E->ParameterName=Property==MP_Roughness?TEXT("Roughness"):TEXT("Metallic"); UMaterialEditingLibrary::ConnectMaterialProperty(E,TEXT(""),Property);
         };
+        if(I==8)
+        {
+            auto* Tint=CastChecked<UMaterialExpressionVectorParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionVectorParameter::StaticClass()));
+            Tint->ParameterName=TEXT("Tint");Tint->DefaultValue=FLinearColor::White;
+            UMaterialEditingLibrary::ConnectMaterialProperty(Tint,TEXT(""),MP_EmissiveColor);
+        }
         Scalar(Rough[I],MP_Roughness); Scalar(I==0?.05f:I==1?.1f:0.f,MP_Metallic);
-        if (I==2 || I==4 || I==8)
+        if (I==2 || I==4)
         {
             auto* E=CastChecked<UMaterialExpressionConstant3Vector>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionConstant3Vector::StaticClass()));
-            E->Constant=Color->Constant*(I==2?1.5f:1.2f);
+            E->Constant=Color->DefaultValue*(I==2?1.5f:1.2f);
             UMaterialEditingLibrary::ConnectMaterialProperty(E,TEXT(""),MP_EmissiveColor);
         }
         UMaterialEditingLibrary::RecompileMaterial(M); if (bNew) FAssetRegistryModule::AssetCreated(M); M->MarkPackageDirty();
         FSavePackageArgs Args; Args.TopLevelFlags=RF_Public|RF_Standalone;
         if (!UPackage::SavePackage(Package,M,*FPackageName::LongPackageNameToFilename(Path,FPackageName::GetAssetPackageExtension()),Args)) return 2;
     }
+    auto* World=UEditorLoadingAndSavingUtils::NewBlankMap(false);
+    if(!World)return 3;
+    World->GetWorldSettings()->DefaultGameMode=ADirectOrScutGameMode::StaticClass();
+    World->SpawnActor<ADirectOrScutHullActor>();
+    World->SpawnActor<ACompartmentCameraRig>();
+    auto* OverviewKey=World->SpawnActor<ADirectionalLight>(FVector(5250,6000,8000),FRotator(-35,-90,0));
+    OverviewKey->bIsEditorOnlyActor=true;
+    OverviewKey->Tags.Add(TEXT("ScutEditorOverview"));
+    OverviewKey->SetActorLabel(TEXT("Soundstage Overview Key (editor only)"));
+    auto* Key=OverviewKey->GetLightComponent();Key->SetMobility(EComponentMobility::Movable);
+    Key->bUseTemperature=true;Key->SetTemperature(5800);Key->SetLightColor(FLinearColor::White);Key->SetIntensity(4);
+
+    // Persist a front overview with X increasing left-to-right and the raised row above.
+    for(auto& View:World->EditorViews)
     {
-        const FString Path=TEXT("/Game/DirectOrScut/Materials/M_CrtMonitorFeed");
-        auto* Package=CreatePackage(*Path); Package->FullyLoad();
-        auto* M=FindObject<UMaterial>(Package,TEXT("M_CrtMonitorFeed")); const bool New=M==nullptr;
-        if (!M) M=NewObject<UMaterial>(Package,TEXT("M_CrtMonitorFeed"),RF_Public|RF_Standalone);
-        else UMaterialEditingLibrary::DeleteAllMaterialExpressions(M);
-        M->MaterialDomain=MD_UI; M->BlendMode=BLEND_Translucent;
-        auto* Shader=CastChecked<UMaterialExpressionCustom>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionCustom::StaticClass()));
-        Shader->OutputType=CMOT_Float4;
-        auto Input=[&](FName Name,UMaterialExpression* E) { FCustomInput I; I.InputName=Name; I.Input.Connect(0,E); Shader->Inputs.Add(I); };
-        Shader->Inputs.Reset();
-        auto* Texture=CastChecked<UMaterialExpressionTextureObjectParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionTextureObjectParameter::StaticClass()));
-        Texture->ParameterName=TEXT("Texture"); Texture->Texture=LoadObject<UTexture>(nullptr,TEXT("/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture")); Input(TEXT("Texture"),Texture);
-        Input(TEXT("UV"),UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionTextureCoordinate::StaticClass()));
-        auto Scalar=[&](const TCHAR* Name,float Value) { auto* P=CastChecked<UMaterialExpressionScalarParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionScalarParameter::StaticClass())); P->ParameterName=Name; P->DefaultValue=Value; Input(Name,P); };
-        Scalar(TEXT("CleanDev"),1); Scalar(TEXT("Glass"),1); Scalar(TEXT("LensK1"),0); Scalar(TEXT("Clock"),0); Scalar(TEXT("SignalNoise"),.012f); Scalar(TEXT("Distortion"),0);
-        Shader->Code=TEXT(R"HLSL(
-if(CleanDev>.5) return Texture2DSample(Texture,TextureSampler,UV);
-float2 p=UV*2-1;
-float2 uv=.5+.5*p*(1+(Glass*.012+LensK1)*dot(p,p));
-float row=floor(uv.y*640);
-float n=frac(sin(dot(float2(row,floor(Clock*30)),float2(12.9898,78.233)))*43758.5453);
-float brown=sin(Clock*.7+row*.03)*.4+sin(Clock*1.3+row*.11)*.2;
-uv.x+=(n-.5+brown)*SignalNoise*.08+Distortion*.02*sin(row*.12+Clock*18);
-uv.y+=Distortion*.06*sin(Clock*3);
-float2 split=float2(Distortion*.009,0);
-float4 c=Texture2DSample(Texture,TextureSampler,uv);
-c.r=Texture2DSample(Texture,TextureSampler,uv+split).r;
-c.b=Texture2DSample(Texture,TextureSampler,uv-split).b;
-float scan=.94+.06*sin(uv.y*640*3.14159);
-float edge=saturate(1-dot(p*p,p*p)*.18*Glass);
-float mask=step(0,uv.x)*step(uv.x,1)*step(0,uv.y)*step(uv.y,1);
-float3 glow=(Texture2DSample(Texture,TextureSampler,uv+float2(.0015,0)).rgb+Texture2DSample(Texture,TextureSampler,uv-float2(.0015,0)).rgb)*.035*Glass;
-c.rgb=(c.rgb*scan+glow+(n-.5)*(SignalNoise+Distortion*.25))*edge*mask;
-c.a=1;
-return c;
-)HLSL");
-        UMaterialEditingLibrary::ConnectMaterialProperty(Shader,TEXT(""),MP_EmissiveColor);
-        // The monitor is opaque; the procedural corner mask is part of its emitted colour.
-        UMaterialEditingLibrary::RecompileMaterial(M); if (New) FAssetRegistryModule::AssetCreated(M); M->MarkPackageDirty();
-        FSavePackageArgs Args; Args.TopLevelFlags=RF_Public|RF_Standalone;
-        if (!UPackage::SavePackage(Package,M,*FPackageName::LongPackageNameToFilename(Path,FPackageName::GetAssetPackageExtension()),Args)) return 5;
+        View.CamPosition=FVector(5250,12000,4700);
+        View.CamRotation=(FVector(5250,0,1950)-View.CamPosition).Rotation();
+        View.CamOrthoZoom=17000;View.CamUpdated=true;
     }
-    if (!FPackageName::DoesPackageExist(TEXT("/Game/DirectOrScut/Maps/DirectOrScutBlockout")))
+    const auto OverviewViews=World->EditorViews;
+    for(auto* Client:GEditor->GetLevelViewportClients())if(Client && Client->GetWorld()==World && Client->IsPerspective())
     {
-        auto* World=UEditorLoadingAndSavingUtils::NewBlankMap(false);
-        if (!World) return 3;
-        World->GetWorldSettings()->DefaultGameMode=ADirectOrScutGameMode::StaticClass();
-        if (!UEditorLoadingAndSavingUtils::SaveMap(World,TEXT("/Game/DirectOrScut/Maps/DirectOrScutBlockout"))) return 4;
+        Client->SetViewLocation(FVector(5250,12000,4700));
+        Client->SetViewRotation((FVector(5250,0,1950)-Client->GetViewLocation()).Rotation());
     }
-    UE_LOG(LogTemp,Display,TEXT("DIRECT OR SCUT: saved nine clinical procedural materials and dedicated blockout map"));
+    if(!UEditorLoadingAndSavingUtils::SaveMap(World,TEXT("/Game/Maps/DirectOrScut_Soundstage")))return 4;
+    // UE restores a per-project user view ahead of the map's view when one exists.
+    // Refresh only this rebaked map's cached view so the existing checkout opens on the overview too.
+    auto* ViewSettings=GetMutableDefault<ULevelEditorViewportSettings>();
+    ViewSettings->EditorViews.FindOrAdd(World).LevelViewportsInfo=OverviewViews;
+    ViewSettings->SaveConfig();
+    UE_LOG(LogTemp,Display,TEXT("DIRECT OR SCUT: saved spacecraft soundstage map and UX-matched editor overview"));
     return 0;
 #else
     return 1;

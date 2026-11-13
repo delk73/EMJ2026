@@ -13,6 +13,7 @@ ACrewUnitBlockout::ACrewUnitBlockout()
 void ACrewUnitBlockout::BeginPlay()
 {
     Super::BeginPlay(); DirectOrScut::Materials(Body);
+    if(!bAndroid)if(auto* Suit=Cast<UMaterialInstanceDynamic>(Body->GetMaterial(SuitSlot)))Suit->SetVectorParameterValue(TEXT("BaseTint"),SimUnitIndex==0?FLinearColor(.9f,.015f,.01f):SimUnitIndex==1?FLinearColor(.02f,.08f,.9f):FLinearColor(.95f,.7f,.015f));
     auto* M=Body->GetDynamicMesh();
     const float W=bAndroid ? 85.f : 80.f;
     const float H=bAndroid ? 185.f : 180.f;

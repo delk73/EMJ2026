@@ -10,6 +10,7 @@ class EMJ2026_API ADirectOrScutPlayerController : public APlayerController
 public:
     virtual void SetupInputComponent() override;
     virtual void BeginPlay() override;
+    virtual void PlayerTick(float DeltaTime) override;
     void FocusWorkstation();
     void ToggleDevFX();
     void ToggleDevView();
@@ -18,6 +19,7 @@ public:
     bool HandleVentAtScreenPosition(const FVector2D& ScreenPosition);
     UPROPERTY(VisibleAnywhere) int32 SelectedUnit=INDEX_NONE;
 private:
+    bool bWasWorkstationVisible=true;
     void ClickDoor();
     void ClickVent();
     void DebugPanic();

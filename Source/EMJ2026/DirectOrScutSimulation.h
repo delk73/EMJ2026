@@ -13,6 +13,10 @@ struct FDoorState
 };
 struct FCrewProfile
 {
+    float HeartRateBPM=60, RespirationRateRPM=12, PupilDilationMM=2.5f;
+    double CardiacPhase=0, BreathPhase=0;
+    uint64 HeartbeatCount=0, BreathCount=0;
+    bool OnHeartbeatTick=false, OnBreathCycle=false;
     float Compliance=.7f, Composure=.6f, Affinity=.3f, Utility=.7f, Suspicion=.02f;
 };
 enum class EHiddenObjectiveType : uint8 { IsolateTargetInRoom, CompleteCovertSystemSweep, SurviveShiftUnexposed };
@@ -26,7 +30,7 @@ struct FScenarioConfig
     float ShiftDuration=600;
     TArray<FScenarioEvent> Events={{900,3,false},{2700,0,true}};
 };
-struct FCompartmentState { bool bIsPressurized=true; float AlertSeconds=0; bool bHullBreach=false; };
+struct FCompartmentState { bool bIsPressurized=true, bLockdown=false; float LightLevel=1, AlertSeconds=0; bool bHullBreach=false; };
 struct FDirectOrScutUnitState
 {
     FVector2D Position=FVector2D::ZeroVector,SuctionVelocity=FVector2D::ZeroVector;
@@ -36,7 +40,7 @@ struct FDirectOrScutUnitState
     double Stress=0,Integrity=100;
     FCrewProfile Profile;
     double TaskProgress=0;
-    bool bAndroid=false,bSuited=false,bCargo=false,bRegistered=false;
+    bool bAndroid=false,bSuited=false,bRegistered=false;
     int32 ActiveDoor=-1,DestinationRoom=-2,RouteCount=0,RouteCursor=0;
     uint32 RouteRevision=MAX_uint32;
     FVector2D Route[64]{};
@@ -62,7 +66,7 @@ public:
     FDirectOrScutUnitState Bodies[MaxBodies];
     uint64 TickIndex=0;
     uint32 DoorRevision=0,RandomState=1970;
-    double OreRefined=0,Accumulator=0;
+    double Accumulator=0;
     bool bReady=false;
     bool bExperiment=false;
     FScenarioConfig Scenario;
@@ -76,11 +80,12 @@ public:
     bool ToggleDoor(int32 Door,bool Open);
     bool CycleAirlock(int32 TargetRoom=7);
     void UpdatePsychology();
+    void UpdateBiometrics();
     int32 ObstacleCount=0,NodeCount=0;
 
     void Initialize();
     void ResetRuntime();
-    bool RegisterBody(int32 Index,FVector2D Position,int32 Room,bool Android=false,bool Cargo=false);
+    bool RegisterBody(int32 Index,FVector2D Position,int32 Room,bool Android=false);
     bool AddObstacle(int32 Room,FVector2D Center,FVector2D HalfSize,float Yaw);
     bool BuildNavigation();
     bool SetDoorOpen(int32 Door,bool Open);

@@ -4,6 +4,7 @@
 #include "CompartmentCameraRig.h"
 #include "SDirectOrScutWorkstationWidget.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Engine/GameViewportClient.h"
@@ -12,7 +13,9 @@ void ADirectOrScutHUD::BeginPlay()
 {
     Super::BeginPlay();
     if (!GetWorld()->GetGameViewport() || !FSlateApplication::IsInitialized()) return;
-    auto* Rig=GetWorld()->SpawnActor<ACompartmentCameraRig>();
+    ACompartmentCameraRig* Rig=nullptr;for(TActorIterator<ACompartmentCameraRig> It(GetWorld());It;++It){Rig=*It;break;}
+    if(!Rig)Rig=GetWorld()->SpawnActor<ACompartmentCameraRig>();
+    Rig->InitializeFeeds();
     SAssignNew(Workstation,SDirectOrScutWorkstationWidget).Sim(GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()).Rig(Rig);
     GetWorld()->GetGameViewport()->AddViewportWidgetContent(Workstation.ToSharedRef(),10);
     if (FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture")))

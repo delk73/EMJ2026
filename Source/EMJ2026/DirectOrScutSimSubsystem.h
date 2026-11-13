@@ -4,6 +4,22 @@
 #include "DirectOrScutSimulation.h"
 #include "DirectOrScutSimSubsystem.generated.h"
 
+enum class ERoomId : uint8 { ReactorCore=0, RingCorridor=1, Bridge=2, MedBay=3, ObservationDeck=4, QuartersMess=5, ServerArchive=6, AirlockChamber=7 };
+struct FCompartmentSetTransform
+{
+    FVector WorldOrigin=FVector::ZeroVector;
+    float Yaw=0;
+};
+DECLARE_MULTICAST_DELEGATE_TwoParams(FBiometricCrossing,int32,uint64);
+struct FDirectorCommandRecord { uint64 Tick=0; FString Input; bool bConsole=false; };
+struct FCinematicCue { uint64 Tick=0; ERoomId RoomId=ERoomId::ReactorCore; float Severity=0; FString Subtitle; };
+struct FCrewStatDelta { float Stress=0, Suspicion=0, Compliance=0, Affinity=0, Utility=0, Integrity=0; };
+enum class EDirectorAction : uint8 { Stats, Seal, Vent, Android, Triage, Release, Mentorship };
+struct FInteractionChoice { FString Label; FCrewStatDelta Delta; EDirectorAction Action=EDirectorAction::Stats; };
+struct FInteractionNode { FString Subtitle; TArray<FInteractionChoice> Choices; };
+enum class EBeatGate : uint8 { Suspicion, Stress, AndroidTask, Collapse, Concealment, Quarantine };
+struct FScenarioBeat { EBeatGate Gate; FInteractionNode Node; bool bFired=false, bResolved=false; int32 Crew=-1; };
+struct FDirectorMenuOption { FString Label; bool bSupport=true; int32 Room=-1; FInteractionChoice Choice; };
 struct FSimContextSnapshot
 {
     uint64 Tick=0;
@@ -47,6 +63,11 @@ public:
     bool IsRoomSealed(int32 Room) const;
     void MenuBack();
     int32 RequestedFeed=-1;
+    int32 FollowedCrew=-1;
+    uint64 FollowRevision=0;
+    bool CanFollowCrew(int32 Crew) const;
+    bool SetFollowedCrew(int32 Crew);
+    FString FollowStatus() const;
     uint64 EventRevision=0;
     TArray<FShipAIEvent> Events;
     TSharedPtr<IShipAIIntentProvider> IntentProvider;
@@ -76,7 +97,23 @@ private:
 public:
     void RegisterDoor(ADoorActor* Door);
     void RegisterCrew(ACrewUnitBlockout* Crew);
-    void RegisterCargo(AActor* Actor,int32 Index,int32 Room);
+    FBiometricCrossing OnHeartbeatTick, OnBreathCycle;
+    TMap<ERoomId,FCompartmentSetTransform> CompartmentSets;
+    FVector ToSetWorld(int32 Room,FVector2D Position) const;
+    static FCompartmentSetTransform DefaultSetTransform(int32 Room);
+    static FVector MapSimulationToSet(int32 Room,FVector2D Position);
+    TArray<FDirectorCommandRecord> CommandRecords;
+    TArray<FCinematicCue> CinematicCues;
+    TArray<FDirectorMenuOption> DirectorOptions;
+    TArray<FScenarioBeat> BeatDeck;
+    bool bMedicalScenario=false;
+    void ConfigureScenario(bool Medical);
+    void EvaluateBeatDeck();
+    void RecordCue(int32 Room,float Severity,const FString& Subtitle);
+    bool ExecuteDirectorOption(int32 Index);
+    bool ResolveBeat(int32 Beat,int32 Choice);
+    void ApplyInteraction(const FInteractionChoice& Choice,int32 Crew,int32 Room);
+    void FixedStep();
     bool RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw);
     void FinishLayout();
     bool SetDoorOpen(int32 Index,bool Open);
