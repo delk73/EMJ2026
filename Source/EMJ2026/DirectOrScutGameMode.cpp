@@ -152,7 +152,7 @@ void ADirectOrScutGameMode::BeginPlay()
                 GAreScreenMessagesEnabled=false;
                 if (auto* PC=Cast<ADirectOrScutPlayerController>(GetWorld()->GetFirstPlayerController())) PC->SelectedUnit=0;
             }
-            const TCHAR* Name=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9aCapture"))?TEXT("DirectOrScut/Slice9a.png"):FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture"))?TEXT("DirectOrScut/Slice9.png"):Chunk2Capture?TEXT("DirectOrScut/Chunk2.png"):TEXT("DirectOrScut/Blockout.png");
+            const TCHAR* Name=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9bCapture"))?TEXT("DirectOrScut/Slice9b.png"):FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9aCapture"))?TEXT("DirectOrScut/Slice9a.png"):FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture"))?TEXT("DirectOrScut/Slice9.png"):Chunk2Capture?TEXT("DirectOrScut/Chunk2.png"):TEXT("DirectOrScut/Blockout.png");
             FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/Name,true,false);
         },10.f,false);
         const bool Slice9Capture=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture"));
@@ -173,7 +173,26 @@ void ADirectOrScutGameMode::BeginPlay()
             GetWorldTimerManager().SetTimer(Vacuum,[this,Select](){Select(7,false,true); GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()->SubmitDirective(TEXT("scut airlock"));},15.f,false);
             GetWorldTimerManager().SetTimer(VacuumShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9Vacuum.png"),true,false);},16.f,false);
         }
-        GetWorldTimerManager().SetTimer(Exit,[](){ FPlatformMisc::RequestExit(false); },Slice9Capture?18.f:15.f,false);
+        const bool Slice9bCapture=FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9bCapture"));
+        if(Slice9bCapture)
+        {
+            auto Project=[this](const TCHAR* Command,bool Drawer)
+            {
+                auto* PC=GetWorld()->GetFirstPlayerController();auto* HUD=PC?Cast<ADirectOrScutHUD>(PC->GetHUD()):nullptr;
+                if(HUD && HUD->GetWorkstation()) HUD->GetWorkstation()->SetConsoleOpen(Drawer,Drawer);
+                GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()->QueueConsoleCommand(Command);
+            };
+            FTimerHandle Help,HelpShot,AI,AIShot,Events,EventsShot,Crew,CrewShot;
+            GetWorldTimerManager().SetTimer(Help,[Project](){Project(TEXT("help"),true);},11.f,false);
+            GetWorldTimerManager().SetTimer(HelpShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9bConsole.png"),true,false);},12.f,false);
+            GetWorldTimerManager().SetTimer(AI,[Project](){Project(TEXT("menu ai"),false);},13.f,false);
+            GetWorldTimerManager().SetTimer(AIShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9bAI.png"),true,false);},14.f,false);
+            GetWorldTimerManager().SetTimer(Events,[Project](){Project(TEXT("menu events"),false);},15.f,false);
+            GetWorldTimerManager().SetTimer(EventsShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9bEvents.png"),true,false);},16.f,false);
+            GetWorldTimerManager().SetTimer(Crew,[Project](){Project(TEXT("menu crew"),false);},17.f,false);
+            GetWorldTimerManager().SetTimer(CrewShot,[](){FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Slice9bCrew.png"),true,false);},18.f,false);
+        }
+        GetWorldTimerManager().SetTimer(Exit,[](){ FPlatformMisc::RequestExit(false); },Slice9bCapture?20.f:Slice9Capture?18.f:15.f,false);
     }
     if (FParse::Param(FCommandLine::Get(),TEXT("ScutValidate")))
     {

@@ -181,3 +181,37 @@ UE 5.9 Development Editor compilation/link succeeded. CRT-only baking succeeded.
 ```
 
 Physical desktop keyboard/mouse verification could not run: the Windows Computer Use helper returned `Computer Use native pipe is unavailable` after retry and runtime reset. The passed PIE test exercises Slate's real routing and hit testing, but does not claim OS SendInput verification. GPU captures at 640x480 and 1600x1000 were inspected: all eight CCTV feeds, the telemetry tile and console are present; the complete header and CMD bar remain within the curved bezel without corner clipping. The clean startup verification screenshot is `Saved/DirectOrScut/Slice9a.png`; the compact-resolution artifact is `Saved/DirectOrScut/Slice9a-640x480.png`. `git diff --check` passed.
+
+## Slice 9b — Quake-style command drawer, help and screen menus (2026-11-13)
+
+The default workstation is a full-width 4x2 grid of CCTV feeds 1–8, with no permanent chat column or CMD row. Single-feed inspection and the existing camera selection controls remain available underneath the overlays. Existing camera transforms, render targets, CRT curvature and bezel-safe padding are preserved. No Slice 10 soundstage refactoring, external assets, model weights or submodules were introduced.
+
+### Drop-down terminal and input
+
+Backtick toggles a translucent phosphor-framed command drawer over the top of the grid; Enter or slash opens directly into prompt focus. The default height is approximately 55% of the video surface, with Shift+backtick toggling approximately 90%. A short cosmetic height animation is independent of simulation time. Esc retracts the drawer and restores workstation hotkeys; with the drawer closed, Esc dismisses a screen menu or returns an inspected feed to the grid. Focus-opening slash/backtick characters are consumed instead of entering the prompt. Enter submits while retaining editable-child focus.
+
+Up/Down browse a bounded 64-command history and restore the unfinished draft at the newest position. Tab completes/cycles public verbs, crew names/roles, compartment names and contextual arguments; the caret moves to the end so typing can continue. `clear` erases scrollback without erasing history. Drafts survive layout rebuilds. Log links retract the drawer and inspect the linked compartment. Terminal scrollback uses borderless text rows; the drawer leaves the live video faintly visible underneath.
+
+### Command reference and screen projections
+
+`help` / `?` groups public commands under SYSTEM, CAMERAS, MENUS, DIRECTIVES and CONTAINMENT, with concise descriptions and drawer controls. `help command` gives exact syntax, working examples and the valid crew/room identifiers. The local AI-LINK provider and command behavior are unchanged; the new UI/help/completion do not promote that late-stage Easter egg.
+
+- `menu ai` projects five numbered operations: Route Crew / Pretext, Trigger Sensor Alert, Broadcast Protocol / Calm, Bulkhead & Airlock Control, and Silent Android Subroutine. Keys or clicks navigate concrete specialist, room and pretext pages, then execute existing Ship AI directives. Room choice order matches feeds 1–8. Containment exposes open/seal, seal all, explicit SCUT and room flush through existing pressure/suspicion rules.
+- `menu events` projects four scenario/interaction choices: MED_BAY telemetry sensor drill, corporate reassurance, emergent roommate reconciliation, and crew systems rehearsal. Reconciliation is disabled unless living human roommates share a compartment; rehearsal targets the first living human by stable roster ID. The screen shows affected crew, active alert time, remaining scheduled anomalies, and live immediate aggregate deltas for Suspicion, Stress, Compliance, Affinity and Utility. A single pure event plan supplies both previews and execution, including eligibility and clamping. Ongoing 30 Hz stress/social updates continue after the immediate event.
+- `menu crew` projects a compact, live weights matrix for all four units, including Compliance, Composure, Affinity, Utility, Suspicion, Stress and room/state. Horizontal scrolling accommodates narrow viewports.
+- `menu close` or Esc dismisses the screen projection and restores the live grid. Loading a menu retracts the drawer; the drawer can also reopen over an active menu. Menu choice numbers take priority over camera numbers while a projection owns input.
+
+### Deterministic dispatch
+
+Every workstation command, including readouts/help/clear/camera selection, enters `QueueConsoleCommand` on `UDirectOrScutSimSubsystem`. Mouse and keyboard menu choices enqueue `choose N` through that same bounded queue. The subsystem processes input before a 30 Hz model step, executing each directive before any later queued event so submission order is preserved. The native `SubmitDirective` API remains available for earlier fixtures and unchanged AI-LINK translation; the workstation exclusively uses the fixed-tick queue. History, completion, animation and read-only previews are presentation work. Event deltas modify the authoritative crew profiles, retaining Android immunity and the terminal finite-roster rules.
+
+### Verification
+
+UE 5.9 Development Editor compilation/link passed. `DirectOrScut.Slice9b.RoutedConsolePIE` passed using real Slate key/character routing and hit-tested mouse move/down/up events in PIE. It verifies the full-width grid; immediate drawer focus and character suppression; 55%/90% sizing; submission focus; fixed-tick command/menu execution; history; verb/crew/room completion with caret continuation; clear/history retention; grouped help and exact syntax; all five AI operations; keyboard/mouse event execution; matrix projection; camera hotkey recovery; preview/execution clamps; and FIFO ordering of batched sealing followed by reassurance.
+
+```powershell
+./Scripts/verify_direct_or_scut.ps1 -PIE -Slice9b -Width 1600 -Height 1000
+./Scripts/verify_direct_or_scut.ps1 -Capture -Slice9b -Width 1600 -Height 1000
+```
+
+Build/input logs: `Saved/Logs/Slice9bBuild.log`, `Saved/Logs/Slice9bPIE.log`; report: `Saved/DirectOrScut/Slice9bReport`. GPU capture artifacts under `Saved/DirectOrScut` are `Slice9b.png` (grid), `Slice9bConsole.png` (help drawer), `Slice9bAI.png`, `Slice9bEvents.png` and `Slice9bCrew.png`. `Slice9bPIE.png` records the routed PIE run. Verification exercises actual PIE/Slate event routing; physical desktop SendInput is not claimed. Final GPU captures at 640x480 and 1600x1000 were inspected: the full-width grid, translucent help drawer, AI/event projections and compact live matrix are visible with the header and input inside the CRT safe area. All three workstation suites passed together: Slice 9 `WorkstationPIE`, Slice 9a `RoutedInputPIE`, and Slice 9b `RoutedConsolePIE`. Regression log/report: `Saved/Logs/Slice9bRegression.log` and `Saved/DirectOrScut/Slice9bRegressionReport`. Compact captures are `Slice9bConsole-640x480.png` and `Slice9bCrew-640x480.png`. `git diff --check` passed.

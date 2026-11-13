@@ -56,7 +56,7 @@ public:
             Test->TestTrue(TEXT("Startup workstation owns keyboard focus without clicking"),UI->HasKeyboardFocus());
             Test->TestTrue(TEXT("Startup is CCTV grid alongside console"),UI->bGrid && !UI->bFullscreen);
             Test->TestFalse(TEXT("No tactical overview tile"),Find(UI->GetContentRoot(),TEXT("ScutCamera0")).IsValid());
-            Test->TestTrue(TEXT("Telemetry ninth tile"),Find(UI->GetContentRoot(),TEXT("ScutTelemetry")).IsValid());
+            Test->TestFalse(TEXT("No permanent telemetry side tile"),Find(UI->GetContentRoot(),TEXT("ScutTelemetry")).IsValid());
             for(TActorIterator<ACompartmentCameraRig> It(W);It;++It) { Rig=*It; break; }
             Test->TestNotNull(TEXT("Camera rig"),Rig.Get()); if(!Rig.IsValid()) return true;
             for(int32 F=1;F<=8;++F) { Test->TestTrue(TEXT("All eight CCTV cameras rendered at startup"),Rig->CaptureCounts[F]>0); InitialCaptures[F]=Rig->CaptureCounts[F]; }
@@ -72,12 +72,12 @@ public:
         case 14: Key(EKeys::G);Test->TestTrue(TEXT("G returns grid"),UI->bGrid);break;
         case 15: Key(EKeys::Enter);Test->TestTrue(TEXT("Enter focuses inner prompt editor"),UI->IsPromptFocused());break;
         case 16: Type(TEXT("status"));Test->TestEqual(TEXT("Characters route to prompt"),StaticCastSharedPtr<SEditableTextBox>(Find(UI->GetContentRoot(),TEXT("ScutPrompt")))->GetText().ToString(),FString(TEXT("status")));break;
-        case 17: Key(EKeys::Enter);Test->TestTrue(TEXT("Submit keeps prompt focus"),UI->IsPromptFocused());Test->TestTrue(TEXT("Status submitted via Slate"),S->Events.Last().Text.Contains(TEXT("SCENARIO_01")));break;
-        case 18: Command(TEXT("crew"));Test->TestTrue(TEXT("Crew command typed"),S->Events.Last().Text.Contains(TEXT("VALE")));break;
-        case 19: Command(TEXT("rooms"));Test->TestTrue(TEXT("Rooms command typed"),S->Events.Last().Text.Contains(TEXT("REACTOR_CORE")));break;
-        case 20: Command(TEXT("llm"));Test->TestTrue(TEXT("LLM command typed"),S->bAILink);break;
-        case 21: Command(TEXT("cmd"));Test->TestFalse(TEXT("CMD command typed"),S->bAILink);break;
-        case 22: Command(TEXT("direct ash med_bay telemetry"));break;
+        case 17: Key(EKeys::Enter);Test->TestTrue(TEXT("Submit keeps prompt focus"),UI->IsPromptFocused());break;
+        case 18: Test->TestTrue(TEXT("Status submitted via Slate at fixed tick"),S->Events.Last().Text.Contains(TEXT("SCENARIO_01")));Command(TEXT("crew"));break;
+        case 19: Test->TestTrue(TEXT("Crew command typed"),S->Events.Last().Text.Contains(TEXT("VALE")));Command(TEXT("rooms"));break;
+        case 20: Test->TestTrue(TEXT("Rooms command typed"),S->Events.Last().Text.Contains(TEXT("REACTOR_CORE")));Command(TEXT("llm"));break;
+        case 21: Test->TestTrue(TEXT("LLM command typed"),S->bAILink);Command(TEXT("cmd"));break;
+        case 22: Test->TestFalse(TEXT("CMD command typed"),S->bAILink);Command(TEXT("direct ash med_bay telemetry"));break;
         case 23: Test->TestEqual(TEXT("Typed direct reached fixed simulation"),S->Simulation.Bodies[3].AssignedRoom,3);break;
         case 24: Command(TEXT("alert med_bay fault"));break;
         case 25: Command(TEXT("seal med_bay"));break;
@@ -89,7 +89,7 @@ public:
         case 31: Key(EKeys::Escape);Key(EKeys::Three);Test->TestEqual(TEXT("Hotkeys resume after typing"),UI->ActiveFeed,3);break;
         case 32: Click(TEXT("ScutCamera5"),false);break;
         case 33: Test->TestEqual(TEXT("Whole tile mouse hit selects"),UI->ActiveFeed,5);Test->TestTrue(TEXT("Mouse single click keeps grid"),UI->bGrid);Click(TEXT("ScutCamera5"),true);break;
-        case 34: Test->TestTrue(TEXT("Whole tile double-click expands"),UI->bFullscreen);Key(EKeys::Escape);S->LogEvent(TEXT("Compartment link verification // MED_BAY"),3);break;
+        case 34: Test->TestTrue(TEXT("Whole tile double-click expands"),UI->bFullscreen);Key(EKeys::Escape);Key(EKeys::Enter);S->LogEvent(TEXT("Compartment link verification // MED_BAY"),3);break;
         case 35: Click(FName(*FString::Printf(TEXT("ScutEvent%d"),S->Events.Num()-1)),false);break;
         case 36: Test->TestEqual(TEXT("Event click selects compartment feed"),UI->ActiveFeed,3);Test->TestTrue(TEXT("Event click inspects compartment"),UI->bFullscreen);Key(EKeys::Tab);break;
         case 37:
