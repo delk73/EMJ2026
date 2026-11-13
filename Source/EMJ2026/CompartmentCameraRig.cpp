@@ -38,7 +38,7 @@ void ACompartmentCameraRig::InitializeFeeds()
     for(int32 F=0;F<9;++F)
     {
         auto* RT=NewObject<UTextureRenderTarget2D>(this);RT->RenderTargetFormat=RTF_RGBA8;
-        RT->InitAutoFormat(1024,640);RT->UpdateResourceImmediate(true);Targets.Add(RT);
+        RT->InitAutoFormat(1024,576);RT->UpdateResourceImmediate(true);Targets.Add(RT);
         Captures[F]->TextureTarget=RT;Captures[F]->CaptureSource=SCS_FinalColorLDR;
         FeedMaterials.Add(nullptr);
     }

@@ -351,3 +351,32 @@ Evidence: `Saved/Logs/Slice11aBuild.log`, `Saved/Logs/Slice11aPIE.log`, `Saved/D
 UE 5.9 Development Editor build/link, `DirectOrScut.Slice11a.FullscreenTUIPIE` and the updated `DirectOrScut.Slice11.EndingsPIE` regression passed. The final TUI screenshot was visually inspected: all eight feeds remain visible through the phosphor layer, both panes are readable, the scrollbar is minimal, and telemetry/footer remain outside the terminal. `git diff --check` passed; the new Slice 11a C++ test also passed a separate whitespace check. Changes remain uncommitted, preserving the pre-existing Slice 11 working-tree changes.
 
 `DirectOrScut.Slice10.SoundstagePIE` also passed against the final build, covering soundstage reuse, vanilla feed setup, biometrics, scenario gates and deterministic replay. Its regression evidence is `Saved/Logs/Slice10PIE.log` and `Saved/DirectOrScut/Slice10Report`.
+
+
+## Slice 11b - CRT Terminal Desk: 62% monitor wall and 38% permanent console (2026-11-13)
+
+Replaced Slice 11a's translucent fullscreen terminal overlay with a permanent vertical workstation stack below telemetry. The upper 62% is the unobstructed 4x2 eight-camera wall; the lower 38% is the docked TUI. A 1 px phosphor top bezel separates the tiers. The console background is exactly `FLinearColor(0.012f, 0.024f, 0.014f, 0.96f)`, backed by the workstation rather than video. Telemetry and the slim priority-alert/key-hint footer remain persistent. The post-experiment corporate dossier retains its existing resolved-state modal behavior.
+
+Monitor labels, pressure/seal status, INSPECT buttons and live crew badges now occupy separate rows outside each video rectangle. No terminal text, menu or monitor metadata is layered on a live feed. All eight native render targets use 1024x576 (16:9), replacing the previous 1024x640 targets; Slate displays them with aspect-preserving ScaleToFit and black matte where the available pane differs. Camera positions, horizontal 24 mm-equivalent FOV, vanilla capture flags, light values and stage geometry are unchanged. There are no shaders, feed effects, external assets or submodules. Articulated door geometry remains deferred to the final art pass. AI-LINK translation/provider/activation code is untouched.
+
+Arrow keys and 1-8 select cameras with the existing phosphor border. Enter/F or a monitor's INSPECT button expands only the upper wall; G or Escape restores the grid. The camera wall has its own rebuild path, so inspection, feed changes and grid return preserve the same bottom-console widgets, draft, command history and log scroll position. The bottom console remains live while inspecting a single feed.
+
+The lower terminal uses a 42% menu / 58% output horizontal split. DIRECTIVES, EVENTS, CREW, BULKHEADS and EXPERIMENT tabs live above compact menu rows in the left pane. The right pane owns SHIP AI // TUI CONSOLE, COPY LOG, the filtered output stream and the bottom CMD> line. Existing 3 px phosphor scrollbars collapse unless needed; manual upward scrolling pauses tail-following and returning to the bottom resumes it. COPY LOG still copies the entire subsystem-owned filtered buffer and briefly flashes COPIED without adding output or stealing focus.
+
+The old visibility toggle is gone: backtick and slash focus CMD>, including while a camera is expanded; repeated backtick never hides the terminal. Escape releases terminal focus and restores camera-grid navigation. Tab from camera focus enters menu navigation; Tab/Shift+Tab then cycles categories, Up/Down highlights and Enter executes. Category/row/back mouse clicks use the same queued subsystem actions. Prompt focus retains history and completion; an empty-prompt Tab enters category navigation. Legacy `SetConsoleOpen` callers now select prompt/camera input focus only, and its legacy public boolean tracks terminal input focus rather than console visibility. Command dispatch remains authoritative at the subsystem's next 30 Hz control tick; this slice does not alter simulation or lifecycle rules.
+
+### Verification
+
+```powershell
+& 'C:/Program Files/Epic Games/UE_5.9/Engine/Build/BatchFiles/Build.bat' EMJ2026Editor Win64 Development -Project=D:/_source/EMJ2026/EMJ2026.uproject -WaitMutex -NoHotReloadFromIDE -log=D:/_source/EMJ2026/Saved/Logs/Slice11bBuild.log
+./Scripts/verify_direct_or_scut.ps1 -PIE -Slice11b -Width 1600 -Height 1000
+./Scripts/verify_direct_or_scut.ps1 -PIE -Slice11 -Width 1600 -Height 1000
+```
+
+The new TerminalDeskPIE suite uses real Slate key, character, hit-tested mouse and wheel routing. It measures 62/38 tier heights, 42/58 widths, the 1 px bezel, exact console RGBA, telemetry separation and disjoint camera/console bounds. For every feed it verifies 16:9 render targets and displayed image geometry, unchanged FOV/vanilla capture flags, video bounds within the top tier, and no overlap between monitor text and image rectangles. It exercises arrow/number selection, Enter/F/G/Escape, mouse INSPECT, the unchanged terminal instance across expansion, prompt focus without collapsing inspection, all menu categories and keyboard subtree navigation, next-tick help/reset dispatch, unseal, command history/completion, full-buffer clipboard equality/COPIED feedback, 3 px scrollbars, paused manual scrolling, resumed tail-following and advancing captures. Verification restores the original clipboard. Physical desktop SendInput is not claimed.
+
+Evidence: `Saved/Logs/Slice11bBuild.log`, `Saved/Logs/Slice11bPIE.log`, `Saved/DirectOrScut/Slice11bReport`, `Saved/DirectOrScut/Slice11bPIE.png` (grid desk) and `Saved/DirectOrScut/Slice11bInspectPIE.png` (single-feed desk). Both views were visually inspected. Slice 11a's fullscreen-overlay/toggle expectations are superseded by this suite; historical tests retaining those expectations are not claimed as regressions for the new layout.
+
+UE 5.9 Development Editor build/link, `DirectOrScut.Slice11b.TerminalDeskPIE` and `DirectOrScut.Slice11.EndingsPIE` passed. The final grid and inspected-room desk screenshots were reviewed for unobstructed video, retained 16:9 proportions and readable permanent console. `git diff --check` passed, including a separate whitespace check for the new test source. Changes remain uncommitted for review.
+
+`DirectOrScut.Slice10.SoundstagePIE` also passed against the final build, retaining soundstage reuse, clean capture setup, biometrics, scenario gates and deterministic replay. Regression evidence is `Saved/Logs/Slice10PIE.log` and `Saved/DirectOrScut/Slice10Report`.

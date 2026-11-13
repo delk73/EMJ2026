@@ -9,6 +9,7 @@ class SVerticalBox;
 class SRetainerWidget;
 class SScrollBox;
 class SOverlay;
+class SBox;
 class UMaterialInstanceDynamic;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
 {
@@ -29,6 +30,7 @@ public:
     void SelectFeed(int32 Feed,bool AllowDoubleTap=true);
     void ToggleExpanded();
     void ShowGrid();
+    // Legacy callers use these names; bConsoleOpen now tracks terminal input focus, never visibility.
     bool bConsoleOpen=false,bFullConsole=false;
     void SetConsoleOpen(bool Open,bool Full=false);
     bool IsPromptFocused() const;
@@ -39,6 +41,9 @@ private:
     TSharedPtr<SEditableTextBox> Prompt;
     TSharedPtr<SVerticalBox> Root,Log,MenuList;
     TSharedPtr<SOverlay> Body;
+    TSharedPtr<SBox> CameraWall;
+    bool bMenuFocused=false;
+    void RebuildCameraWall();
     TSharedPtr<SRetainerWidget> Retainer;
     TSharedPtr<SScrollBox> LogScroll,MenuScroll;
     FScrollBarStyle SlimScrollStyle;
@@ -47,7 +52,7 @@ private:
     bool bLogAutoScroll=true;
     double CopiedUntil=0;
     uint64 SeenRuntimeRevision=MAX_uint64;
-    void SelectCategory(int32 Category);
+    void SelectCategory(int32 Category,bool FocusMenu=true);
     void ExecuteHighlighted();
     void RefreshLog();
     FReply CopyLog();
