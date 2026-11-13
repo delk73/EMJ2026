@@ -13,6 +13,9 @@ public:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
     UFUNCTION(BlueprintCallable) void Toggle();
+    UFUNCTION(BlueprintCallable) void SetOpen(bool Open);
+    void ApplySimulationOpen(bool Open);
+    UPROPERTY(VisibleAnywhere) int32 SimDoorIndex=INDEX_NONE;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UDynamicMeshComponent> Slab;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> ClickTarget;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UDynamicMeshComponent> Sill;

@@ -1,4 +1,5 @@
 #include "DoorActor.h"
+#include "DirectOrScutSimSubsystem.h"
 #include "DirectOrScutGeometry.h"
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
@@ -40,10 +41,21 @@ void ADoorActor::BeginPlay()
     DirectOrScut::Box(Sill->GetDynamicMesh(),FVector(0,0,2.5),FVector(16,180,1),4);
     DirectOrScut::Finish(Slab);
     DirectOrScut::Finish(Sill);
+    if (auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()) Sim->RegisterDoor(this);
 }
 void ADoorActor::Toggle()
 {
-    bOpen=!bOpen;
+    SetOpen(!bOpen);
+}
+void ADoorActor::SetOpen(bool Open)
+{
+    if (auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>())
+        if (SimDoorIndex>=0) { Sim->SetDoorOpen(SimDoorIndex,Open); return; }
+    ApplySimulationOpen(Open);
+}
+void ADoorActor::ApplySimulationOpen(bool Open)
+{
+    bOpen=Open;
     Sill->SetMaterial(4,bOpen?Sill->GetMaterial(8):Slab->GetMaterial(4));
 }
 void ADoorActor::Tick(float Dt)

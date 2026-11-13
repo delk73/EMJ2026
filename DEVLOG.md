@@ -156,3 +156,12 @@
 * **Limits:** Automated PIE screen-space mouse traces were exercised; manual OS mouse focus/capture feel was not observed. No pathfinding, vacuum model, jobs, HUD, external assets or submodules were added.
 
 * **[VERIFIED - FINAL RUNTIME]:** SCUT VALIDATION PASS: doors=9, humans=3, androids=1. All unit bounds remain exact, bases Z=0, and the ring plus both reactor spoke floor traces hit Z=0. git diff --check passes.
+
+
+---
+### [2026-11-13 America/Los_Angeles] - DIRECT OR SCUT Chunk 2: deterministic autorunning simulation
+
+* Added UDirectOrScutSimSubsystem and a pure fixed-capacity 30Hz model: eight rooms, nine shared door edges, automatic stack BFS, local visibility routes around the octagonal deck/landmarks, immediate door sync and anti-pinning, binary vacuum flood-fill, integrity loss and routed suction/ejection for crew and two loose-cargo markers, work/ore/stress/panic/calming and repeating shuttle ETA. Added LMB selection/DIRECT/interior doors, guarded RMB/Shift-LMB SCUT venting, F1 seeded human panic and a Canvas debug HUD.
+* Preserved hull primitive calls, camera, clinical lighting and material assets. Hull edits only expose exact landmark footprints, shared coordinates and stable bindings.
+* VERIFIED: UE5.9 Development Editor C++ compile/link passed without new C++ warnings. DirectOrScut.Chunk2.SimulationPIE passed actual viewport selection/assignment and door traces, blocked standby/no jitter, ring traversal and alternate reactor rerouting, pressure isolation, every threshold's separation, work/panic/calming, android/suit immunity, remote multi-door crew/cargo ejection, occupied-hatch vent priority, replay hashes across 30/60Hz frame partitions and ETA wrap. Offscreen Chunk2.png inspected with selected telemetry. git diff --check passed.
+* Full architecture, rates, graph table, verification commands and limits: DIRECT_OR_SCUT.md. Evidence: Saved/Logs/DirectOrScutChunk2PIE.log, DirectOrScutChunk2Capture.log, PreflightBuild.log; Saved/DirectOrScut/Chunk2.png. Physical OS mouse focus/feel remains unobserved; automated PIE traces exercise the same screen-input handlers.

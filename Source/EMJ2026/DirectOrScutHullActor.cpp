@@ -1,4 +1,5 @@
 #include "DirectOrScutHullActor.h"
+#include "DirectOrScutSimSubsystem.h"
 #include "DirectOrScutGeometry.h"
 #include "DoorActor.h"
 #include "CrewUnitBlockout.h"
@@ -37,6 +38,7 @@ void ADirectOrScutHullActor::BeginPlay()
 }
 void ADirectOrScutHullActor::Generate()
 {
+    auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
     Materials(Hull);
     auto* M=Hull->GetDynamicMesh();
     const auto Sites=DoorSites();
@@ -120,7 +122,10 @@ void ADirectOrScutHullActor::Generate()
         const FVector P=Radial(A,PodCenterRadius());
         auto Local=[&](float X,float Y,float Z) { return P+Rotation.RotateVector(FVector(X,Y,Z)); };
         auto B=[&](FVector Position,FVector Size,int32 ID,float RelativeYaw=0.f)
-        { Box(M,P+Rotation.RotateVector(Position),Size,ID,A+RelativeYaw); };
+        {
+            Box(M,P+Rotation.RotateVector(Position),Size,ID,A+RelativeYaw);
+            if (Sim) Sim->RecordObstacle(StationIndex+2,P+Rotation.RotateVector(Position),Size,A+RelativeYaw);
+        };
         const auto Poly=Octagon(PodLength,PodWidth,90);
         Prism(M,Poly,24,FTransform(Rotation,P+FVector(0,0,-24)),0);
         for (int32 J=0;J<8;++J)
@@ -165,6 +170,7 @@ void ADirectOrScutHullActor::Generate()
             {
                 FGeometryScriptPrimitiveOptions O; O.MaterialID=1;
                 UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendCylinder(M,O,FTransform(Rotation,Local(60,Y,40)),105,180,16);
+                if (Sim) Sim->RecordObstacle(StationIndex+2,Local(60,Y,130),FVector(210,210,180),A);
                 B(FVector(60,Y,225),FVector(150,150,10),3);
                 B(FVector(60,Y,232),FVector(78,78,4),7);
             }
@@ -213,6 +219,7 @@ void ADirectOrScutHullActor::Generate()
     {
         FVector P=Radial(I*60.f,210);
         Box(M,P+FVector(0,0,125),FVector(55,110,250),7,I*60.f);
+        if (Sim) Sim->RecordObstacle(0,P+FVector(0,0,125),FVector(55,110,250),I*60.f);
         Box(M,P+Radial(I*60.f,-29)+FVector(0,0,130),FVector(4,70,190),1,I*60.f);
         Box(M,P+Radial(I*60.f,-32)+FVector(0,0,160),FVector(2,48,7),I%2?3:4,I*60.f);
     }
@@ -238,14 +245,17 @@ void ADirectOrScutHullActor::Generate()
         Finish(Frame);
         auto* Door=GetWorld()->SpawnActorDeferred<ADoorActor>(ADoorActor::StaticClass(),FTransform(FRotator(0,S.Yaw,0),S.Position),nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
         Door->bExterior=S.bExterior;
+        Door->SimDoorIndex=PortalIndex-1;
         Door->FinishSpawning(FTransform(FRotator(0,S.Yaw,0),S.Position));
     }
     for (int32 I=0;I<4;++I)
     {
-        FVector Waypoint=Radial(Stations()[I].Face*45.f,PodCenterRadius()-240)+Radial(Stations()[I].Face*45.f+90,150);
+        FVector Waypoint=CrewSpawnPoint(I);
         auto* Unit=GetWorld()->SpawnActorDeferred<ACrewUnitBlockout>(ACrewUnitBlockout::StaticClass(),FTransform(Waypoint),nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+        Unit->SimUnitIndex=I;
         Unit->bAndroid=I==3; Unit->SuitSlot=I==0?3:I==1?6:5;
         Unit->FinishSpawning(FTransform(Waypoint));
     }
+    if (Sim) Sim->FinishLayout();
     UE_LOG(LogTemp,Display,TEXT("DIRECT OR SCUT: clinical hull; 980/1300 ring, 950x850 pod interiors, 2 spokes, 9 doors (8 interior + SCUT), 4 units"));
 }

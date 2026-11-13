@@ -14,6 +14,7 @@ inline constexpr float PodLength = 986.f; // Wall centerlines: 950uu clear betwe
 inline constexpr float PodWidth = 886.f;  // 850uu clear.
 inline constexpr int32 MaterialCount = 9;
 inline constexpr ECollisionChannel DoorClickChannel = ECC_GameTraceChannel1;
+inline constexpr ECollisionChannel CrewClickChannel = ECC_GameTraceChannel2;
 float OuterApothem();
 float PodCenterRadius();
 // Units are centimeters; every floor slab terminates at Z=0.
@@ -28,7 +29,15 @@ struct FDoorSite
     FVector Position;
     float Yaw;
     bool bExterior = false;
+    int32 RoomA = INDEX_NONE;
+    int32 RoomB = INDEX_NONE;
 };
+const TCHAR* RoomName(int32 Room);
+FVector2D RoomWaypoint(int32 Room);
+FVector2D RoomStandby(int32 Room);
+FVector CrewSpawnPoint(int32 Unit);
+bool RoomContains(int32 Room, FVector2D Point, double Clearance = 0);
+int32 RoomAtPoint(FVector2D Point);
 const TArray<FStation>& Stations();
 TArray<FDoorSite> DoorSites();
 FVector Radial(float Degrees, float Radius);

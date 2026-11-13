@@ -1,4 +1,5 @@
 #include "CrewUnitBlockout.h"
+#include "DirectOrScutSimSubsystem.h"
 #include "DirectOrScutGeometry.h"
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
@@ -33,4 +34,17 @@ void ACrewUnitBlockout::BeginPlay()
         DirectOrScut::Box(M,FVector(0,0,145),FVector(52,52,12),9);
     }
     DirectOrScut::Finish(Body);
+    Body->SetCollisionResponseToChannel(DirectOrScut::CrewClickChannel,ECR_Block);
+    if (auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()) Sim->RegisterCrew(this);
+}
+
+bool ACrewUnitBlockout::DirectToRoom(int32 Room)
+{
+    auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
+    return Sim && Sim->AssignRoom(SimUnitIndex,Room);
+}
+const FDirectOrScutUnitState* ACrewUnitBlockout::GetSimulationState() const
+{
+    auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
+    return Sim && SimUnitIndex>=0 && SimUnitIndex<12?&Sim->Simulation.Bodies[SimUnitIndex]:nullptr;
 }

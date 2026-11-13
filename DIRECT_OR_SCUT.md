@@ -1,3 +1,5 @@
+> Current build: Chunk 2 is active. The Chunk 1/1.5 sections below are historical; their no-simulation/no-HUD scope applies to those earlier passes. See the Chunk 2 entry for current controls and verification.
+
 # DIRECT OR SCUT - Chunk 1: clinical polymer refinement
 
 Open `EMJ2026.uproject` and press Play on the default `DirectOrScutBlockout` map. The map selects `ADirectOrScutGameMode`; C++ generates the hull, landmarks, camera, lights, doors and crew at play start. The edit-time map is intentionally empty. The earlier attraction simulation and its original map remain available.
@@ -47,3 +49,72 @@ Validation: UE 5.9 Development Editor C++ compile/link passed with no new C++ wa
 The final `DirectOrScut.Chunk1.PIEDoorMouseTrace` automation test passed in an actual PIE world. All nine doorways selected the intended actor at their projected viewport position, toggled once per screen click, reached Z=-250 and returned to Z=0 through real world ticks. Open-door sills were checked against the green material, and every target measured the requested 240 x 180 x 260uu. This exercises the same camera trace and toggle dispatch used by LMB; physical OS mouse focus and subjective click feel were not manually tested.
 
 Final standalone runtime verification also passed: nine doors, three 80 x 80 x 180uu humans and one 85 x 85 x 185uu android, all feet at Z=0. Ring and both reactor spoke floor traces hit Z=0. `git diff --check` passed. Existing Fab/ToolsetRegistry and non-Win64 SDK notices are unrelated to this pass.
+
+
+## Dev-log - 2026-11-13: Chunk 2 - Deterministic 2D Autorunning Simulation Core
+
+`UDirectOrScutSimSubsystem` owns a world-local `FDirectOrScutSimulation` model. The model advances at exactly 30 fixed steps per simulated second on Z=0. World-frame delta time feeds an accumulator; slow frames retain their backlog rather than dropping simulated time. Stable crew IDs (0-3), door IDs (0-8), sorted edge traversal and a seeded xorshift generator make the same command sequence at the same fixed ticks replay consistently. Engine collision queries, rendering and door animation are not inputs to the simulation model.
+
+The compartment BFS uses eight-element automatic arrays, and the vacuum flood-fill uses another fixed eight-node queue. Local route planning uses fixed 512-element automatic queues/parent arrays and 64-waypoint per-body buffers. The model stores at most 12 bodies, 256 landmark footprints and 512 navigation vertices in fixed-capacity arrays. Initialization exports 72 actual landmark sections from the existing hull generation calls, then precomputes visibility adjacency. There are no heap containers, actor queries or allocations in model stepping/pathfinding after initialization. UObject/physics transform updates and Canvas text rendering are outside this model allocation guarantee.
+
+Local routing follows the existing octagonal floor rather than straight chords across the central void. Room tests include the ring annulus, the reactor octagon plus its two spokes, and the six rotated/chamfered pod bounds. Navigation accounts for bulkheads/ribs and conservatively expands machinery footprints for unit clearance. The reactor workstation is on the SE service aisle at radius 350uu, outside the monolith cluster; the six pod workstations use local (-240,0), and their standby points use local (-300,0). The four spawn positions retain the original shared coordinates. Unreachable interior machinery pockets are excluded from panic destinations.
+
+### Compartment and doorway topology
+
+| Room ID | Compartment |
+| --- | --- |
+| 0 | REACTOR_CORE, including NW/SE access spokes |
+| 1 | RING_CORRIDOR |
+| 2 | BRIDGE |
+| 3 | MED_BAY |
+| 4 | ORE_CRUSHER |
+| 5 | SMELTER_FOUNDRY |
+| 6 | DOCKING_BAY |
+| 7 | AIRLOCK_CHAMBER |
+| -1 | Exterior vacuum (implicit flood-fill seed) |
+
+| Door ID | RoomA | RoomB | Binding |
+| --- | --- | --- | --- |
+| 0 | RING_CORRIDOR | BRIDGE | Ring face 0 |
+| 1 | RING_CORRIDOR | MED_BAY | Ring face 1 |
+| 2 | RING_CORRIDOR | ORE_CRUSHER | Ring face 2 |
+| 3 | RING_CORRIDOR | SMELTER_FOUNDRY | Ring face 4 |
+| 4 | RING_CORRIDOR | DOCKING_BAY | Ring face 5 |
+| 5 | RING_CORRIDOR | AIRLOCK_CHAMBER | Ring face 6 |
+| 6 | REACTOR_CORE | RING_CORRIDOR | NW, 135 degrees |
+| 7 | REACTOR_CORE | RING_CORRIDOR | SE, 315 degrees |
+| 8 | AIRLOCK_CHAMBER | Vacuum (-1) | Exterior SCUT hatch |
+
+Door positions, normals and room bindings come from the same `DirectOrScut::DoorSites()` table that spawns the nine actors. `ADoorActor::SetOpen` and subsystem `SetDoorOpen` update graph and visible state bidirectionally in the input call. A close transition immediately separates centers within the 180-deep x 240-wide threshold OBB by 146uu along its normal, chooses RoomA/RoomB from the signed side (current room breaks an exact center tie), clamps lateral displacement into the opening and cancels stale crossings. Unit positions remain on Z=0. Door animation remains cosmetic and does not delay graph changes.
+
+### Pressure, motion and crew behavior
+
+Each fixed tick recomputes pressure from the open exterior hatch through open interior edges. Door input also recomputes it immediately. Closing either the hatch or an isolating bulkhead restores pressure to the sealed connected components; the two parallel reactor connections must both be sealed to isolate the core. This is binary instantaneous pressure, not a gas-volume/air-flow solver.
+
+An exposed unsuited human loses 35 integrity points per second. Androids, suited humans and cargo retain integrity, but all are subject to suction. Vacuum movement follows the shortest open-door graph path and the local deck routes at 540uu/s; the resulting per-step vector is exposed as `SuctionVelocity`. It overrides voluntary steering while venting, so operators cannot walk against the vent. Crossing the full exterior threshold makes `Ejected` terminal, with Room=-1 and collision disabled. Closing a seal stops further damage/suction on the next fixed step; it does not heal lost integrity. Zero-integrity humans remain incapacitated in Panic until ejected. Two procedural loose-cargo markers are registered in DOCKING_BAY and use the same transport path.
+
+Crew begin assigned to their starting rooms and autorun to the station waypoint at 145uu/s. Working in REACTOR_CORE, ORE_CRUSHER or SMELTER_FOUNDRY produces 1 ore per worker per second. Human work stress increases 1.5 percentage points per second; android stress stays at zero. At 100 percent, or via F1, humans enter Panic, move at 190uu/s between seeded reachable waypoints and reject DIRECT. MED_BAY reduces panic stress at 12 points per second and calms the unit at 25 percent. The native `CalmUnit` API also supports deterministic fixtures. Closed routes send units to a safe local standby point in Idle; opening/rerouting door edges invalidates the cached route without repeated pushing against a wall. The shuttle timer repeats exactly every 1800 fixed steps (60 seconds).
+
+### Sandbox controls and HUD
+
+- LMB crew: select the stable crew ID.
+- LMB floor or station landmark: DIRECT the selected crew to that compartment. Panic, ejected and zero-integrity crew refuse reassignment.
+- LMB interior doorway: toggle it.
+- RMB or Shift+LMB exterior SCUT doorway: toggle vacuum venting. Plain LMB cannot accidentally vent the hatch.
+- F1: force a seeded random human into Panic.
+
+`ADirectOrScutHUD` draws ore, repeating shuttle ETA, all eight pressure states and selected unit room/assignment/state/stress/integrity. Crew picking uses a separate `CrewSelect` trace channel. Door picking retains its dedicated `DoorClick` channel. Landmark hits use actual surface XY; other room clicks fall back to the deprojected Z=0 plane. Architectural collision therefore does not drive the deterministic movement model.
+
+### Verification and reproduction
+
+```powershell
+./preflight.ps1 -SkipSmokeTest
+./Scripts/verify_direct_or_scut.ps1 -PIE -Chunk2
+./Scripts/verify_direct_or_scut.ps1 -Capture -Chunk2
+```
+
+UE 5.9 Development Editor C++ compilation/link passed without new C++ warnings. The native PIE test `DirectOrScut.Chunk2.SimulationPIE` uses the actual game world, actor bindings, orthographic viewport and screen-space input handlers, then advances controlled fixed steps for its scenarios. The initial suite passed actor/graph door synchronization, guarded exterior input, crew selection and floor DIRECT, closed-route standby without jitter, actual ring traversal to work, alternate reactor-edge rerouting, pressure isolation, side-aware anti-pinning at all nine thresholds, panic refusal/calming, android immunity, ejection and frame-partition replay. The expanded suite also passed remote crew/cargo ejection through multiple interior doors, suit damage immunity with continuing suction, cancellation of an approach outside the closing-door threshold, automatic stress-to-Panic transition, natural MED_BAY calming, and Shift-click vent priority over a crew unit occupying the hatch. Final `SimulationPIE` result: Success. The 30 Hz versus 60 Hz frame-partition replay hashes matched and the 60-second ETA wrapped exactly. The final 1600x1400 GPU preview was inspected with selected-unit Working/stress/integrity telemetry, ore production, pressure and ETA visible. `git diff --check` passed.
+
+The hull generation primitive calls, clinical light helper, camera/key/fill setup and material assets were preserved. Hull changes only export obstacle footprints, shared spawn coordinates and stable edge/unit bindings. `Blockout.png` remains the Chunk 1.5 image; the simulation preview is `Saved/DirectOrScut/Chunk2.png`. The capture process selects a crew unit for telemetry and suppresses pre-existing engine screen messages only in that capture process; ordinary PIE keeps engine diagnostics.
+
+Logs: `Saved/Logs/PreflightBuild.log`, `DirectOrScutChunk2PIE.log`, `DirectOrScutChunk2Capture.log`; automation report: `Saved/DirectOrScut/Chunk2PIEReport`. Automated screen traces verify the shared input dispatch; physical OS mouse focus/feel has not been manually observed. Replay equality is verified within the UE 5.9 Windows build, not promised bit-identical across different CPU/engine platforms.

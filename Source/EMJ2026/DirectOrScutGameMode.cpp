@@ -1,4 +1,7 @@
 #include "DirectOrScutGameMode.h"
+#include "DirectOrScutSimSubsystem.h"
+#include "DirectOrScutCargoMarker.h"
+#include "DirectOrScutHUD.h"
 #include "DirectOrScutHullActor.h"
 #include "DirectOrScutGeometry.h"
 #include "Components/BoxComponent.h"
@@ -7,6 +10,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Engine/Engine.h"
 #include "Components/DirectionalLightComponent.h"
 #include "EngineUtils.h"
 #include "CrewUnitBlockout.h"
@@ -21,6 +25,8 @@
 void ADirectOrScutPlayerController::SetupInputComponent()
 {
     Super::SetupInputComponent(); InputComponent->BindKey(EKeys::LeftMouseButton,IE_Pressed,this,&ADirectOrScutPlayerController::ClickDoor);
+    InputComponent->BindKey(EKeys::RightMouseButton,IE_Pressed,this,&ADirectOrScutPlayerController::ClickVent);
+    InputComponent->BindKey(EKeys::F1,IE_Pressed,this,&ADirectOrScutPlayerController::DebugPanic);
 }
 void ADirectOrScutPlayerController::BeginPlay()
 {
@@ -28,26 +34,73 @@ void ADirectOrScutPlayerController::BeginPlay()
     bAutoManageActiveCameraTarget=false;
     for (TActorIterator<ACameraActor> It(GetWorld());It;++It) if (It->ActorHasTag(TEXT("DirectOrScutCamera"))) { SetViewTarget(*It); break; }
 }
-bool ADirectOrScutPlayerController::ToggleDoorAtScreenPosition(const FVector2D& ScreenPosition)
+bool ADirectOrScutPlayerController::ToggleDoorAtScreenPosition(const FVector2D& Pixel,bool ExteriorModifier)
 {
     FHitResult Hit;
-    if (GetHitResultAtScreenPosition(ScreenPosition,DirectOrScut::DoorClickChannel,true,Hit))
-        if (auto* Door=Cast<ADoorActor>(Hit.GetActor())) { Door->Toggle(); return true; }
+    if (GetHitResultAtScreenPosition(Pixel,DirectOrScut::DoorClickChannel,true,Hit))
+        if (auto* Door=Cast<ADoorActor>(Hit.GetActor()))
+        {
+            if (Door->bExterior && !ExteriorModifier) return false;
+            Door->Toggle(); return true;
+        }
+    return false;
+}
+bool ADirectOrScutPlayerController::HandlePrimaryAtScreenPosition(const FVector2D& Pixel,bool Shift)
+{
+    auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
+    if (!Sim) return false;
+    if (Shift && HandleVentAtScreenPosition(Pixel)) return true;
+    FHitResult Hit;
+    if (GetHitResultAtScreenPosition(Pixel,DirectOrScut::CrewClickChannel,true,Hit))
+        if (auto* Unit=Cast<ACrewUnitBlockout>(Hit.GetActor())) { SelectedUnit=Unit->SimUnitIndex; return true; }
+    if (GetHitResultAtScreenPosition(Pixel,DirectOrScut::DoorClickChannel,true,Hit))
+        return ToggleDoorAtScreenPosition(Pixel,Shift);
+    int32 Room=-1;
+    if (GetHitResultAtScreenPosition(Pixel,ECC_Visibility,true,Hit) && Hit.GetComponent() && Hit.GetComponent()->GetFName()==TEXT("ProceduralHull"))
+        Room=DirectOrScut::RoomAtPoint(FVector2D(Hit.ImpactPoint));
+    if (Room<0)
+    {
+        FVector Origin,Direction;
+        if (DeprojectScreenPositionToWorld(Pixel.X,Pixel.Y,Origin,Direction) && Direction.Z<-.001)
+            Room=DirectOrScut::RoomAtPoint(FVector2D(Origin+Direction*(-Origin.Z/Direction.Z)));
+    }
+    return SelectedUnit>=0 && Sim->AssignRoom(SelectedUnit,Room);
+}
+bool ADirectOrScutPlayerController::HandleVentAtScreenPosition(const FVector2D& Pixel)
+{
+    FHitResult Hit;
+    if (GetHitResultAtScreenPosition(Pixel,DirectOrScut::DoorClickChannel,true,Hit))
+        if (auto* Door=Cast<ADoorActor>(Hit.GetActor())) if (Door->bExterior) { Door->Toggle(); return true; }
     return false;
 }
 void ADirectOrScutPlayerController::ClickDoor()
 {
-    FVector2D ScreenPosition;
-    if (GetMousePosition(ScreenPosition.X,ScreenPosition.Y)) ToggleDoorAtScreenPosition(ScreenPosition);
+    FVector2D P;
+    if (GetMousePosition(P.X,P.Y)) HandlePrimaryAtScreenPosition(P,IsInputKeyDown(EKeys::LeftShift)||IsInputKeyDown(EKeys::RightShift));
+}
+void ADirectOrScutPlayerController::ClickVent()
+{
+    FVector2D P; if (GetMousePosition(P.X,P.Y)) HandleVentAtScreenPosition(P);
+}
+void ADirectOrScutPlayerController::DebugPanic()
+{
+    if (auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()) Sim->Simulation.ForceRandomHumanPanic();
 }
 ADirectOrScutGameMode::ADirectOrScutGameMode()
 {
-    PlayerControllerClass=ADirectOrScutPlayerController::StaticClass(); DefaultPawnClass=nullptr; HUDClass=nullptr;
+    PlayerControllerClass=ADirectOrScutPlayerController::StaticClass(); DefaultPawnClass=nullptr; HUDClass=ADirectOrScutHUD::StaticClass();
 }
 void ADirectOrScutGameMode::BeginPlay()
 {
     Super::BeginPlay();
     GetWorld()->SpawnActor<ADirectOrScutHullActor>();
+    for (int32 I=0;I<2;++I)
+    {
+        const float A=DirectOrScut::Stations()[4].Face*45.f;
+        const FVector P=DirectOrScut::Radial(A,DirectOrScut::PodCenterRadius()-260)+DirectOrScut::Radial(A+90,I==0?-180.f:180.f);
+        auto* Cargo=GetWorld()->SpawnActorDeferred<ADirectOrScutCargoMarker>(ADirectOrScutCargoMarker::StaticClass(),FTransform(P),nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+        Cargo->SimBodyIndex=4+I; Cargo->FinishSpawning(FTransform(P));
+    }
     const FRotator View(-45,-135,0);
     auto* Camera=GetWorld()->SpawnActor<ACameraActor>(-View.Vector()*4500,View);
     Camera->Tags.Add(TEXT("DirectOrScutCamera"));
@@ -74,9 +127,17 @@ void ADirectOrScutGameMode::BeginPlay()
     if (FParse::Param(FCommandLine::Get(),TEXT("ScutCapture")))
     {
         FTimerHandle Capture, Exit;
-        GetWorldTimerManager().SetTimer(Capture,[]()
+        GetWorldTimerManager().SetTimer(Capture,[this]()
         {
-            FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("DirectOrScut/Blockout.png"),false,false);
+            const bool Chunk2Capture=FParse::Param(FCommandLine::Get(),TEXT("ScutChunk2Capture"));
+            if (Chunk2Capture)
+            {
+                // Artifact-only presentation; regular PIE retains engine diagnostics.
+                GAreScreenMessagesEnabled=false;
+                if (auto* PC=Cast<ADirectOrScutPlayerController>(GetWorld()->GetFirstPlayerController())) PC->SelectedUnit=0;
+            }
+            const TCHAR* Name=Chunk2Capture?TEXT("DirectOrScut/Chunk2.png"):TEXT("DirectOrScut/Blockout.png");
+            FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/Name,true,false);
         },10.f,false);
         GetWorldTimerManager().SetTimer(Exit,[](){ FPlatformMisc::RequestExit(false); },15.f,false);
     }

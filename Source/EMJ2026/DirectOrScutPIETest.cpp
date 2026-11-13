@@ -55,7 +55,7 @@ public:
             PC->GetHitResultAtScreenPosition(Pixel,DirectOrScut::DoorClickChannel,true,Hit);
             Test->TestTrue(TEXT("Orthographic mouse trace selects intended door"),Hit.GetActor()==Door);
             if (Open) Test->TestTrue(TEXT("Open optical sill is green"),Door->Sill->GetMaterial(4)==Door->Sill->GetMaterial(8));
-            Test->TestTrue(TEXT("First screen click dispatches"),PC->ToggleDoorAtScreenPosition(Pixel));
+            Test->TestTrue(TEXT("First screen click dispatches"),PC->ToggleDoorAtScreenPosition(Pixel,Door->bExterior));
             Test->TestEqual(TEXT("Single click toggles once"),Door->bOpen,!Open);
 
             ++Phase;

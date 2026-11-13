@@ -25,12 +25,77 @@ float PodCenterRadius() { return OuterApothem()+PodLength/2; }
 TArray<FDoorSite> DoorSites()
 {
     TArray<FDoorSite> Sites;
-    for (const FStation& S : Stations())
-        Sites.Add({Radial(S.Face*45.f,OuterApothem()), S.Face*45.f});
+    for (int32 I=0;I<Stations().Num();++I)
+    {
+        const FStation& S=Stations()[I];
+        Sites.Add({Radial(S.Face*45.f,OuterApothem()),S.Face*45.f,false,1,I+2});
+    }
     for (float A : {135.f,315.f})
-        Sites.Add({Radial(A,InnerRadius*FMath::Cos(PI/8)), A});
-    Sites.Add({Radial(270.f,OuterApothem()+PodLength),270.f,true});
+        Sites.Add({Radial(A,InnerRadius*FMath::Cos(PI/8)),A,false,0,1});
+    Sites.Add({Radial(270.f,OuterApothem()+PodLength),270.f,true,7,-1});
     return Sites;
+}
+const TCHAR* RoomName(int32 Room)
+{
+    if (Room==0) return TEXT("REACTOR_CORE");
+    if (Room==1) return TEXT("RING_CORRIDOR");
+    if (Room>=2 && Room<8) return Stations()[Room-2].Name;
+    return TEXT("VACUUM");
+}
+FVector2D RoomWaypoint(int32 Room)
+{
+    if (Room==0) return FVector2D(Radial(315.f,350));
+    if (Room==1) return FVector2D(Radial(0,(InnerRadius+OuterRadius)*.5f*FMath::Cos(PI/8)));
+    if (Room>=2 && Room<8) return FVector2D(Radial(Stations()[Room-2].Face*45.f,PodCenterRadius()-240));
+    return FVector2D::ZeroVector;
+}
+FVector2D RoomStandby(int32 Room)
+{
+    if (Room<2) return RoomWaypoint(Room);
+    return FVector2D(Radial(Stations()[Room-2].Face*45.f,PodCenterRadius()-300));
+}
+FVector CrewSpawnPoint(int32 Unit)
+{
+    if (Unit<0 || Unit>=4) return FVector::ZeroVector;
+    const float A=Stations()[Unit].Face*45.f;
+    return Radial(A,PodCenterRadius()-240)+Radial(A+90,150);
+}
+bool RoomContains(int32 Room,FVector2D P,double Clearance)
+{
+    auto OctExtent=[](FVector2D Point)
+    {
+        double Max=-DBL_MAX;
+        for (int32 I=0;I<8;++I) Max=FMath::Max(Max,FVector2D::DotProduct(Point,FVector2D(Radial(I*45.f,1))));
+        return Max;
+    };
+    if (Room==1)
+    {
+        const double D=OctExtent(P);
+        return D<=OuterApothem()-Clearance && D>=InnerRadius*FMath::Cos(PI/8)+Clearance;
+    }
+    if (Room==0)
+    {
+        if (OctExtent(P)<=500*FMath::Cos(PI/8)-Clearance) return true;
+        for (float A : {135.f,315.f})
+        {
+            const double X=FVector2D::DotProduct(P,FVector2D(Radial(A,1)));
+            const double Y=FVector2D::DotProduct(P,FVector2D(Radial(A+90,1)));
+            if (X>=300 && X<=InnerRadius*FMath::Cos(PI/8)-Clearance && FMath::Abs(Y)<=140-Clearance) return true;
+        }
+        return false;
+    }
+    if (Room<2 || Room>=8) return false;
+    const float A=Stations()[Room-2].Face*45.f;
+    const FVector2D D=P-FVector2D(Radial(A,PodCenterRadius()));
+    const double X=FMath::Abs(FVector2D::DotProduct(D,FVector2D(Radial(A,1))));
+    const double Y=FMath::Abs(FVector2D::DotProduct(D,FVector2D(Radial(A+90,1))));
+    return X<=PodLength/2-Clearance && Y<=PodWidth/2-Clearance &&
+        X+Y<=(PodLength+PodWidth)/2-90-Clearance*UE_SQRT_2;
+}
+int32 RoomAtPoint(FVector2D P)
+{
+    for (int32 I=0;I<8;++I) if (RoomContains(I,P)) return I;
+    return INDEX_NONE;
 }
 TArray<FVector2D> Octagon(float W, float H, float C)
 {
@@ -71,6 +136,7 @@ void Finish(UDynamicMeshComponent* C, bool Collision)
     C->SetCollisionEnabled(Collision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
     C->SetCollisionResponseToAllChannels(ECR_Block);
     C->SetCollisionResponseToChannel(DoorClickChannel,ECR_Ignore);
+    C->SetCollisionResponseToChannel(CrewClickChannel,ECR_Ignore);
     C->SetComplexAsSimpleCollisionEnabled(true,false);
     C->UpdateCollision();
     C->NotifyMeshUpdated();
