@@ -11,6 +11,8 @@ public:
     virtual void SetupInputComponent() override;
     virtual void BeginPlay() override;
     void FocusWorkstation();
+    void ToggleDevFX();
+    void ToggleDevView();
     bool ToggleDoorAtScreenPosition(const FVector2D& ScreenPosition,bool ExteriorModifier=false);
     bool HandlePrimaryAtScreenPosition(const FVector2D& ScreenPosition,bool Shift=false);
     bool HandleVentAtScreenPosition(const FVector2D& ScreenPosition);

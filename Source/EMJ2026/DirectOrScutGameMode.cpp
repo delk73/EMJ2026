@@ -28,7 +28,11 @@ void ADirectOrScutPlayerController::SetupInputComponent()
 {
     // Slice 9 routes operator interaction through the covert workstation only.
     Super::SetupInputComponent();
+    InputComponent->BindKey(EKeys::F9,IE_Pressed,this,&ADirectOrScutPlayerController::ToggleDevFX);
+    InputComponent->BindKey(EKeys::F10,IE_Pressed,this,&ADirectOrScutPlayerController::ToggleDevView);
 }
+void ADirectOrScutPlayerController::ToggleDevFX() { auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();S->bCleanDevRendering=!S->bCleanDevRendering; }
+void ADirectOrScutPlayerController::ToggleDevView() { auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();S->bWorkstationVisible=!S->bWorkstationVisible;if(S->bWorkstationVisible)FocusWorkstation(); }
 void ADirectOrScutPlayerController::BeginPlay()
 {
     Super::BeginPlay(); bShowMouseCursor=true;

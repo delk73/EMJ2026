@@ -14,6 +14,8 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
 public:
     SLATE_BEGIN_ARGS(SDirectOrScutWorkstationWidget) {} SLATE_ARGUMENT(UDirectOrScutSimSubsystem*,Sim) SLATE_ARGUMENT(ACompartmentCameraRig*,Rig) SLATE_END_ARGS()
     void Construct(const FArguments& Args);
+    virtual ~SDirectOrScutWorkstationWidget() override;
+    TSharedPtr<class IInputProcessor> TacticalInput;
     virtual bool SupportsKeyboardFocus() const override { return true; }
     virtual FReply OnPreviewKeyDown(const FGeometry&,const FKeyEvent&) override;
     virtual FReply OnMouseButtonDown(const FGeometry&,const FPointerEvent&) override;

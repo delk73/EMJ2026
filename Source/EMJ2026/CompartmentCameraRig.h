@@ -16,6 +16,7 @@ public:
     void SetVisibleFeeds(int32 Primary,int32 Alert,bool Grid);
     static int32 RoomForFeed(int32 Feed);
     static int32 FeedForRoom(int32 Room);
+    bool bCleanDevRendering=true;
     uint64 CaptureCounts[9]{};
     UPROPERTY() TArray<TObjectPtr<USceneCaptureComponent2D>> Captures;
     UPROPERTY() TArray<TObjectPtr<UTextureRenderTarget2D>> Targets;

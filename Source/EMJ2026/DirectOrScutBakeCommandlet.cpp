@@ -68,8 +68,9 @@ int32 UDirectOrScutBakeCommandlet::Main(const FString& Params)
         Texture->ParameterName=TEXT("Texture"); Texture->Texture=LoadObject<UTexture>(nullptr,TEXT("/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture")); Input(TEXT("Texture"),Texture);
         Input(TEXT("UV"),UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionTextureCoordinate::StaticClass()));
         auto Scalar=[&](const TCHAR* Name,float Value) { auto* P=CastChecked<UMaterialExpressionScalarParameter>(UMaterialEditingLibrary::CreateMaterialExpression(M,UMaterialExpressionScalarParameter::StaticClass())); P->ParameterName=Name; P->DefaultValue=Value; Input(Name,P); };
-        Scalar(TEXT("Glass"),1); Scalar(TEXT("LensK1"),0); Scalar(TEXT("Clock"),0); Scalar(TEXT("SignalNoise"),.012f); Scalar(TEXT("Distortion"),0);
+        Scalar(TEXT("CleanDev"),1); Scalar(TEXT("Glass"),1); Scalar(TEXT("LensK1"),0); Scalar(TEXT("Clock"),0); Scalar(TEXT("SignalNoise"),.012f); Scalar(TEXT("Distortion"),0);
         Shader->Code=TEXT(R"HLSL(
+if(CleanDev>.5) return Texture2DSample(Texture,TextureSampler,UV);
 float2 p=UV*2-1;
 float2 uv=.5+.5*p*(1+(Glass*.012+LensK1)*dot(p,p));
 float row=floor(uv.y*640);

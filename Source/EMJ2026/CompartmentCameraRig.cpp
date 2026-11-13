@@ -83,7 +83,9 @@ void ACompartmentCameraRig::BeginPlay()
 void ACompartmentCameraRig::SetVisibleFeeds(int32 P,int32 A,bool Grid) { Active=FMath::Clamp(P,1,8); PiP=A; bGrid=Grid; }
 void ACompartmentCameraRig::Tick(float Delta)
 {
-    Super::Tick(Delta); CaptureClock+=Delta; if (CaptureClock<1.f/15) return; CaptureClock=0;
+    Super::Tick(Delta);
+    if(auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()) bCleanDevRendering=Sim->bCleanDevRendering;
+    CaptureClock+=Delta; if (CaptureClock<1.f/15) return; CaptureClock=0;
     auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
     for (int32 F=0;F<9;++F)
     {
@@ -96,6 +98,8 @@ void ACompartmentCameraRig::Tick(float Delta)
             if (S && R>=0) { Noise+=FVector::Distance(Captures[F]->GetComponentLocation(),Captures[2]->GetComponentLocation())/400000.f; for (const auto& U:S->Simulation.Bodies) if (U.bRegistered && U.Room==0 && U.State==EDirectOrScutUnitState::Working) Noise+=.006f; M->SetScalarParameterValue(TEXT("Distortion"),S->Simulation.Rooms[R].bIsPressurized?0:1); }
             M->SetScalarParameterValue(TEXT("SignalNoise"),Noise); M->SetScalarParameterValue(TEXT("Clock"),GetWorld()->GetTimeSeconds());
         }
+        if(FeedMaterials[F]) { FeedMaterials[F]->SetScalarParameterValue(TEXT("CleanDev"),bCleanDevRendering?1:0); FeedMaterials[F]->SetScalarParameterValue(TEXT("LensK1"),bCleanDevRendering?0:.035f); }
+        Captures[F]->ShowFlags.SetPostProcessing(!bCleanDevRendering);
         Captures[F]->CaptureScene(); ++CaptureCounts[F];
     }
 }

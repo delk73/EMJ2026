@@ -20,7 +20,7 @@ struct FShipAIEvent { FString Text; int32 Room=-1; };
 enum class EShipAIScreenMenu : uint8
 {
     None, AI, Events, Crew, RouteCrew, RouteRoom, RoutePretext,
-    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom
+    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask
 };
 struct FShipAIScreenChoice
 {
@@ -42,6 +42,10 @@ public:
     FDirectOrScutSimulation Simulation;
     bool bAutomaticAdvance=true;
     bool bAILink=false;
+    bool bCleanDevRendering=true, bWorkstationVisible=true;
+    TArray<EShipAIScreenMenu> MenuParents;
+    bool IsRoomSealed(int32 Room) const;
+    void MenuBack();
     int32 RequestedFeed=-1;
     uint64 EventRevision=0;
     TArray<FShipAIEvent> Events;

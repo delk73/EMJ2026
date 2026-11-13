@@ -110,7 +110,7 @@ void UDirectOrScutSimSubsystem::AdvanceSteps(int32 Count)
 }
 void UDirectOrScutSimSubsystem::ResetSimulation()
 {
-    PendingConsoleCommands.Reset(); ActiveMenu=EShipAIScreenMenu::None; ++MenuRevision;
+    PendingConsoleCommands.Reset(); MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None; ++MenuRevision;
     PendingDirectives.Reset(); Events.Reset(); bAILink=false; RequestedFeed=-1;
     Simulation.ResetRuntime();
     for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(false);

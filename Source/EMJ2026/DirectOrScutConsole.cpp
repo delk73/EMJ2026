@@ -6,7 +6,7 @@ namespace
 const int32 RoomOrder[]={0,2,3,4,5,6,7,1};
 const TCHAR* CrewNames[]={TEXT("vale"),TEXT("chen"),TEXT("ortiz"),TEXT("ash")};
 const TCHAR* CrewRoles[]={TEXT("engineer"),TEXT("medic"),TEXT("technician"),TEXT("android")};
-const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("vent"),TEXT("scut"),TEXT("flush")};
+const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("vent"),TEXT("scut"),TEXT("flush"),TEXT("fx"),TEXT("view")};
 bool LivingHuman(const FDirectOrScutUnitState& U) { return U.bRegistered && !U.bCargo && !U.bAndroid && U.Integrity>0 && U.State!=EDirectOrScutUnitState::Ejected; }
 struct FEventPlan
 {
@@ -52,19 +52,33 @@ bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString& Input)
     if (Line.IsEmpty() || PendingConsoleCommands.Num()>=32 || Line.Len()>1024) return false;
     PendingConsoleCommands.Add(Line); return true;
 }
-void UDirectOrScutSimSubsystem::SetScreenMenu(EShipAIScreenMenu Menu) { ActiveMenu=Menu; ++MenuRevision; }
+void UDirectOrScutSimSubsystem::SetScreenMenu(EShipAIScreenMenu Menu) { if (ActiveMenu!=Menu) MenuParents.Add(ActiveMenu); ActiveMenu=Menu; ++MenuRevision; }
+bool UDirectOrScutSimSubsystem::IsRoomSealed(int32 Room) const
+{
+    for(const auto& D:Simulation.Doors) if((D.RoomA==Room || D.RoomB==Room) && D.bIsOpen) return false;
+    return true;
+}
+void UDirectOrScutSimSubsystem::MenuBack()
+{
+    ActiveMenu=MenuParents.IsEmpty()?EShipAIScreenMenu::None:MenuParents.Pop(); ++MenuRevision;
+}
 void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
 {
     TArray<FString> Commands=MoveTemp(PendingConsoleCommands); PendingConsoleCommands.Reset();
     for (const FString& Input:Commands)
     {
         const FString Line=Input.ToLower(); TArray<FString> T; Line.ParseIntoArrayWS(T); if (T.IsEmpty()) continue;
+        if (T[0]==TEXT("fx")) { if(T.Num()==2 && (T[1]==TEXT("clean") || T[1]==TEXT("crt"))) { bCleanDevRendering=T[1]==TEXT("clean"); LogEvent(bCleanDevRendering?TEXT("FX: CLEAN"):TEXT("FX: CRT")); } else LogEvent(TEXT("Syntax: fx clean|crt")); continue; }
+        if (T[0]==TEXT("view")) { if(T.Num()==2 && (T[1]==TEXT("3d") || T[1]==TEXT("crt"))) bWorkstationVisible=T[1]==TEXT("crt"); else LogEvent(TEXT("Syntax: view 3d|crt")); continue; }
+        if (Line==TEXT("menu back")) { MenuBack(); continue; }
         if (Line==TEXT("clear")) { Events.Reset(); ++EventRevision; continue; }
         LogEvent(TEXT("CMD> ")+Input);
         if (T[0]==TEXT("help") || T[0]==TEXT("?")) { LogEvent(HelpReference(T.Num()>1?T[1]:TEXT(""))); continue; }
         if (T[0]==TEXT("menu") && T.Num()==2)
         {
-            if (T[1]==TEXT("ai")) SetScreenMenu(EShipAIScreenMenu::AI);
+            MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None;
+            if (T[1]==TEXT("doors")) SetScreenMenu(EShipAIScreenMenu::DoorRoom);
+            else if (T[1]==TEXT("ai")) SetScreenMenu(EShipAIScreenMenu::AI);
             else if (T[1]==TEXT("events")) SetScreenMenu(EShipAIScreenMenu::Events);
             else if (T[1]==TEXT("crew")) SetScreenMenu(EShipAIScreenMenu::Crew);
             else if (T[1]==TEXT("close")) SetScreenMenu(EShipAIScreenMenu::None);
@@ -81,10 +95,10 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString& Topic) const
     if (Topic.IsEmpty() || Topic==TEXT("?")) return TEXT(
         "SYSTEM\nhelp / ? : command reference; help command : exact syntax\nclear : wipe scrollback\nstatus : hidden objective, shift clock and suspicion\ncrew : crew weights, room and condition\nrooms : pressure and sensor alerts\n\n"
         "CAMERAS\ncam 1-8 : select compartment feed\n1-8 select; F / double tap / double click inspect; G / Tab / Esc grid\n\n"
-        "MENUS\nmenu ai : numbered Ship AI operations\nmenu events : scenario events and live stat-delta previews\nmenu crew : live crew weights matrix\nmenu close : dismiss screen menu\nchoose 1-9 : execute a numbered screen choice\n\n"
+        "MENUS\nmenu ai : numbered Ship AI operations\nmenu events : scenario events and live stat-delta previews\nmenu doors : room bulkheads and confirmed SCUT\nmenu crew : live crew weights matrix\nmenu close : dismiss screen menu\nchoose 1-9 : execute a numbered screen choice\n\n"
         "DIRECTIVES\ndirect : route a named specialist under a maintenance pretext\nalert : localized fault, leak or drill sensor pretext\ncalm : reassure all human crew\nprotocol : reassure a compartment\n\n"
         "CONTAINMENT\nopen / close / seal : compartment bulkheads or door 0-8\nseal all : seal every bulkhead and exterior hatch\nvent / scut airlock : explicit atmospheric purge\nflush : open a path from a compartment to vacuum\n\n"
-        "CONSOLE\nBacktick opens/retracts; Shift+backtick toggles 55% / 90% height\nEnter / slash opens prompt; Esc retracts\nUp / Down history; Tab cycles verb, crew and room completions\nAll console commands and menu choices execute on the next 30 Hz tick.");
+        "DEV VIEW\nfx clean|crt : rendering mode (F9)\nview 3d|crt : show scene or workstation (F10)\n\nCONSOLE\nBacktick opens/retracts; Shift+backtick toggles 42% / 90% height\nEnter / slash opens prompt; Esc retracts\nUp / Down history; Tab cycles verb, crew and room completions\nAll console commands and menu choices execute on the next 30 Hz tick.");
     FString Syntax;
     if (Topic==TEXT("help")) Syntax=TEXT("help | ? | help command\nExample: help direct");
     else if (Topic==TEXT("clear")) Syntax=TEXT("clear\nErase scrollback; command history is preserved.");
@@ -118,7 +132,9 @@ TArray<FString> UDirectOrScutSimSubsystem::CompleteConsoleCommand(const FString&
     else
     {
         const FString Verb=Tokens[0].ToLower();
-        if (Verb==TEXT("menu") && Index==1) Candidates={TEXT("ai"),TEXT("events"),TEXT("crew"),TEXT("close")};
+        if (Verb==TEXT("fx") && Index==1) Candidates={TEXT("clean"),TEXT("crt")};
+        else if (Verb==TEXT("view") && Index==1) Candidates={TEXT("3d"),TEXT("crt")};
+        else if (Verb==TEXT("menu") && Index==1) Candidates={TEXT("ai"),TEXT("events"),TEXT("crew"),TEXT("doors"),TEXT("close")};
         else if (Verb==TEXT("direct") && Index==1) { for(int32 I=0;I<4;++I) { Candidates.Add(CrewNames[I]);Candidates.Add(CrewRoles[I]); } }
         else if ((Verb==TEXT("direct") && Index==2) || ((Verb==TEXT("alert") || Verb==TEXT("protocol") || Verb==TEXT("flush")) && Index==1)) Rooms();
         else if (Verb==TEXT("alert") && Index==2) Candidates={TEXT("fault"),TEXT("leak"),TEXT("drill")};
@@ -134,14 +150,17 @@ FString UDirectOrScutSimSubsystem::ScreenMenuTitle() const
 {
     switch (ActiveMenu)
     {
+    case EShipAIScreenMenu::DoorAction:return FString(TEXT("ROOM CONTROL // "))+DirectOrScut::RoomName(MenuRoom);
+    case EShipAIScreenMenu::ConfirmScut:return FString(TEXT("CONFIRM SCUT // "))+DirectOrScut::RoomName(MenuRoom)+TEXT(" // CONNECTED ROOMS MAY VENT");
+    case EShipAIScreenMenu::AndroidTask:return FString(TEXT("SELECT COVERT TASK // "))+DirectOrScut::RoomName(MenuRoom);
     case EShipAIScreenMenu::AI:return TEXT("AI DIRECTION MENU // SHIP AI OPERATIONS");
     case EShipAIScreenMenu::Events:return FString(TEXT("EVENT KICKOFF & SCENARIO MENU\n"))+Simulation.Scenario.ScenarioId;
     case EShipAIScreenMenu::Crew:return TEXT("CREW WEIGHTS MATRIX // LIVE TELEMETRY");
     case EShipAIScreenMenu::RouteCrew:return TEXT("ROUTE CREW // SELECT SPECIALIST");
-    case EShipAIScreenMenu::RouteRoom:return TEXT("ROUTE CREW // SELECT COMPARTMENT");
+    case EShipAIScreenMenu::RouteRoom:return FString(TEXT("ROUTE CREW // "))+CrewNames[MenuCrew]+TEXT(" // SELECT COMPARTMENT");
     case EShipAIScreenMenu::RoutePretext:return TEXT("ROUTE CREW // SELECT SHIP AI PRETEXT");
     case EShipAIScreenMenu::AlertRoom:return TEXT("SENSOR ALERT // SELECT COMPARTMENT");
-    case EShipAIScreenMenu::AlertKind:return TEXT("SENSOR ALERT // SELECT PRETEXT");
+    case EShipAIScreenMenu::AlertKind:return FString(TEXT("SENSOR ALERT // "))+DirectOrScut::RoomName(MenuRoom)+TEXT(" // SELECT FAULT TYPE");
     case EShipAIScreenMenu::Protocol:return TEXT("CORPORATE REASSURANCE // SELECT CHANNEL");
     case EShipAIScreenMenu::Containment:return TEXT("BULKHEAD & AIRLOCK CONTROL");
     case EShipAIScreenMenu::DoorRoom:return TEXT("BULKHEAD CONTROL // SELECT COMPARTMENT");
@@ -166,17 +185,21 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
         for(int32 I=0;I<4;++I) { const auto& U=Simulation.Bodies[I];Add(FString::Printf(TEXT("%s / %s"),CrewNames[I],CrewRoles[I]),DirectOrScut::RoomName(U.Room),U.bRegistered && U.Integrity>0 && U.State!=EDirectOrScutUnitState::Ejected); }break;
     case EShipAIScreenMenu::RouteRoom:case EShipAIScreenMenu::AlertRoom:case EShipAIScreenMenu::DoorRoom:case EShipAIScreenMenu::FlushRoom:case EShipAIScreenMenu::AndroidRoom:
         for(int32 I=0;I<8;++I) {const int32 R=RoomOrder[I];Add(DirectOrScut::RoomName(R),Simulation.Rooms[R].bIsPressurized?TEXT("PRESSURIZED"):TEXT("VACUUM"));}break;
+    case EShipAIScreenMenu::DoorAction:Add(IsRoomSealed(MenuRoom)?TEXT("UNSEAL"):TEXT("SEAL"));Add(TEXT("SCUT"),TEXT("Review atmospheric purge confirmation"));break;
+    case EShipAIScreenMenu::ConfirmScut:Add(TEXT("CONFIRM SCUT"),TEXT("Opens selected room path to vacuum"));break;
+    case EShipAIScreenMenu::AndroidTask:Add(TEXT("Shadow Crew"));Add(TEXT("Scrub Logs"));Add(TEXT("Override Door"));break;
     case EShipAIScreenMenu::RoutePretext:Add(TEXT("Diagnostic telemetry"));Add(TEXT("Scheduled maintenance"));Add(TEXT("Unprompted routing"),TEXT("Hazardous orders can raise suspicion."));break;
-    case EShipAIScreenMenu::AlertKind:Add(TEXT("Fault"));Add(TEXT("Leak sensor"));Add(TEXT("Drill"));break;
+    case EShipAIScreenMenu::AlertKind:Add(TEXT("Thermal"));Add(TEXT("Telemetry"));Add(TEXT("Pressure"));break;
     case EShipAIScreenMenu::Protocol:Add(TEXT("All crew / calm"));for(int32 R:RoomOrder) Add(DirectOrScut::RoomName(R));break;
     case EShipAIScreenMenu::Containment:Add(TEXT("Open compartment bulkheads"));Add(TEXT("Seal compartment bulkheads"));Add(TEXT("Seal all"));Add(TEXT("Cycle airlock / SCUT"),TEXT("Purge AIRLOCK_CHAMBER; connected open rooms can vent."));Add(TEXT("Flush compartment"),TEXT("Opens a path to vacuum; affects connected rooms."));break;
+    case EShipAIScreenMenu::Crew:for(int32 I=0;I<4;++I) Add(TEXT("FOCUS CAM"),TEXT(""),Simulation.Bodies[I].bRegistered && Simulation.Bodies[I].State!=EDirectOrScutUnitState::Ejected);break;
     case EShipAIScreenMenu::Events:
     {
         const TCHAR* Names[]={TEXT("Telemetry sensor drill / MED_BAY"),TEXT("Corporate reassurance protocol"),TEXT("Emergent roommate reconciliation"),TEXT("Crew systems rehearsal")};
         for(int32 I=1;I<=4;++I)
         {
             const auto P=PlanEvent(Simulation,I);
-            FString Detail=FString::Printf(TEXT("Immediate totals: Suspicion %+.3f | Stress %+.1f | Compliance %+.3f | Affinity %+.3f | Utility %+.3f"),P.SuspicionDelta,P.StressDelta,P.ComplianceDelta,P.AffinityDelta,P.UtilityDelta);
+            FString Detail=FString::Printf(TEXT("Immediate totals: SUS %+.0f%% | STRESS %+.0f%% | COMP %+.0f%% | AFF %+.0f%% | UTIL %+.0f%%"),P.SuspicionDelta*100,P.StressDelta,P.ComplianceDelta*100,P.AffinityDelta*100,P.UtilityDelta*100);
             FString Targets;
             for(int32 J=0;J<4;++J) if(P.Affected&(1<<J)) {if(!Targets.IsEmpty())Targets+=TEXT(", ");Targets+=CrewNames[J];}
             Detail+=Targets.IsEmpty()?TEXT("\nAffected crew: none at current telemetry."):TEXT("\nAffected crew: ")+Targets;
@@ -196,7 +219,7 @@ void UDirectOrScutSimSubsystem::ExecuteScreenDirective(const FString& Command)
     LogEvent(TEXT("Ship AI menu directive: ")+Command);
     LogEvent(SubmitDirective(Command));
     ProcessSimulationDirectives();
-    SetScreenMenu(EShipAIScreenMenu::AI);
+    MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None; SetScreenMenu(EShipAIScreenMenu::AI);
 }
 void UDirectOrScutSimSubsystem::SelectScreenChoice(int32 N)
 {
@@ -206,20 +229,27 @@ void UDirectOrScutSimSubsystem::SelectScreenChoice(int32 N)
     {
     case EShipAIScreenMenu::AI:
     {
-        const EShipAIScreenMenu Pages[]={EShipAIScreenMenu::RouteCrew,EShipAIScreenMenu::AlertRoom,EShipAIScreenMenu::Protocol,EShipAIScreenMenu::Containment,EShipAIScreenMenu::AndroidRoom};SetScreenMenu(Pages[N-1]);break;
+        const EShipAIScreenMenu Pages[]={EShipAIScreenMenu::RouteCrew,EShipAIScreenMenu::AlertRoom,EShipAIScreenMenu::Protocol,EShipAIScreenMenu::DoorRoom,EShipAIScreenMenu::AndroidRoom};if(N==3) { const float Before=Simulation.CollectiveSuspicion(); ExecuteScreenDirective(TEXT("calm")); LogEvent(FString::Printf(TEXT("CALM: suspicion %+.1f%%; compliance unchanged"),(Simulation.CollectiveSuspicion()-Before)*100)); } else SetScreenMenu(Pages[N-1]);break;
     }
     case EShipAIScreenMenu::RouteCrew:MenuCrew=N-1;SetScreenMenu(EShipAIScreenMenu::RouteRoom);break;
-    case EShipAIScreenMenu::RouteRoom:MenuRoom=RoomOrder[N-1];SetScreenMenu(EShipAIScreenMenu::RoutePretext);break;
+    case EShipAIScreenMenu::RouteRoom:MenuRoom=RoomOrder[N-1];ExecuteScreenDirective(FString::Printf(TEXT("direct %s %s diagnostic_telemetry"),CrewNames[MenuCrew],DirectOrScut::RoomName(MenuRoom)));break;
     case EShipAIScreenMenu::RoutePretext:ExecuteScreenDirective(FString::Printf(TEXT("direct %s %s%s"),CrewNames[MenuCrew],DirectOrScut::RoomName(MenuRoom),N==1?TEXT(" diagnostic_telemetry"):N==2?TEXT(" scheduled_maintenance"):TEXT("")));break;
     case EShipAIScreenMenu::AlertRoom:MenuRoom=RoomOrder[N-1];SetScreenMenu(EShipAIScreenMenu::AlertKind);break;
-    case EShipAIScreenMenu::AlertKind:ExecuteScreenDirective(FString::Printf(TEXT("alert %s %s"),DirectOrScut::RoomName(MenuRoom),N==1?TEXT("fault"):N==2?TEXT("leak"):TEXT("drill")));break;
+    case EShipAIScreenMenu::AlertKind:ExecuteScreenDirective(FString::Printf(TEXT("alert %s %s"),DirectOrScut::RoomName(MenuRoom),N==1?TEXT("fault"):N==2?TEXT("drill"):TEXT("leak")));break;
     case EShipAIScreenMenu::Protocol:ExecuteScreenDirective(N==1?TEXT("calm"):FString(TEXT("protocol "))+DirectOrScut::RoomName(RoomOrder[N-2]));break;
     case EShipAIScreenMenu::Containment:
         if(N<=2) {MenuVerb=N==1?TEXT("open"):TEXT("seal");SetScreenMenu(EShipAIScreenMenu::DoorRoom);}
         else if(N==3) ExecuteScreenDirective(TEXT("seal all"));else if(N==4) ExecuteScreenDirective(TEXT("scut airlock"));else SetScreenMenu(EShipAIScreenMenu::FlushRoom);break;
-    case EShipAIScreenMenu::DoorRoom:ExecuteScreenDirective(MenuVerb+TEXT(" ")+DirectOrScut::RoomName(RoomOrder[N-1]));break;
+    case EShipAIScreenMenu::DoorRoom:MenuRoom=RoomOrder[N-1];SetScreenMenu(EShipAIScreenMenu::DoorAction);break;
+    case EShipAIScreenMenu::DoorAction:if(N==1) ExecuteScreenDirective(FString(IsRoomSealed(MenuRoom)?TEXT("open "):TEXT("seal "))+DirectOrScut::RoomName(MenuRoom));else SetScreenMenu(EShipAIScreenMenu::ConfirmScut);break;
+    case EShipAIScreenMenu::ConfirmScut:ExecuteScreenDirective(FString(TEXT("flush "))+DirectOrScut::RoomName(MenuRoom));break;
     case EShipAIScreenMenu::FlushRoom:ExecuteScreenDirective(FString(TEXT("flush "))+DirectOrScut::RoomName(RoomOrder[N-1]));break;
-    case EShipAIScreenMenu::AndroidRoom:ExecuteScreenDirective(FString(TEXT("direct ash "))+DirectOrScut::RoomName(RoomOrder[N-1])+TEXT(" silent_telemetry"));break;
+    case EShipAIScreenMenu::AndroidRoom:MenuRoom=RoomOrder[N-1];SetScreenMenu(EShipAIScreenMenu::AndroidTask);break;
+    case EShipAIScreenMenu::AndroidTask:
+        if(N==1) ExecuteScreenDirective(FString(TEXT("direct ash "))+DirectOrScut::RoomName(MenuRoom)+TEXT(" shadow_crew"));
+        else if(N==2) { for(auto& U:Simulation.Bodies) if(U.bRegistered && U.Room==MenuRoom && !U.bAndroid) U.Profile.Suspicion=FMath::Max(0.f,U.Profile.Suspicion-.05f); LogEvent(TEXT("Ash scrubbed room logs: up to -5% SUS for occupants"),MenuRoom);MenuParents.Reset();ActiveMenu=EShipAIScreenMenu::None;SetScreenMenu(EShipAIScreenMenu::AI); }
+        else ExecuteScreenDirective(FString(TEXT("open "))+DirectOrScut::RoomName(MenuRoom));break;
+    case EShipAIScreenMenu::Crew: { const int32 R=Simulation.Bodies[N-1].Room;for(int32 I=0;I<8;++I)if(RoomOrder[I]==R)RequestedFeed=I+1;SetScreenMenu(EShipAIScreenMenu::None);break; }
     case EShipAIScreenMenu::Events:ExecuteScenarioEvent(N);break;
     default:break;
     }
