@@ -3755,7 +3755,271 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                                                           EInlinePresentationIntent::Passive));
             Test->TestEqual(TEXT("Pacing and intentional bypass are presentation only"), Sim->SurveillanceStateHash(),
                             Hash);
+            Ready = Now + .2;
+            break;
+        case 25:
+        {
+            auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            auto &App = FSlateApplication::Get();
+            App.SetKeyboardFocus(Prompt);
+            const uint64 Before = Sim->SurveillanceStateHash();
+            const auto Press = [&](FKey K, bool Shift = false, bool Control = false)
+            {
+                const FModifierKeysState Mods(Shift, false, Control, false, false, false, false, false, false);
+                App.ProcessKeyDownEvent(FKeyEvent(K, Mods, 0, false, 0, 0));
+                App.ProcessKeyUpEvent(FKeyEvent(K, Mods, 0, false, 0, 0));
+            };
+            Prompt->SetText(FText::FromString(TEXT("sh")));
+            Test->TestEqual(TEXT("Grammar ghost completes terminal verb"), Workstation->GetGhostCompletion(),
+                            FString(TEXT("ow_cam")));
+            Test->TestTrue(TEXT("Ghost widget is hit-test invisible"),
+                           Find(TEXT("ScutGhostCompletion"))->GetVisibility() == EVisibility::HitTestInvisible);
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Tab accepts verb"), Prompt->GetText().ToString(), FString(TEXT("show_cam")));
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Tab cycles original grammar candidates"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_widget")));
+            Press(EKeys::Tab, true);
+            Test->TestEqual(TEXT("Shift Tab reverses cycle"), Prompt->GetText().ToString(), FString(TEXT("show_cam")));
+            Prompt->SetText(FText::FromString(TEXT("show_cam ")));
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Tab accepts room"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam reactor_core")));
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Room cycling retains argument context"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam ring_corridor")));
+            Prompt->SetText(FText::FromString(TEXT("show_widget ")));
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Widget grammar completes ECG"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_widget ecg")));
+            Prompt->SetText(FText::FromString(TEXT("show_widget ecg ")));
+            Press(EKeys::Tab);
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Subject grammar cycles to Chen"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_widget ecg chen")));
+            Press(EKeys::W, false, true);
+            Test->TestEqual(TEXT("Ctrl W erases last token"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_widget ecg ")));
+            Test->TestTrue(TEXT("All completion and editing retains prompt focus"), Workstation->IsPromptFocused());
+            const TCHAR *Rooms[] = {TEXT("reactor_core"),  TEXT("ring_corridor"), TEXT("bridge"),
+                                    TEXT("med_bay"),       TEXT("observation"),   TEXT("quarters"),
+                                    TEXT("server_alcove"), TEXT("airlock")};
+            Prompt->SetText(FText::FromString(TEXT("show_cam ")));
+            for (int32 Room = 0; Room < 8; ++Room)
+            {
+                Press(EKeys::Tab);
+                Test->TestEqual(TEXT("Every requested room ID cycles deterministically"), Prompt->GetText().ToString(),
+                                FString(TEXT("show_cam ")) + Rooms[Room]);
+            }
+            for (int32 Room = 0; Room < 8; ++Room)
+            {
+                Prompt->SetText(FText::FromString(FString(TEXT("show_cam ")) + Rooms[Room]));
+                Press(EKeys::Enter);
+                const auto &Last = Workstation->GetTerminalStreamEntries().Last();
+                Test->TestTrue(TEXT("Every completion room alias resolves to the matching optic"),
+                               Last.Attachment.IsSet() && Last.Attachment->Subject == Room);
+            }
+            for (int32 I = 0; I < 34; ++I)
+            {
+                Prompt->SetText(FText::FromString(FString::Printf(TEXT("show_cam %d"), I % 8)));
+                Press(EKeys::Enter);
+            }
+            Prompt->SetText(FText::FromString(TEXT("uncommitted draft")));
+            for (int32 I = 0; I < 40; ++I)
+            {
+                Press(EKeys::Up);
+            }
+            Test->TestEqual(TEXT("Command history bounds to newest 32"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam 2")));
+            for (int32 I = 0; I < 40; ++I)
+            {
+                Press(EKeys::Down);
+            }
+            Test->TestEqual(TEXT("History restores uncommitted bottom draft"), Prompt->GetText().ToString(),
+                            FString(TEXT("uncommitted draft")));
+            Press(EKeys::Escape);
+            Test->TestTrue(TEXT("Escape clears draft and retains focus"),
+                           Prompt->GetText().IsEmpty() && Workstation->IsPromptFocused());
+            for (FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five})
+            {
+                Prompt->SetText(FText::GetEmpty());
+                const uint64 Last = Workstation->GetTerminalStreamEntries().Last().Id;
+                Press(K);
+                App.ProcessKeyCharEvent(FCharacterEvent(TCHAR('1' + (K == EKeys::One     ? 0
+                                                                     : K == EKeys::Two   ? 1
+                                                                     : K == EKeys::Three ? 2
+                                                                     : K == EKeys::Four  ? 3
+                                                                                         : 4)),
+                                                        FModifierKeysState(), 0, false));
+                Test->TestTrue(TEXT("Empty prompt inquiry hotkey appends investigative prose"),
+                               Workstation->GetTerminalStreamEntries().Last().Id > Last);
+            }
+            Test->TestEqual(TEXT("Override probe stages actionable draft"), Prompt->GetText().ToString(),
+                            FString(TEXT("override ")));
+            Prompt->SetText(FText::GetEmpty());
+            Press(EKeys::Four);
+            Test->TestEqual(TEXT("Cross examination stages comparison"), Prompt->GetText().ToString(),
+                            FString(TEXT("compare ecg vale ")));
+            Test->TestEqual(TEXT("Typing, completion, history and inquiry remain read only"),
+                            Sim->SurveillanceStateHash(), Before);
+            Prompt->SetText(FText::FromString(TEXT("show_cam b")));
+            Ready = Now + .2;
+            break;
+        }
+        case 26:
+        {
+            auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            const uint64 Before = Sim->SurveillanceStateHash();
+            auto Chip = Find(TEXT("ScutGuide_bridge"));
+            Test->TestTrue(TEXT("Room parameter guide updates to argument chips"), Chip.IsValid());
+            if (Chip)
+            {
+                Click(Chip.ToSharedRef());
+            }
+            Test->TestEqual(TEXT("Clicking guide chip completes argument"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam bridge")));
+            Prompt->SetText(FText::FromString(TEXT("show_cam med_bay")));
+            Click(Find(TEXT("ScutStationRoom2")).ToSharedRef());
+            Test->TestEqual(TEXT("Deck click swaps staged room target"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam bridge")));
+            Prompt->SetText(FText::FromString(TEXT("compare ecg vale ")));
+            Click(Find(TEXT("ScutSubject1")).ToSharedRef());
+            Test->TestEqual(TEXT("Subject click fills pending second comparison target"), Prompt->GetText().ToString(),
+                            FString(TEXT("compare ecg vale chen")));
+            for (int32 I = 0; I < 5; ++I)
+            {
+                Prompt->SetText(FText::GetEmpty());
+                const uint64 Last = Workstation->GetTerminalStreamEntries().Last().Id;
+                Click(Find(*FString::Printf(TEXT("ScutInquiry%d"), I + 1)).ToSharedRef());
+                Test->TestTrue(TEXT("Each inquiry softkey emits investigative prose"),
+                               Workstation->GetTerminalStreamEntries().Last().Id > Last);
+            }
+            Test->TestEqual(TEXT("Guide, deck and softkey clicks preserve hash"), Sim->SurveillanceStateHash(), Before);
+            Prompt->SetText(FText::GetEmpty());
+            Key(EKeys::R);
+            Test->TestTrue(TEXT("R enters read only forensic mode"), Workstation->IsForensicScrubbing());
+            Ready = Now + .2;
+            break;
+        }
+        case 27:
+        {
+            const uint64 Before = Sim->SurveillanceStateHash();
+            for (int32 I = 0; I < 18; ++I)
+            {
+                Click(Find(TEXT("ScutScrub0")).ToSharedRef());
+            }
+            Test->TestEqual(TEXT("Forensic stepping clamps at minus fifteen seconds"), Workstation->GetScrubOffset(),
+                            -15.f);
+            Click(Find(TEXT("ScutScrub1")).ToSharedRef());
+            Test->TestEqual(TEXT("Forensic forward step is one second"), Workstation->GetScrubOffset(), -14.f);
+            Click(Find(TEXT("ScutScrub2")).ToSharedRef());
+            Test->TestEqual(TEXT("Scrub controls cannot mutate simulation"), Sim->SurveillanceStateHash(), Before);
+            Hash = Before;
+            Ready = Now + .3;
+            break;
+        }
+        case 28:
+            Test->TestTrue(TEXT("Read only playback progresses on presentation clock"),
+                           Workstation->GetScrubOffset() > -14.f);
+            Test->TestEqual(TEXT("Forensic playing never advances simulation"), Sim->SurveillanceStateHash(), Hash);
+            Key(EKeys::Escape);
+            Test->TestFalse(TEXT("Escape exits forensic mode"), Workstation->IsForensicScrubbing());
+            Test->TestTrue(TEXT("Escape from scrub focuses prompt"), Workstation->IsPromptFocused());
+            // Deliberately advance authority only to populate the recorder, outside interaction hash assertions.
+            Sim->QueueConsoleCommand(TEXT("start_experiment"));
+            Sim->AdvanceSteps(481);
+            Test->TestEqual(TEXT("Fixed tick recorder is bounded at 451 samples"), Sim->ForensicSampleCount(), 451);
+            {
+                const uint64 Latest = Sim->LatestForensicTick();
+                const uint64 Before = Sim->SurveillanceStateHash();
+                const auto Oldest = Sim->ReadForensicSample(Latest - 450);
+                Test->TestTrue(TEXT("Recorder retains full fifteen second endpoint"),
+                               Oldest.IsSet() && Oldest->Tick == Latest - 450);
+                Test->TestFalse(TEXT("Recorder does not invent expired coverage"),
+                                Sim->ReadForensicSample(Latest - 451).IsSet());
+                Test->TestFalse(TEXT("Recorder does not invent future coverage"),
+                                Sim->ReadForensicSample(Latest + 1).IsSet());
+                Test->TestEqual(TEXT("History lookup does not mutate surveillance"), Sim->SurveillanceStateHash(),
+                                Before);
+                Hash = Before;
+            }
+            Key(EKeys::R);
+            Ready = Now + .2;
+            break;
+        case 29:
+            Click(Find(TEXT("ScutScrub0")).ToSharedRef());
+            Capture(TEXT("GuidedForensicTerminalPIE.png"));
+            Test->TestEqual(TEXT("Recorded playback preserves authoritative hash"), Sim->SurveillanceStateHash(), Hash);
+            Click(Find(TEXT("ScutScrub3")).ToSharedRef());
+            Test->TestFalse(TEXT("Return live closes forensic bar"), Workstation->IsForensicScrubbing());
+            StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")))->SetText(FText::FromString(TEXT("show")));
+            Workstation->SetConsoleOpen(true);
+            Ready = Now + .2;
+            break;
+        case 30:
+        {
+            const TCHAR *Tags[] = {TEXT("ScutPromptLine"), TEXT("ScutPrompt"), TEXT("ScutBlockCursor"),
+                                   TEXT("ScutGhostCompletion")};
+            const bool Visible = Workstation->IsBlockCursorVisible();
+            BlinkOn |= Visible;
+            BlinkOff |= !Visible;
+            const auto Cursor = Find(TEXT("ScutBlockCursor"));
+            Test->TestEqual(TEXT("Cursor is a native painted leaf, not font text"), Cursor->GetTypeAsString(),
+                            FString(TEXT("SDirectOrScutPromptCursor")));
+            Test->TestTrue(TEXT("Painted cursor cannot intercept prompt input"),
+                           Cursor->GetVisibility() == EVisibility::HitTestInvisible);
+            Test->TestTrue(TEXT("Cursor repaint remains live through Slate invalidation caching"),
+                           Cursor->IsVolatile());
+            const auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            const float TextWidth = FSlateApplication::Get()
+                                        .GetRenderer()
+                                        ->GetFontMeasureService()
+                                        ->Measure(Prompt->GetText(), FCoreStyle::GetDefaultFontStyle("Regular", 14))
+                                        .X;
+            const auto &PromptGeometry = Prompt->GetCachedGeometry();
+            const float InsertionX = PromptGeometry.GetLayoutBoundingRect().Left + TextWidth * PromptGeometry.Scale;
+            const auto CursorRect = Cursor->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto GhostRect = Find(TEXT("ScutGhostCompletion"))->GetCachedGeometry().GetLayoutBoundingRect();
+            Test->TestTrue(TEXT("Ghost suffix starts flush at measured typed-text end with zero split-word gap"),
+                           FMath::Abs(GhostRect.Left - InsertionX) <= .01f);
+            Test->TestTrue(TEXT("Native cursor starts at insertion point without overlapping typed glyphs"),
+                           CursorRect.Left >= InsertionX - .01f && FMath::Abs(CursorRect.Left - InsertionX) <= .01f);
+            Test->TestEqual(TEXT("show and ghost _cam form the unbroken show_cam command"),
+                            Prompt->GetText().ToString() + Workstation->GetGhostCompletion(),
+                            FString(TEXT("show_cam")));
+            for (int32 I = 0; I < 4; ++I)
+            {
+                const auto Rect = Find(Tags[I])->GetCachedGeometry().GetLayoutBoundingRect();
+                if (!BlinkStarted)
+                {
+                    BlinkBounds.Add(Rect);
+                }
+                else
+                {
+                    const auto &Before = BlinkBounds[I];
+                    Test->TestTrue(
+                        FString::Printf(TEXT("%s bounds invariant across blink phases within 0.01"), Tags[I]),
+                        FMath::Abs(Rect.Left - Before.Left) <= .01f && FMath::Abs(Rect.Top - Before.Top) <= .01f &&
+                            FMath::Abs(Rect.Right - Before.Right) <= .01f &&
+                            FMath::Abs(Rect.Bottom - Before.Bottom) <= .01f);
+                }
+            }
+            if (!BlinkStarted)
+            {
+                BlinkStarted = Now;
+            }
+            Test->TestEqual(TEXT("Blinking and ghost preview preserve authoritative state"),
+                            Sim->SurveillanceStateHash(), Hash);
+            if (Now - BlinkStarted < .8)
+            {
+                --Stage;
+                Ready = Now + .02;
+                break;
+            }
+            Test->TestTrue(TEXT("Geometry sampled on actual PIE frames in both blink phases"), BlinkOn && BlinkOff);
+            Capture(TEXT("PromptBlinkInvariantPIE.png"));
             return true;
+        }
         }
         return false;
     }
@@ -3765,6 +4029,9 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
     int32 Stage = 0, ActualReportedCrewRoom = -1;
     uint64 Hash = 0, Tick = 0, OriginalOpticId = 0, OriginalObservationTick = 0;
     bool SawCursorOn = false, SawCursorOff = false;
+    bool BlinkOn = false, BlinkOff = false;
+    double BlinkStarted = 0;
+    TArray<FSlateRect> BlinkBounds;
     uint64 ComparisonId = 0;
     float OcularStart = 0;
     TArray<uint64> IdleAttachmentIds;

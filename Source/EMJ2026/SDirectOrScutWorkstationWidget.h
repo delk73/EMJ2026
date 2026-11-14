@@ -20,7 +20,8 @@ enum class ETerminalInstrument : uint8
     ECG,
     Schematic,
     Reticle,
-    StationMap
+    StationMap,
+    Forensic
 };
 enum class EInlineAttachmentKind : uint8
 {
@@ -226,7 +227,35 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     int32 HistoryCursor = 0, CompletionCursor = 0;
     FString HistoryDraft, LastCompletion;
     void BrowseHistory(int32 Direction);
-    void Autocomplete();
+    void Autocomplete(int32 Direction = 1);
+    TArray<FString> CompletionCandidates(const FString &Input, bool Filter = true) const;
+    FString GhostCompletion() const;
+    void InsertArgument(const FString &Token);
+    bool StageTarget(const FString &Token, bool Crew);
+    void RefreshParameterGuide();
+    TSharedPtr<class SHorizontalBox> ParameterGuide;
+    bool bForensicScrub = false, bScrubPlaying = false;
+    float ScrubOffset = 0;
+    uint64 ScrubAnchor = 0;
+    void ToggleScrub();
+    void StepScrub(float Seconds);
+    FString ForensicReadout() const;
+
+  public:
+    bool IsForensicScrubbing() const
+    {
+        return bForensicScrub;
+    }
+    float GetScrubOffset() const
+    {
+        return ScrubOffset;
+    }
+    FString GetGhostCompletion() const
+    {
+        return GhostCompletion();
+    }
+
+  private:
     void RebuildMenu();
     void RefreshMenuChoices();
     void Rebuild();

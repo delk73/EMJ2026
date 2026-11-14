@@ -32,6 +32,17 @@ struct FSurveillanceCameraState
     uint32 TamperTicks = 0, RepairGraceTicks = 0;
 };
 
+// Value-only forensic evidence captured after fixed ticks. No renderer ownership or rewind API.
+struct FForensicOpticSample
+{
+    uint64 Tick = 0;
+    ECameraFeedState Cameras[8]{};
+    bool Pressurized[8]{};
+    int32 CrewRooms[4]{};
+    FVector2D CrewPositions[4]{};
+    float BPM[4]{};
+};
+
 UENUM()
 enum class ERoomId : uint8
 {
@@ -303,6 +314,14 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     void QueueCameraInspection(int32 Room);
     FString BriefingObjective() const;
     uint64 SurveillanceStateHash() const;
+    // A copy prevents callers retaining pointers into the rolling ring.
+    TOptional<FForensicOpticSample> ReadForensicSample(uint64 Tick) const;
+    int32 ForensicSampleCount() const
+    {
+        return ForensicCount;
+    }
+    uint64 LatestForensicTick() const;
+
     static const TCHAR *CameraStateName(ECameraFeedState State);
     EExperimentEnding ExperimentEnding = EExperimentEnding::None;
     float PeakSuspicion = 0;
@@ -355,6 +374,10 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     static int32 ResolveRoom(const FString &Name);
 
   private:
+    static constexpr int32 ForensicCapacity = 451;
+    FForensicOpticSample ForensicHistory[ForensicCapacity];
+    int32 ForensicHead = 0, ForensicCount = 0;
+    void RecordForensicSample();
     FSurveillanceCameraState Cameras[8];
     uint32 TallyTicks[12]{};
     int32 TallyRoom[12]{};

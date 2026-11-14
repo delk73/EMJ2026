@@ -1008,6 +1008,7 @@ void UDirectOrScutSimSubsystem::FixedStep()
         }
     }
     EvaluateExperimentEnding();
+    RecordForensicSample();
     SynchronizeActors();
 }
 
@@ -1130,6 +1131,7 @@ void UDirectOrScutSimSubsystem::ResolveExperiment(EExperimentEnding Result)
 // Briefing and surveillance.
 void UDirectOrScutSimSubsystem::ResetSurveillance()
 {
+    ForensicHead = ForensicCount = 0;
     for (auto &C : Cameras)
     {
         C = FSurveillanceCameraState{};
@@ -3947,4 +3949,43 @@ FString UDirectOrScutSimSubsystem::RoomSurveillanceBadges(int32 Room) const
         Badges += FString::Printf(TEXT(" [UPLINK BREACH: %.1fs]"), BreachTicks / 30.f);
     }
     return Badges;
+}
+
+void UDirectOrScutSimSubsystem::RecordForensicSample()
+{
+    auto &Sample = ForensicHistory[ForensicHead];
+    Sample.Tick = Simulation.TickIndex;
+    for (int32 Room = 0; Room < 8; ++Room)
+    {
+        Sample.Cameras[Room] = CameraFeedState(Room);
+        Sample.Pressurized[Room] = Simulation.Rooms[Room].bIsPressurized;
+    }
+    for (int32 Crew = 0; Crew < 4; ++Crew)
+    {
+        Sample.CrewRooms[Crew] = Simulation.Bodies[Crew].Room;
+        Sample.CrewPositions[Crew] = Simulation.Bodies[Crew].Position;
+        Sample.BPM[Crew] = Simulation.Bodies[Crew].Profile.HeartRateBPM;
+    }
+    ForensicHead = (ForensicHead + 1) % ForensicCapacity;
+    ForensicCount = FMath::Min(ForensicCount + 1, ForensicCapacity);
+}
+uint64 UDirectOrScutSimSubsystem::LatestForensicTick() const
+{
+    return ForensicCount ? ForensicHistory[(ForensicHead + ForensicCapacity - 1) % ForensicCapacity].Tick : 0;
+}
+TOptional<FForensicOpticSample> UDirectOrScutSimSubsystem::ReadForensicSample(uint64 Tick) const
+{
+    if (!ForensicCount || Tick > LatestForensicTick())
+    {
+        return {};
+    }
+    for (int32 Age = 0; Age < ForensicCount; ++Age)
+    {
+        const auto &Sample = ForensicHistory[(ForensicHead + ForensicCapacity - 1 - Age) % ForensicCapacity];
+        if (Sample.Tick <= Tick && Tick - Sample.Tick <= 450)
+        {
+            return Sample;
+        }
+    }
+    return {};
 }
