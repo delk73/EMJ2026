@@ -64,6 +64,7 @@ void FDirectOrScutSimulation::ResetRuntime()
         U=FDirectOrScutUnitState{};
         U.bRegistered=Old.bRegistered; U.bAndroid=Old.bAndroid;
         U.Profile=FCrewProfile{}; const int32 I=int32(&U-Bodies); U.Profile.Compliance=U.bAndroid?1.f:.45f+.18f*I; U.Profile.Composure=U.bAndroid?1.f:.35f+.2f*I; U.Profile.Affinity=U.bAndroid?-.15f:(I==1?-.4f:.7f); U.Profile.Utility=U.bAndroid?1.f:.6f+.1f*I; U.Profile.Suspicion=U.bAndroid?0:.02f; U.Profile.RespirationRateRPM=U.bAndroid?0:12;
+        U.bStagingManaged=Old.bStagingManaged;U.bRoomRouteLocked=false;
         U.bSuited=Old.bSuited; U.Position=U.InitialPosition=Old.InitialPosition;
         U.Room=U.AssignedRoom=U.InitialRoom=Old.InitialRoom;
     }
@@ -248,7 +249,7 @@ bool FDirectOrScutSimulation::AssignRoom(int32 Unit,int32 Room)
 {
     if (Unit<0 || Unit>=MaxBodies || Room<0 || Room>=RoomCount) return false;
     auto& U=Bodies[Unit];
-    if (!U.bRegistered || U.State==EDirectOrScutUnitState::Panic || U.State==EDirectOrScutUnitState::Ejected || U.Integrity<=0) return false;
+    if (!U.bRegistered || U.bRoomRouteLocked || U.State==EDirectOrScutUnitState::Panic || U.State==EDirectOrScutUnitState::Ejected || U.Integrity<=0) return false;
     U.TaskProgress=0; U.AssignedRoom=Room; U.RouteRevision=MAX_uint32;
     if (!U.bCrossing) { U.RouteCount=0; U.ActiveDoor=-1; }
     U.State=EDirectOrScutUnitState::MovingToRoom;
@@ -339,6 +340,17 @@ void FDirectOrScutSimulation::UpdateBody(FDirectOrScutUnitState& U)
     if (Vacuum && !U.bAndroid && !U.bSuited) U.Integrity=FMath::Max(0.0,U.Integrity-35*FixedDelta);
     if (Vacuum && !U.bAndroid) { U.State=EDirectOrScutUnitState::Panic; U.Stress=100; }
     if (!Vacuum && U.Integrity<=0) { U.State=EDirectOrScutUnitState::Panic; return; }
+    if(U.bStagingManaged && !Vacuum){
+        if(!U.bRoomRouteLocked && U.State==EDirectOrScutUnitState::Panic && U.Room==3){
+            U.Stress=FMath::Max(0.,U.Stress-12*FixedDelta);
+            if(U.Stress<=25){U.State=EDirectOrScutUnitState::Working;U.AssignedRoom=3;}
+        }
+        if(!U.bRoomRouteLocked && U.State==EDirectOrScutUnitState::Working){
+            if(bExperiment)U.TaskProgress+=FixedDelta*U.Profile.Utility;
+            if(!U.bAndroid)U.Stress=FMath::Min(100.,U.Stress+1.5*FixedDelta);
+        }
+        return;
+    }
     const double Speed=Vacuum?540.0:U.State==EDirectOrScutUnitState::Panic?190.0:145.0*(bExperiment?(.5+U.Profile.Utility*.5):1.);
     if (U.bCrossing)
     {
@@ -455,6 +467,7 @@ uint64 FDirectOrScutSimulation::StateHash() const
     for (const auto& R:Rooms) Bytes(&R.bIsPressurized,sizeof(bool));
     for (const auto& U:Bodies)
     {
+        Bytes(&U.bStagingManaged,sizeof(bool));Bytes(&U.bRoomRouteLocked,sizeof(bool));
         Bytes(&U.bRegistered,sizeof(bool)); if (!U.bRegistered) continue;
         Bytes(&U.Position,sizeof(U.Position)); Bytes(&U.Room,sizeof(U.Room)); Bytes(&U.AssignedRoom,sizeof(U.AssignedRoom));
         Bytes(&U.State,sizeof(U.State)); Bytes(&U.Integrity,sizeof(U.Integrity)); Bytes(&U.Stress,sizeof(U.Stress));
@@ -511,7 +524,8 @@ void FDirectOrScutSimulation::UpdatePsychology()
             if (V.bAndroid && V.AssignedRoom==7 && V.State==EDirectOrScutUnitState::MovingToRoom) U.Profile.Suspicion+=.02f*float(FixedDelta);
         }
         U.Profile.Suspicion=FMath::Clamp(U.Profile.Suspicion,0.f,1.f);
-        if (U.Stress>40+60*U.Profile.Composure && U.State!=EDirectOrScutUnitState::Panic) ForcePanic(I);
+        if(U.bRoomRouteLocked)continue; // A committed route owns destination and state until arrival/cancellation.
+        if ((U.bStagingManaged?U.Stress>=75:U.Stress>40+60*U.Profile.Composure) && U.State!=EDirectOrScutUnitState::Panic) ForcePanic(I);
         if (U.Profile.Suspicion>.75f && U.State!=EDirectOrScutUnitState::Panic)
         {
             const int32 OverrideRoom=I%2?0:2;

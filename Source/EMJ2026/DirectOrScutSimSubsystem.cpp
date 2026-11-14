@@ -73,6 +73,7 @@ void UDirectOrScutSimSubsystem::RegisterCrew(ACrewUnitBlockout* Crew)
     BodyActors[I]=Crew;
     Simulation.RegisterBody(I,FVector2D(DirectOrScut::CrewSpawnPoint(I)),I+2,Crew->bAndroid);
     Simulation.Bodies[I].bSuited=Crew->bSuited;
+    Simulation.Bodies[I].bStagingManaged=true;
     InitializeCrewStaging(I);
     SynchronizeActors();
 }
@@ -201,12 +202,9 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
             const TCHAR* Roles[]={TEXT("engineer"),TEXT("medic"),TEXT("technician"),TEXT("android")};
             int32 I=-1; for (int32 J=0;J<4;++J) if (T[1]==Names[J] || T[1]==Roles[J]) I=J;
             R=ResolveRoom(T[2]);
-            const float Before=I>=0?Simulation.Bodies[I].Profile.Suspicion:0;
-            const bool OK=Simulation.AssignTask(I,R,T.Num()>3);
-            if(OK && I>=0 && I<4){CrewStaging[I].DirectiveRoom=R;CrewStaging[I].DirectiveArrivalTicks=0;}
-            const bool Suspicious=I>=0 && Simulation.Bodies[I].Profile.Suspicion>Before;
-            const TCHAR* Outcome=OK?TEXT("complied"):I>=0 && Simulation.Bodies[I].Profile.Suspicion<=.75f?TEXT("hesitated / needs physical trigger"):TEXT("refused");
-            LogEvent(FString::Printf(TEXT("Ship AI: diagnostic maintenance routing %s -> %s: %s%s"),*T[1],*T[2],Outcome,Suspicious?TEXT("; suspicion increased"):TEXT("")),R);
+            const bool OK=StartCrewRoute(I,R,true,T.Num()>3);
+            const TCHAR* Outcome=!OK?TEXT("invalid subject or destination"):CrewStaging[I].bRouteBlocked?TEXT("committed / waiting for sealed bulkhead"):TEXT("committed");
+            LogEvent(FString::Printf(TEXT("Ship AI: diagnostic maintenance routing %s -> %s: %s"),*T[1],*T[2],Outcome),R);
         }
         else if (Op==TEXT("alert") && R>=0 && T.Num()==3 && (T[2]==TEXT("fault") || T[2]==TEXT("leak") || T[2]==TEXT("drill")))
         { Simulation.TriggerPretextAlert(R); LogEvent(TEXT("Ship AI: localized sensor anomaly; diagnostic personnel requested."),R); }

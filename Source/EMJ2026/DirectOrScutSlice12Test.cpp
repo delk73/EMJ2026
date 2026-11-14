@@ -51,13 +51,18 @@ public:
             T->TestTrue(TEXT("Chen triage posture"),S->CrewStaging[1].Posture==ECrewStagingPosture::Triage);
             // Exercise each independent agenda without renderer or variable frame-time input.
             M.Rooms[2].AlertSeconds=M.Rooms[6].AlertSeconds=0;
-            S->SecretAgendas[2].bActivated=true;M.Bodies[2].Integrity=100;M.Bodies[2].Room=M.Bodies[2].AssignedRoom=6;
+            // Isolate audit dwell from Ash's independent containment completion/door cycle.
+            S->SecretAgendas[3].bCompleted=true;
+            S->CancelCrewRoute(2);S->SecretAgendas[2].bActivated=true;M.Bodies[2].Integrity=100;M.Bodies[2].Room=M.Bodies[2].AssignedRoom=6;
             const float AuditSuspicion=M.Bodies[2].Profile.Suspicion;
             for(int32 N=0;N<151;++N){M.Bodies[2].State=EDirectOrScutUnitState::Working;S->StepStagingAndAgendas();}
+            T->AddInfo(FString::Printf(TEXT("Audit fixture: progress=%u completed=%d phase=%d room=%d assigned=%d alert=%.1f"),S->SecretAgendas[2].Progress,S->SecretAgendas[2].bCompleted,int32(S->CrewStaging[2].RoutePhase),M.Bodies[2].Room,M.Bodies[2].AssignedRoom,M.Rooms[6].AlertSeconds));
             T->TestTrue(TEXT("Ortiz completes audit and raises suspicion"),S->SecretAgendas[2].bCompleted && M.Bodies[2].Profile.Suspicion>AuditSuspicion);
-            M.Bodies[0].Integrity=0;M.Bodies[1].Room=M.Bodies[1].AssignedRoom=2;
+            // This isolated agenda-dwell fixture explicitly cancels transport before relocating Chen.
+            S->CancelCrewRoute(1);M.Bodies[0].Integrity=0;M.Bodies[1].Room=M.Bodies[1].AssignedRoom=2;
             for(int32 N=0;N<151;++N){M.Bodies[1].State=EDirectOrScutUnitState::Working;S->StepStagingAndAgendas();}
             T->TestTrue(TEXT("Chen broadcasts casualty distress log"),S->SecretAgendas[1].bCompleted);
+            S->SecretAgendas[3]=FCrewSecretAgenda{};
             for(int32 I=0;I<3;++I)M.Bodies[I].Profile.Suspicion=.65f;
             M.Bodies[3].Room=M.Bodies[3].AssignedRoom=2;
             for(int32 N=0;N<151;++N){M.Bodies[3].State=EDirectOrScutUnitState::Working;S->StepStagingAndAgendas();}

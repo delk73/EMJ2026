@@ -62,6 +62,11 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
     const bool DoorCycle=StagingDoorRevision!=Simulation.DoorRevision;
     StagingDoorRevision=Simulation.DoorRevision;
     bool Taken[4]{};TSet<int32> Reserved;
+    int32 PreviousAnchors[4];
+    for(int32 I=0;I<4;++I){
+        auto& C=CrewStaging[I];PreviousAnchors[I]=C.Anchor;
+        if(IsCrewRouteLocked(I) || C.AnchorHoldTicks>0){Taken[I]=true;if(C.Anchor>=0)Reserved.Add(C.Anchor);}
+    }
     auto Reserve=[&](int32 I,EStagingSlotRole StagingRole,int32 MinimumSlot=0) {
         auto& C=CrewStaging[I];C.Anchor=INDEX_NONE;
         for(int32 K=0;K<SetAnchors.Num();++K)if(const auto* A=SetAnchors[K].Get())
@@ -71,10 +76,13 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
     for(int32 I=0;I<3;++I)if(Simulation.Bodies[I].bRegistered && Simulation.Bodies[I].Integrity<=0)Casualty=true;
     for(int32 I=0;I<4;++I) {
         auto& U=Simulation.Bodies[I];auto& C=CrewStaging[I];auto& A=SecretAgendas[I];
-        C.Partner=INDEX_NONE;C.bHuddle=false;C.Anchor=INDEX_NONE;
+        C.Partner=INDEX_NONE;C.bHuddle=false;
+        if(!Taken[I])C.Anchor=INDEX_NONE;
         if(!U.bRegistered || U.Room<0 || U.Room>=8 || U.State==EDirectOrScutUnitState::Ejected)continue;
         if(IsCameraTallyActive(U.Room))++A.ObservedTicks;
         if(C.Room!=U.Room)InitializeCrewStaging(I);
+        if(IsCrewRouteLocked(I))continue;
+        if(C.AnchorHoldTicks>0)--C.AnchorHoldTicks;
         const bool PlayerOrder=C.DirectiveRoom>=0;
         if(PlayerOrder && U.Room==C.DirectiveRoom && U.State==EDirectOrScutUnitState::Working){
             if(++C.DirectiveArrivalTicks>=150){C.DirectiveRoom=INDEX_NONE;C.DirectiveArrivalTicks=0;}
@@ -90,14 +98,18 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         int32 Goal=-1;
         if(A.bActivated && !A.bCompleted && !PlayerOrder) {
             if(I==0)Goal=IsCameraTallyActive(0)?6:0;
-            if(I==1)Goal=2;
+            if(I==1){
+                Goal=2;
+                // Complete hands-on medical care before leaving MED_BAY to broadcast.
+                if(U.Room==3)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].bRegistered && Simulation.Bodies[J].Room==3 && Simulation.Bodies[J].Integrity<70){Goal=3;break;}
+            }
             if(I==2)Goal=6;
             if(I==3){
                 Goal=2;for(int32 R=0;R<8;++R)if(CameraFeedState(R)!=ECameraFeedState::Online){Goal=R;break;}
             }
             if(!Interrupted) {
-                if(U.AssignedRoom!=Goal)Simulation.AssignRoom(I,Goal);
-                if(U.Room==Goal && U.State==EDirectOrScutUnitState::Working) {
+                if(U.AssignedRoom!=Goal)StartCrewRoute(I,Goal);
+                if(U.Room==Goal && U.State==EDirectOrScutUnitState::Working && !(I==1 && Goal==3)) {
                     ++A.Progress;
                     if(I==0 && IsCameraTallyActive(U.Room))U.Profile.Suspicion=FMath::Min(1.f,U.Profile.Suspicion+.002f);
                     if(A.Progress>=150){
@@ -110,14 +122,16 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
                 }
             }
         }
+        if(IsCrewRouteLocked(I)){Taken[I]=true;if(C.Anchor>=0)Reserved.Add(C.Anchor);continue;}
         if(I==2 && A.bCompleted && Simulation.TickIndex%1800==0){A.bCompleted=false;A.Progress=0;}
         if(I==3 && A.bCompleted && Simulation.TickIndex%300==0){A.bCompleted=false;A.Progress=0;}
-        if(I==1 && !Casualty && !PlayerOrder)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].bRegistered && Simulation.Bodies[J].Integrity<70){Simulation.AssignRoom(I,3);Simulation.AssignRoom(J,3);break;}
+        if(I==1 && !Casualty && !PlayerOrder)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].bRegistered && Simulation.Bodies[J].Integrity<70){StartCrewRoute(I,3);if(!IsCrewRouteLocked(J))StartCrewRoute(J,3);break;}
         if(I==1 && U.Room==3)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].Room==3 && Simulation.Bodies[J].Integrity<70 && Simulation.Rooms[3].bIsPressurized){
             Reserve(I,EStagingSlotRole::RecoveryPod,2);C.Posture=ECrewStagingPosture::Triage;Taken[I]=true;
             if(C.Anchor>=0 && FVector::Dist(C.Position,CrewStaging[J].Position)<300)Simulation.Bodies[J].Integrity=FMath::Min(70.,Simulation.Bodies[J].Integrity+.06);
             break;
         }
+        if(IsCrewRouteLocked(I)){Taken[I]=true;if(C.Anchor>=0)Reserved.Add(C.Anchor);continue;}
         if(!Taken[I] && U.AssignedRoom!=U.Room && Simulation.FirstDoorOnPath(U.Room,U.AssignedRoom)<0) {
             Reserve(I,EStagingSlotRole::AirlockThreshold);C.Posture=ECrewStagingPosture::Blocked;Taken[I]=true;
             U.Profile.HeartRateBPM=FMath::Max(U.Profile.HeartRateBPM,120.f);
@@ -129,7 +143,7 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
     }
     for(int32 I=0;I<4;++I)for(int32 J=I+1;J<4;++J) {
         auto& U=Simulation.Bodies[I];auto& V=Simulation.Bodies[J];
-        if(Taken[I] || Taken[J] || !U.bRegistered || !V.bRegistered || U.Room!=V.Room || U.Room<0 || U.Room>=8 || U.Integrity<=0 || V.Integrity<=0 || U.AssignedRoom!=U.Room || V.AssignedRoom!=V.Room || U.State==EDirectOrScutUnitState::Panic || V.State==EDirectOrScutUnitState::Panic)continue;
+        if(IsCrewRouteLocked(I) || IsCrewRouteLocked(J) || Taken[I] || Taken[J] || !U.bRegistered || !V.bRegistered || U.Room!=V.Room || U.Room<0 || U.Room>=8 || U.Integrity<=0 || V.Integrity<=0 || U.AssignedRoom!=U.Room || V.AssignedRoom!=V.Room || U.State==EDirectOrScutUnitState::Panic || V.State==EDirectOrScutUnitState::Panic)continue;
         if(DoorCycle || Simulation.Rooms[U.Room].AlertSeconds>0)continue;
         const bool Huddle=!U.bAndroid && !V.bAndroid && U.Profile.Suspicion>=.45f && V.Profile.Suspicion>=.45f && CameraFeedState(U.Room)!=ECameraFeedState::Online;
         bool ScenarioInteraction=false;
@@ -146,6 +160,12 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
     }
     for(int32 I=0;I<4;++I) {
         const auto& U=Simulation.Bodies[I];auto& C=CrewStaging[I];if(!U.bRegistered || C.Room<0 || U.State==EDirectOrScutUnitState::Ejected)continue;
+        if(IsCrewRouteLocked(I))continue;
+        if(!Taken[I] && SetAnchors.IsValidIndex(PreviousAnchors[I]))if(const auto* Old=SetAnchors[PreviousAnchors[I]].Get()){
+            if(int32(Old->RoomId)==U.Room && !Reserved.Contains(PreviousAnchors[I]) && (Old->StagingRole==EStagingSlotRole::PrimaryConsole || Old->StagingRole==EStagingSlotRole::SecondaryStation || Old->StagingRole==EStagingSlotRole::ConversationA || Old->StagingRole==EStagingSlotRole::ConversationB)){
+                C.Anchor=PreviousAnchors[I];Reserved.Add(C.Anchor);Taken[I]=true;
+            }
+        }
         if(!Taken[I]){
             Reserve(I,U.Room!=U.AssignedRoom?EStagingSlotRole::AirlockThreshold:I%2?EStagingSlotRole::SecondaryStation:EStagingSlotRole::PrimaryConsole);
             if(C.Anchor<0)Reserve(I,EStagingSlotRole::SecondaryStation);
@@ -160,5 +180,10 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         if(C.Partner>=0)Facing=(CrewStaging[C.Partner].Position-C.Position).Rotation().Yaw;
         // Blockout faces local -X (visor); anchor arrow denotes gaze direction.
         C.Yaw=FMath::FixedTurn(C.Yaw,Facing+180,6);
+        if(C.ActiveRoute.IsEmpty() && (U.State==EDirectOrScutUnitState::MovingToRoom ||
+            (U.State==EDirectOrScutUnitState::Idle && U.AssignedRoom==U.Room && C.Position.Equals(Target,.01)))){
+            C.Position=Target;
+            auto& Body=Simulation.Bodies[I];Body.State=Body.Stress>=75?EDirectOrScutUnitState::Panic:EDirectOrScutUnitState::Working;
+        }
     }
 }

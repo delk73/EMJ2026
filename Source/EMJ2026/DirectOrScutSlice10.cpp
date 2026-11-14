@@ -183,7 +183,7 @@ void UDirectOrScutSimSubsystem::FixedStep()
     ProcessDirectives();
     if(RuntimeRevision!=BeforeReset)return;
     PeakSuspicion=FMath::Max(PeakSuspicion,Simulation.CollectiveSuspicion());
-    Simulation.Step();StepSurveillance();EvaluateBeatDeck();StepStagingAndAgendas();
+    Simulation.Step();StepCrewRoutes();StepSurveillance();EvaluateBeatDeck();StepStagingAndAgendas();
     if(FollowedCrew>=0 && !CanFollowCrew(FollowedCrew))SetFollowedCrew(-1);
     for(int32 R=0;R<8;++R)if(Pressure[R]!=Simulation.Rooms[R].bIsPressurized)
         RecordCue(R,1,Simulation.Rooms[R].bIsPressurized?TEXT("Pressure restored"):TEXT("Compartment exposed to vacuum"));

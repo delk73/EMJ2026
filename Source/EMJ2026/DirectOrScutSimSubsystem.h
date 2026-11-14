@@ -53,6 +53,7 @@ struct FShipAIScreenChoice
 class ADirectOrScutSetAnchor;
 class ARoomSetBase;
 enum class ECrewStagingPosture : uint8 { Upright, Panic, Blocked, Incapacitated, Triage };
+enum class ECrewRoutePhase : uint8 { None, Departing, Arriving };
 struct FCrewStagingState {
     FVector Position=FVector::ZeroVector;
     float Yaw=0;
@@ -62,6 +63,12 @@ struct FCrewStagingState {
     uint64 NextProtestTick=0;
     int32 DirectiveRoom=INDEX_NONE;
     uint32 DirectiveArrivalTicks=0;
+    TArray<ERoomId> ActiveRoute;
+    ECrewRoutePhase RoutePhase=ECrewRoutePhase::None;
+    int32 PendingRouteRoom=INDEX_NONE;
+    uint32 RouteDoorRevision=0, AnchorHoldTicks=0;
+    uint64 RouteSerial=0, HopCommits=0;
+    bool bRouteBlocked=false;
 };
 struct FCrewSecretAgenda {
     uint32 Progress=0, ObservedTicks=0, Interruptions=0, Completions=0;
@@ -162,6 +169,11 @@ public:
     void RegisterSetAnchor(ADirectOrScutSetAnchor* Anchor);
     void ResetStaging();
     void InitializeCrewStaging(int32 Crew);
+    bool StartCrewRoute(int32 Crew,int32 Room,bool PlayerOrder=false,bool Pretext=true);
+    void CancelCrewRoute(int32 Crew);
+    void StepCrewRoutes();
+    int32 ReserveRouteAnchor(int32 Crew,int32 Room,bool Departure);
+    bool IsCrewRouteLocked(int32 Crew) const;
     void RegisterRoomSet(ARoomSetBase* Set);
     TWeakObjectPtr<ARoomSetBase> RoomSetActors[8];
     void StepStagingAndAgendas();
@@ -192,11 +204,7 @@ public:
     bool RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw);
     void FinishLayout();
     bool SetDoorOpen(int32 Index,bool Open);
-    bool AssignRoom(int32 Unit,int32 Room) {
-        if(ExperimentPhase!=EExperimentPhase::Active || !Simulation.AssignRoom(Unit,Room))return false;
-        if(Unit>=0 && Unit<4){CrewStaging[Unit].DirectiveRoom=Room;CrewStaging[Unit].DirectiveArrivalTicks=0;}
-        return true;
-    }
+    bool AssignRoom(int32 Unit,int32 Room) { return ExperimentPhase==EExperimentPhase::Active && StartCrewRoute(Unit,Room,true); }
     void ResetSimulation();
     void AdvanceSteps(int32 Count);
     void SynchronizeActors();

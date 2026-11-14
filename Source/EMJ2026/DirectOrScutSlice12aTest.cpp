@@ -56,7 +56,7 @@ public:
             T->TestTrue(TEXT("No boot protest spam"),!S->TerminalBuffer().Contains(TEXT("protests sealed bulkhead")));
             S->QueueConsoleCommand(TEXT("direct chen BRIDGE diagnostic_telemetry"));S->AdvanceSteps(1);
             T->TestEqual(TEXT("Player route accepted"),M.Bodies[1].AssignedRoom,2);
-            for(int32 N=0;N<2400 && (M.Bodies[1].Room!=2 || M.Bodies[1].State!=EDirectOrScutUnitState::Working);++N){
+            for(int32 N=0;N<2400 && (S->IsCrewRouteLocked(1) || M.Bodies[1].Room!=2 || M.Bodies[1].State!=EDirectOrScutUnitState::Working);++N){
                 S->AdvanceSteps(1);
                 T->TestEqual(TEXT("Visual and badge room synchronized each transit tick"),S->CrewStaging[1].Room,M.Bodies[1].Room);
                 T->TestTrue(TEXT("Body sync each fixed step"),S->GetBodyActor(1)->GetActorLocation().Equals(S->CrewStaging[1].Position,.01));
@@ -85,7 +85,7 @@ public:
             S->QueueConsoleCommand(TEXT("start_experiment"));S->AdvanceSteps(1);
             S->SecretAgendas[2].bActivated=true;
             S->QueueConsoleCommand(TEXT("direct ortiz BRIDGE diagnostic_telemetry"));S->AdvanceSteps(1);
-            for(int32 N=0;N<2400 && (M.Bodies[2].Room!=2 || M.Bodies[2].State!=EDirectOrScutUnitState::Working);++N){S->AdvanceSteps(1);T->TestEqual(TEXT("Active audit agenda defers to player route"),M.Bodies[2].AssignedRoom,2);}
+            for(int32 N=0;N<2400 && (S->IsCrewRouteLocked(2) || M.Bodies[2].Room!=2 || M.Bodies[2].State!=EDirectOrScutUnitState::Working);++N){S->AdvanceSteps(1);T->TestEqual(TEXT("Active audit agenda defers to player route"),M.Bodies[2].AssignedRoom,2);}
             T->TestTrue(TEXT("Player-directed Ortiz arrives before agenda resumes"),M.Bodies[2].Room==2 && M.Bodies[2].State==EDirectOrScutUnitState::Working);
             S->AdvanceSteps(151);
             T->TestEqual(TEXT("Deferred audit resumes after arrival dwell"),M.Bodies[2].AssignedRoom,6);
