@@ -4,13 +4,16 @@
 #include "DirectOrScutAudioComponent.generated.h"
 class USoundWaveProcedural;
 UCLASS()
-class EMJ2026_API UDirectOrScutAudioComponent : public UAudioComponent {
+class EMJ2026_API UDirectOrScutAudioComponent : public UAudioComponent
+{
     GENERATED_BODY()
-public:
+  public:
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     void InitializeSynth();
     void Synthesize(int32 Kind);
     void Silence();
     UPROPERTY(Transient) TObjectPtr<USoundWaveProcedural> Wave;
-private:
-    uint32 NoiseSeed=1970;
+
+  private:
+    uint32 NoiseSeed = 1970;
 };

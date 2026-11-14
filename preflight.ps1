@@ -29,6 +29,7 @@ function Invoke-BoundedProcess {
 }
 
 try {
+    & (Join-Path $PSScriptRoot "Scripts/Test-SourceArchitecture.ps1")
     if (Get-Process -Name UnrealEditor,UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
         Write-Warning 'Unreal Editor is open. Save your work and close it before preflight. No processes changed; build and smoke test skipped.'
         exit 0

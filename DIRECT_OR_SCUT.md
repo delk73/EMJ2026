@@ -544,3 +544,60 @@ PIE automation: `DirectOrScut.Slice13.CrisisLoopPIE` plus `DirectOrScut.Slice12b
 Verification screenshot: `Saved/DirectOrScut/Slice13PIE.png` (corporate dossier and incident reel). The Slice 12b regression also captures the workstation. No visual HUD, lighting or audio listening-quality pass is claimed; synthesis initialization/PCM output and simulation timing are automated checks. Git whitespace verification uses `git -c safe.directory=D:/_source/EMJ2026 diff --check` because the sandbox account differs from the repository owner; no global Git configuration was changed.
 
 Final results: UE 5.9 Editor build succeeded; both selected PIE tests succeeded (2 passed, 0 failed, 0 warnings); verification screenshot captured and visually reviewed; `git diff --check` passed.
+## Architectural audit and source consolidation — 2026-11-13
+
+Based on committed Slice 13 checkpoint `897a3b3`, before Slice 14. The rules in this entry supersede historical slice-specific implementation and verification instructions above.
+
+### Permanent source rules
+
+No `DirectOrScutSlice*.cpp` files, including tests, may be introduced again. Runtime class methods belong in their owning header/implementation pair. `Source/EMJ2026/AGENTS.md` records these constraints for future work; `.clang-format` expands short control statements and applies Allman braces. `preflight.ps1` now runs `Scripts/Test-SourceArchitecture.ps1`, rejecting numbered files and runtime method definitions outside the implementation matching their declaring header. PIE regressions belong in `DirectOrScutPIETest.cpp` and use `DirectOrScut.PIE.*` domain names.
+
+### Migration and ownership audit
+
+| Former implementation | Canonical owner and responsibilities |
+| --- | --- |
+| Slice 10 | `DirectOrScutSimSubsystem`: soundstage transforms, scenario configuration, director choices, beat deck, cue recording, fixed-step orchestration. `DirectOrScutSimulation`: physiological updates. |
+| Slice 11 | `DirectOrScutSimSubsystem`: ending names, intentional containment, terminal classification and cleanup. |
+| Slice 11c | `DirectOrScutSimSubsystem`: briefing initialization, inspection/tally queues, feed sabotage/repair, deterministic surveillance hash. |
+| Slice 12 | `DirectOrScutSimSubsystem`: anchor/room registration, staging reset/initialization, agenda telemetry, staging and agenda advancement. |
+| Slice 12b | `DirectOrScutSimSubsystem`: anchor reservation, immutable BFS hop queues, cancellation, blocked-route retry, route progression. |
+| Slice 13 | `DirectOrScutSimSubsystem`: crisis reset/commands, medical and voice spoofs, trust, O2/power, physical breach, three-act gates, incident capture/playback and audio timing. |
+| `DirectOrScutConsole.cpp` | `DirectOrScutSimSubsystem`: CLI parsing/completion/help and authoritative screen-menu routing. |
+
+All slice runtime files were first stubbed, not deleted; every existing slice test remained available through migration verification. The full method migration inventory is retained locally at `Saved/DirectOrScut/ConsolidationMap.txt`. Numbered files were removed only after corrected migration parity passed.
+
+`DirectOrScutGameMode` and `DirectOrScutPlayerController` now have separate pairs. Each of the eight reflected room subclasses has its own pair, retaining its original reflected class name and serialized map identity. `RoomSetBase` owns geometry/lighting/barrier behavior. `ScutTacticalInput`, `SScutCameraTile`, and `OfflineShipAIIntentProvider` have separate pairs instead of inline implementation classes embedded in other runtime files. The workstation owns terminal construction, camera wall/tile header composition, briefing, dossier content, highlight formatting and its fixed reel action bar.
+
+### Behavioral audit and fixes
+
+- The subsystem retains a fixed `1/30`-second simulation/control cadence, bounded per-frame processing and retained backlog. Briefing and resolved phases freeze experiment ticks; incident playback advances on the separate control cadence. Existing 30/60 Hz partition tests cover routing and crisis state/telemetry.
+- Committed BFS routes preserve their hop queue, serial, anchors and player destination during transit. Sealed edges block without consuming hops; initially disconnected routes retry on graph revision. Visual room badges, staging poses and actor transforms share the same committed room. Existing barrier, posture, camera-frustum and route tests remain consolidated.
+- Experiment workload stress now has one psychology drift path, with base environment load `0.04/s`, alert load `0.8/s` (scaled by composure), working load `0.035/s`, and staged social influence scaled by `0.08/s`. Legacy non-staged movement experiments retain their original rates. Explicit resistance, deception, alerts, prolonged tracking, vacuum injury and physical mutiny remain consequential.
+- Hands-on Chen triage restores living patients at `2 integrity/s` to an `85`-integrity reserve and reduces stress at `0.5/s`. Dead subjects are excluded from treatment and remain dead. Reset flushes procedural PCM and resets synthesis noise; audio EndPlay/subsystem deinitialization release playback and registration. Anchor EndPlay clears its weak slot without renumbering active route reservations; room EndPlay unregisters its own barrier owner.
+- O2 retains nominal sealed/fault/recovery rates (`-0.8/-2/+2.5 percent/s`). Unsealed low-power recovery is `+0.5 percent/s`; offline rooms have no supply and occupied rooms lose `0.4 percent/s`. Power still gates feeds and console agenda work independently of camera sabotage. Medical/voice spoof TTLs, physical contradiction gates, pairwise trust and the 45-second physical uplink breach retain regression coverage.
+- `Simulation.ObjectiveProgress` is now the single objective-progress value. Staged experiments use the three-act controller; legacy simulation scenarios retain their separate objective rules. The obsolete `CrisisObjective` mirror, unused suspicion-only exposure countdown and unused full-console flag are removed. All endings, including physical mutiny, share `ResolveExperiment` cleanup.
+- Dossier cue significance is `FCinematicCue::Weight`; only `Weight >= 0.50` appears in highlights. `[PLAY INCIDENT REEL]`, `[PREV]`, `[NEXT]`, `[EXIT REEL]`, new-experiment and scenario-switch actions are fixed below the scrolling dossier. Real Slate mouse events exercise each reel button and verify frozen simulation ticks.
+- Removed superseded slice-specific timed capture scripts. Standalone capture uses `-ScutCapture` and `Saved/DirectOrScut/Workstation.png`; the verification wrapper now runs the consolidated suite. Vanilla lights, all eight feeds, the 4x2 camera wall, lower terminal desk and local `AI-LINK>` intent translation remain intact.
+
+### Regression migration and baseline discrepancies
+
+The unmodified migrated runtime initially passed Slice 12, 12a, 12b and 13. Slice 11c failed because its historical fixture set `Simulation.ObjectiveProgress`, while checkpoint Slice 13 overwrote it from `CrisisObjective`. Rebuilding the committed checkpoint and rerunning Slice 11c reproduced the exact same two failures and state hashes (`CheckpointBriefingReport`). Its fixture was corrected to set the then-authoritative value without weakening assertions; all five required migration suites then passed (`MigrationParityCorrectedReport`: 5 passed, 0 failed). The subsequent single-source objective cleanup eliminates the underlying mirror altogether.
+
+The consolidated ending suite also exposed an older fixture that vented an entirely open station graph while expecting isolated containment. Its setup now closes the airlock's interior connection before venting; global decompression continues to produce crew collapse. Suspicion-only instant-mutiny assertions were superseded by the preserved physical alliance/countdown/interruption tests. Earlier floating-drawer/90-percent-console assertions were superseded by the current terminal desk and briefing tests, rather than preserving obsolete UI behavior.
+
+The consolidated suite covers BriefingSurveillance, StagingAgendas, StationRoutes, SingleCommitRoutes, CrisisLoop, TerminalDesk, Endings and ArchitectureRegression. The latter adds full-window runs in both scenarios, living-patient triage/death persistence, AI-LINK routing, the inclusive 0.50 highlight boundary, actual Dossier button clicks and verification captures.
+
+### Verification commands and artifacts
+
+```powershell
+./preflight.ps1
+./Scripts/Test-DirectOrScut.ps1 -ReportName FinalConsolidated
+./Scripts/Test-SourceArchitecture.ps1
+git -c safe.directory=D:/_source/EMJ2026 diff --check
+```
+
+Build/smoke logs: `Saved/Logs/PreflightBuild.log`, `Saved/Logs/PreflightSmoke.log`. Final PIE report: `Saved/DirectOrScut/FinalConsolidatedReport/index.json`; automation log: `Saved/Logs/FinalConsolidated.log`. Screenshots: `Saved/DirectOrScut/ArchitectureVerification.png` (dossier/action bar) and `Saved/DirectOrScut/ArchitectureDesk.png` (eight-feed desk/briefing).
+
+Full-window pacing results in both scenarios: Vale stress `36.29`, Chen `31.80`, Ortiz `21.64`; all three retained `100.00` integrity through 599.97 seconds and resolved at exactly 18,000 ticks / 600 seconds. These establish baseline viability, not immunity to hostile interventions. Procedural PCM and initialization are automated checks; audio listening quality is not asserted.
+
+Final verification: UE 5.9 Win64 Development Editor build and headless smoke boot passed. The refreshed consolidated PIE report records **8 passed, 0 failed, 0 not run, 0 warnings**. Source architecture and `git diff --check` passed. Both verification screenshots were captured and visually reviewed; the briefing now describes the actual three-act scenario objectives. No Slice 14 work has begun. Changes remain uncommitted.

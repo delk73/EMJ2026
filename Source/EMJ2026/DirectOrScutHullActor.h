@@ -7,9 +7,9 @@ UCLASS()
 class EMJ2026_API ADirectOrScutHullActor : public AActor
 {
     GENERATED_BODY()
-public:
+  public:
     ADirectOrScutHullActor();
-    virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void OnConstruction(const FTransform &Transform) override;
     virtual void BeginPlay() override;
     UPROPERTY(VisibleAnywhere) TArray<TObjectPtr<UChildActorComponent>> RoomSets;
 };

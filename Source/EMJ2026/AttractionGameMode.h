@@ -7,6 +7,6 @@ UCLASS()
 class EMJ2026_API AAttractionGameMode : public AGameModeBase
 {
     GENERATED_BODY()
-public:
+  public:
     AAttractionGameMode();
 };

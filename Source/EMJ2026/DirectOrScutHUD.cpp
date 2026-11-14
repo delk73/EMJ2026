@@ -12,24 +12,47 @@
 void ADirectOrScutHUD::BeginPlay()
 {
     Super::BeginPlay();
-    if (!GetWorld()->GetGameViewport() || !FSlateApplication::IsInitialized()) return;
-    ACompartmentCameraRig* Rig=nullptr;for(TActorIterator<ACompartmentCameraRig> It(GetWorld());It;++It){Rig=*It;break;}
-    if(!Rig)Rig=GetWorld()->SpawnActor<ACompartmentCameraRig>();
-    Rig->InitializeFeeds();
-    SAssignNew(Workstation,SDirectOrScutWorkstationWidget).Sim(GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()).Rig(Rig);
-    GetWorld()->GetGameViewport()->AddViewportWidgetContent(Workstation.ToSharedRef(),10);
-    if (FParse::Param(FCommandLine::Get(),TEXT("ScutSlice9Capture")))
+    if (!GetWorld()->GetGameViewport() || !FSlateApplication::IsInitialized())
     {
-        int32 Feed=1; FParse::Value(FCommandLine::Get(),TEXT("ScutFeed="),Feed);
-        Workstation->SelectFeed(FMath::Clamp(Feed,1,8),false);
-
+        return;
     }
-    if (auto* PC=Cast<ADirectOrScutPlayerController>(PlayerOwner)) PC->FocusWorkstation();
-    FSlateApplication::Get().SetKeyboardFocus(Workstation,EFocusCause::SetDirectly);
+    ACompartmentCameraRig *Rig = nullptr;
+    for (TActorIterator<ACompartmentCameraRig> It(GetWorld()); It; ++It)
+    {
+        Rig = *It;
+        break;
+    }
+    if (!Rig)
+    {
+        Rig = GetWorld()->SpawnActor<ACompartmentCameraRig>();
+    }
+    Rig->InitializeFeeds();
+    SAssignNew(Workstation, SDirectOrScutWorkstationWidget)
+        .Sim(GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>())
+        .Rig(Rig);
+    GetWorld()->GetGameViewport()->AddViewportWidgetContent(Workstation.ToSharedRef(), 10);
+    if (FParse::Param(FCommandLine::Get(), TEXT("ScutCapture")))
+    {
+        int32 Feed = 1;
+        FParse::Value(FCommandLine::Get(), TEXT("ScutFeed="), Feed);
+        Workstation->SelectFeed(FMath::Clamp(Feed, 1, 8), false);
+    }
+    if (auto *PC = Cast<ADirectOrScutPlayerController>(PlayerOwner))
+    {
+        PC->FocusWorkstation();
+    }
+    FSlateApplication::Get().SetKeyboardFocus(Workstation, EFocusCause::SetDirectly);
 }
 void ADirectOrScutHUD::EndPlay(const EEndPlayReason::Type Reason)
 {
-    if (Workstation.IsValid() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(Workstation.ToSharedRef());
-    Workstation.Reset(); Super::EndPlay(Reason);
+    if (Workstation.IsValid() && GetWorld()->GetGameViewport())
+    {
+        GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(Workstation.ToSharedRef());
+    }
+    Workstation.Reset();
+    Super::EndPlay(Reason);
 }
-void ADirectOrScutHUD::DrawHUD() { Super::DrawHUD(); }
+void ADirectOrScutHUD::DrawHUD()
+{
+    Super::DrawHUD();
+}

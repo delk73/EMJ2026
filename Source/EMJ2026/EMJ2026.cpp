@@ -3,4 +3,4 @@
 #include "EMJ2026.h"
 #include "Modules/ModuleManager.h"
 
-IMPLEMENT_PRIMARY_GAME_MODULE( FDefaultGameModuleImpl, EMJ2026, "EMJ2026" );
+IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, EMJ2026, "EMJ2026");

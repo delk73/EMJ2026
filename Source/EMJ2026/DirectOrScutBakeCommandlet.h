@@ -6,7 +6,7 @@ UCLASS()
 class UDirectOrScutBakeCommandlet : public UCommandlet
 {
     GENERATED_BODY()
-public:
+  public:
     UDirectOrScutBakeCommandlet();
-    virtual int32 Main(const FString& Params) override;
+    virtual int32 Main(const FString &Params) override;
 };

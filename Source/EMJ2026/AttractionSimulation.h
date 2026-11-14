@@ -5,7 +5,13 @@
 #include "AttractionSimulation.generated.h"
 
 UENUM(BlueprintType)
-enum class EAttractionAgentRole : uint8 { None, Builder, Filler, Trimmer };
+enum class EAttractionAgentRole : uint8
+{
+    None,
+    Builder,
+    Filler,
+    Trimmer
+};
 
 USTRUCT(BlueprintType)
 struct FAttractionStageConfig
@@ -16,7 +22,12 @@ struct FAttractionStageConfig
 };
 
 UENUM(BlueprintType)
-enum class EAttractionArchetype : uint8 { Driver, Buffer, Anchor };
+enum class EAttractionArchetype : uint8
+{
+    Driver,
+    Buffer,
+    Anchor
+};
 
 // Force on receiver i from emitter j = Receive_i dot (ChannelMatrix * Emit_j).
 // Positive affinity attracts; negative affinity repels. Reciprocity is optional.
@@ -31,17 +42,17 @@ struct FAttractionNode
     float WorkCharge = 0;
     float AgentSlideProgress = 0;
     int32 AgentSlideTarget = INDEX_NONE;
-    FVector GrowthDirection = FVector(1,0,0);
+    FVector GrowthDirection = FVector(1, 0, 0);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EAttractionArchetype Archetype = EAttractionArchetype::Driver;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Position = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Velocity = FVector::ZeroVector;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.01")) float Mass = 1.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Emit = FVector(1,0,0);
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Receive = FVector(1,0,0);
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float RepulsionScale = 1.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.01")) float Mass = 1.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Emit = FVector(1, 0, 0);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Receive = FVector(1, 0, 0);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float RepulsionScale = 1.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bPinned = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float CaptureRadius = 180.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) int32 Valence = 2;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float CaptureRadius = 180.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) int32 Valence = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 BondType = 0;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float InternalEnergy = 0;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) float PulseTimeRemaining = 0;
@@ -54,11 +65,11 @@ struct FAttractionBondRule
     GENERATED_BODY()
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 TypeA = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 TypeB = 0;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="1")) float RestLength = 140.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Stiffness = 4.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float Damping = 3.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float BreakStrain = 0.8f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0")) float MaxRelativeSpeed = 250.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1")) float RestLength = 140.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float Stiffness = 4.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float Damping = 3.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float BreakStrain = 0.8f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0")) float MaxRelativeSpeed = 250.f;
 };
 
 USTRUCT(BlueprintType)
@@ -84,37 +95,37 @@ UCLASS()
 class EMJ2026_API AAttractionSimulation : public AActor
 {
     GENERATED_BODY()
-public:
+  public:
     AAttractionSimulation();
-    virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void OnConstruction(const FTransform &Transform) override;
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
 
-    UPROPERTY(EditAnywhere, Category="Board") bool bUseDemo = true;
-    UPROPERTY(EditAnywhere, Category="Board") int32 Seed = 48;
-    UPROPERTY(EditAnywhere, Category="Board") TArray<FAttractionNode> InitialNodes;
-    UPROPERTY(EditAnywhere, Category="Board") TArray<FAttractionBondRule> BondRules;
-    UPROPERTY(EditAnywhere, Category="Forces") FVector ChannelRow0 = FVector(1,0,0);
-    UPROPERTY(EditAnywhere, Category="Forces") FVector ChannelRow1 = FVector(0,1,0);
-    UPROPERTY(EditAnywhere, Category="Forces") FVector ChannelRow2 = FVector(0,0,1);
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float FieldStrength = 800000.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float Softening = 80.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float Drag = 0.35f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float PullRange = 240.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float CushionStrength = 300.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="0")) float Viscosity = 2.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float MaxAcceleration = 3000.f;
-    UPROPERTY(EditAnywhere, Category="Forces", meta=(ClampMin="1")) float MaxSpeed = 1000.f;
-    UPROPERTY(EditAnywhere, Category="Simulation") bool bRunning = true;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionNode> Nodes;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionTether> Tethers;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Simulation") TArray<FAttractionTriangle> Triangles;
+    UPROPERTY(EditAnywhere, Category = "Board") bool bUseDemo = true;
+    UPROPERTY(EditAnywhere, Category = "Board") int32 Seed = 48;
+    UPROPERTY(EditAnywhere, Category = "Board") TArray<FAttractionNode> InitialNodes;
+    UPROPERTY(EditAnywhere, Category = "Board") TArray<FAttractionBondRule> BondRules;
+    UPROPERTY(EditAnywhere, Category = "Forces") FVector ChannelRow0 = FVector(1, 0, 0);
+    UPROPERTY(EditAnywhere, Category = "Forces") FVector ChannelRow1 = FVector(0, 1, 0);
+    UPROPERTY(EditAnywhere, Category = "Forces") FVector ChannelRow2 = FVector(0, 0, 1);
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "0")) float FieldStrength = 800000.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "1")) float Softening = 80.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "0")) float Drag = 0.35f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "1")) float PullRange = 240.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "0")) float CushionStrength = 300.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "0")) float Viscosity = 2.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "1")) float MaxAcceleration = 3000.f;
+    UPROPERTY(EditAnywhere, Category = "Forces", meta = (ClampMin = "1")) float MaxSpeed = 1000.f;
+    UPROPERTY(EditAnywhere, Category = "Simulation") bool bRunning = true;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation") TArray<FAttractionNode> Nodes;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation") TArray<FAttractionTether> Tethers;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Simulation") TArray<FAttractionTriangle> Triangles;
     static constexpr int32 MaxSimulationNodes = 220;
     static constexpr int32 RewardGridSize = 64;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") TArray<float> RewardGrid;
-    UPROPERTY(EditAnywhere, Category="Agents", meta=(ClampMin="100")) float EdgeRestLength = 240.0f;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") float BuildProgress = 0;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Agents") int32 AgentNode = INDEX_NONE;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Reward") TArray<float> RewardGrid;
+    UPROPERTY(EditAnywhere, Category = "Agents", meta = (ClampMin = "100")) float EdgeRestLength = 240.0f;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Agents") float BuildProgress = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Agents") int32 AgentNode = INDEX_NONE;
     UFUNCTION(BlueprintCallable) void PaintReward(FVector2D Center);
     // Explicit endpoints avoid retaining gesture state across separate clicks or viewport re-entry.
     UFUNCTION(BlueprintCallable) void PaintRewardStroke(FVector2D Start, FVector2D End);
@@ -125,48 +136,58 @@ public:
     UFUNCTION(BlueprintCallable) bool BeginPatchDrag(int32 NodeIndex);
     UFUNCTION(BlueprintCallable) void UpdatePatchDrag(FVector CursorDelta, float DeltaSeconds);
     UFUNCTION(BlueprintCallable) bool EndPatchDrag(bool bTryGraft);
-    UFUNCTION(BlueprintPure) FVector GetBuilderPosition() const { return AgentPosition(); }
+    UFUNCTION(BlueprintPure) FVector GetBuilderPosition() const
+    {
+        return AgentPosition();
+    }
     // The same geometric/field query is used by selection and commit-time validation.
-    UFUNCTION(BlueprintCallable) bool EvaluateFrontierCandidate(int32 A, int32 B, FVector& Apex, int32& Weld, float& Score) const;
-    UFUNCTION(BlueprintCallable, CallInEditor, Category="Simulation") void ResetSimulation();
+    UFUNCTION(BlueprintCallable)
+    bool EvaluateFrontierCandidate(int32 A, int32 B, FVector &Apex, int32 &Weld, float &Score) const;
+    UFUNCTION(BlueprintCallable, CallInEditor, Category = "Simulation") void ResetSimulation();
     // Severed pairs remain suppressed until reset, so a cut cannot instantly reattach.
-    UFUNCTION(BlueprintCallable, Category="Simulation") bool SliceTether(int32 TetherIndex);
-    UFUNCTION(BlueprintCallable, Category="Simulation") int32 DropNode(FAttractionNode Profile, FVector LocalPosition);
-    UFUNCTION(BlueprintCallable, Category="Simulation") static FAttractionNode MakeArchetype(EAttractionArchetype Archetype);
-
+    UFUNCTION(BlueprintCallable, Category = "Simulation") bool SliceTether(int32 TetherIndex);
+    UFUNCTION(BlueprintCallable, Category = "Simulation")
+    int32 DropNode(FAttractionNode Profile, FVector LocalPosition);
+    UFUNCTION(BlueprintCallable, Category = "Simulation")
+    static FAttractionNode MakeArchetype(EAttractionArchetype Archetype);
 
     // Shared fixed-step entry point also supports lightweight commandlet diagnostics.
-    UFUNCTION(BlueprintCallable, Category="Simulation") void AdvanceSimulation(float DeltaSeconds);
-    bool IsInsidePlayfield(const FVector& Position) const;
-    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="400")) float PlayfieldHalfExtentX = 4400.f;
-    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="400")) float PlayfieldHalfExtentY = 2600.f;
-    UPROPERTY(EditAnywhere, Category="Playfield", meta=(ClampMin="50")) float BoundarySoftness = 350.f;
-    UPROPERTY(VisibleAnywhere, Category="Liquid") float PlaneHalfExtent = 12000.f;
-    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="20")) float DropletRadius = 115.f;
-    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="10")) float FilamentRadius = 55.f;
-    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.01")) float IsoThreshold = 0.18f;
-    UPROPERTY(EditAnywhere, Category="Liquid", meta=(ClampMin="0.1")) float SurfaceHeight = 100.f;
-    UPROPERTY(EditAnywhere, Category="Stages") TArray<FAttractionStageConfig> Stages;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stages") int32 StageIndex = 0;
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Reward") bool bRewardActive = false;
-    UPROPERTY(EditAnywhere, Category="Agents") float TargetThreshold = 0.25f;
+    UFUNCTION(BlueprintCallable, Category = "Simulation") void AdvanceSimulation(float DeltaSeconds);
+    bool IsInsidePlayfield(const FVector &Position) const;
+    UPROPERTY(EditAnywhere, Category = "Playfield", meta = (ClampMin = "400")) float PlayfieldHalfExtentX = 4400.f;
+    UPROPERTY(EditAnywhere, Category = "Playfield", meta = (ClampMin = "400")) float PlayfieldHalfExtentY = 2600.f;
+    UPROPERTY(EditAnywhere, Category = "Playfield", meta = (ClampMin = "50")) float BoundarySoftness = 350.f;
+    UPROPERTY(VisibleAnywhere, Category = "Liquid") float PlaneHalfExtent = 12000.f;
+    UPROPERTY(EditAnywhere, Category = "Liquid", meta = (ClampMin = "20")) float DropletRadius = 115.f;
+    UPROPERTY(EditAnywhere, Category = "Liquid", meta = (ClampMin = "10")) float FilamentRadius = 55.f;
+    UPROPERTY(EditAnywhere, Category = "Liquid", meta = (ClampMin = "0.01")) float IsoThreshold = 0.18f;
+    UPROPERTY(EditAnywhere, Category = "Liquid", meta = (ClampMin = "0.1")) float SurfaceHeight = 100.f;
+    UPROPERTY(EditAnywhere, Category = "Stages") TArray<FAttractionStageConfig> Stages;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Stages") int32 StageIndex = 0;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Reward") bool bRewardActive = false;
+    UPROPERTY(EditAnywhere, Category = "Agents") float TargetThreshold = 0.25f;
     UFUNCTION(BlueprintCallable) float SampleTargetHeight(FVector2D Pos) const;
     UFUNCTION(BlueprintCallable) void NextStage();
     UFUNCTION(BlueprintCallable) void RefreshConnectivity();
     UFUNCTION(BlueprintCallable) float TargetCoverage() const;
     UFUNCTION(BlueprintCallable) int32 ExcessNodes() const;
     UFUNCTION(BlueprintCallable) int32 ConnectedAgents() const;
-private:
-    struct FBoundaryEdge { int32 A, B, Opposite; };
+
+  private:
+    struct FBoundaryEdge
+    {
+        int32 A, B, Opposite;
+    };
     TArray<FBoundaryEdge> BoundaryEdges() const;
     TArray<FBoundaryEdge> CarrierBoundaryEdges() const;
     TArray<int32> ComponentNodes(int32 NodeIndex) const;
     TArray<int32> BoundaryVertices() const;
-    void RepairAgentCarrier(const FVector& PreviousPosition);
-    void RemoveCutOrphans(int32 CutA, int32 CutB, const FVector& PreviousCarrier);
-    bool GraftComponent(const TArray<int32>& Patch);
-    bool IsGraftGeometryValid(const TArray<FAttractionNode>& ProposedNodes,
-        const TArray<FAttractionTether>& ProposedTethers, const TArray<FAttractionTriangle>& ProposedTriangles) const;
+    void RepairAgentCarrier(const FVector &PreviousPosition);
+    void RemoveCutOrphans(int32 CutA, int32 CutB, const FVector &PreviousCarrier);
+    bool GraftComponent(const TArray<int32> &Patch);
+    bool IsGraftGeometryValid(const TArray<FAttractionNode> &ProposedNodes,
+                              const TArray<FAttractionTether> &ProposedTethers,
+                              const TArray<FAttractionTriangle> &ProposedTriangles) const;
     TArray<int32> DraggedPatch;
     TArray<FVector> PatchStartPositions;
     FVector PatchTargetOffset = FVector::ZeroVector;
@@ -174,14 +195,15 @@ private:
     int32 EdgeIncidence(int32 A, int32 B) const;
     bool HasTether(int32 A, int32 B) const;
     void DecayReward(float Dt);
-    bool FindAttractant(const FVector& Origin, FVector& Position, float& Maximum) const;
-    void PlanAgentRoute(const TArray<FBoundaryEdge>& Boundary, bool bPursuingReward, const FVector& Attractant);
+    bool FindAttractant(const FVector &Origin, FVector &Position, float &Maximum) const;
+    void PlanAgentRoute(const TArray<FBoundaryEdge> &Boundary, bool bPursuingReward, const FVector &Attractant);
     uint32 RewardRevision = 0;
     uint32 PlannedRewardRevision = 0;
     bool bWasPursuingReward = false;
     bool bRouteDirty = true;
     FVector AgentTravelDirection = FVector::ZeroVector;
-    bool EvaluateFrontierCandidateInternal(int32 A, int32 B, FVector& Apex, int32& Weld, float& Score, bool bGeometryOnly) const;
+    bool EvaluateFrontierCandidateInternal(int32 A, int32 B, FVector &Apex, int32 &Weld, float &Score,
+                                           bool bGeometryOnly) const;
     void CancelBuild();
     FVector AgentPosition() const;
     TArray<int32> AgentPath;
@@ -193,7 +215,7 @@ private:
     bool bBuilding = false;
     bool AddStructuralTether(int32 A, int32 B);
     void WorkAgents(float Dt);
-    UPROPERTY(VisibleAnywhere, Category="Liquid") TObjectPtr<class UStaticMeshComponent> LiquidPlane;
+    UPROPERTY(VisibleAnywhere, Category = "Liquid") TObjectPtr<class UStaticMeshComponent> LiquidPlane;
     UPROPERTY() TSoftObjectPtr<class UMaterialInterface> LiquidMaterialAsset;
     UPROPERTY(Transient) TObjectPtr<class UTexture2D> LiquidDataTexture;
     UPROPERTY(Transient) TObjectPtr<class UTexture2D> RewardTexture;
