@@ -129,6 +129,9 @@ void SDirectOrScutWorkstationWidget::Construct(const FArguments &Args)
         Brushes[F].ImageSize = FVector2D(1024, 576);
         Brushes[F].DrawAs = ESlateBrushDrawType::Image;
     }
+    OxygenBarStyle = FCoreStyle::Get().GetWidgetStyle<FProgressBarStyle>("ProgressBar");
+    OxygenBarStyle.SetFillImage(FSlateColorBrush(FLinearColor::White))
+        .SetBackgroundImage(FSlateColorBrush(FLinearColor(.01f, .04f, .02f)));
     SlimScrollStyle = FCoreStyle::Get().GetWidgetStyle<FScrollBarStyle>("ScrollBar");
     SlimScrollStyle.SetNormalThumbImage(FSlateColorBrush(FLinearColor(.15f, .7f, .3f, .7f)))
         .SetHoveredThumbImage(FSlateColorBrush(FLinearColor(.3f, 1, .45f)))
@@ -548,6 +551,10 @@ void SDirectOrScutWorkstationWidget::Rebuild()
         }
         return;
     }
+    // Drop detached pane trees when entering diagnostics; only the bounded presentation blocks survive.
+    MediationColumn.Reset();
+    PrimaryOpticSlot.Reset();
+    InjectionSlot.Reset();
     Root->AddSlot().AutoHeight().Padding(
         6, 4)[SNew(STextBlock)
                   .Tag(TEXT("ScutTelemetry"))
@@ -1743,12 +1750,12 @@ void SDirectOrScutWorkstationWidget::SetPresentationNoise(float Scrub, float Voi
 }
 float SDirectOrScutWorkstationWidget::GetInlineWipeProgress() const
 {
-    const auto Block = ActiveOptic.Pin();
+    const auto Block = ActiveOptic;
     return Block ? Block->Wipe : 0;
 }
 UMaterialInstanceDynamic *SDirectOrScutWorkstationWidget::GetInlineOpticMaterial() const
 {
-    const auto Block = ActiveOptic.Pin();
+    const auto Block = ActiveOptic;
     return Block ? Block->Material.Get() : nullptr;
 }
 int32 SDirectOrScutWorkstationWidget::GetInlineInstrumentCount() const
@@ -1782,14 +1789,20 @@ void SDirectOrScutWorkstationWidget::ResetTerminalPresentation()
 {
     TerminalStream.Reset();
     ActiveOptic.Reset();
+    ActiveInjection.Reset();
+    for (int32 I = 0; I < 4; ++I)
+    {
+        ReportedCrewRooms[I] = Sim->Simulation.Bodies[I].Room;
+        bCrewReportOverride[I] = false;
+    }
     PresentationSeconds = 0;
     SetPresentationNoise(0, 0);
     UnifiedEventCursor = Sim->Events.Num();
     AppendTerminalProse(
         TEXT("MOTHER-7> Carrier established. Eight compartments answer. Their silence is not evidence of safety."));
     PresentOptic(0);
-    PresentInstrument(ETerminalInstrument::ECG, 0);
     PresentInstrument(ETerminalInstrument::Schematic, 0);
+    PresentInstrument(ETerminalInstrument::ECG, 0);
 }
 bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room)
 {
@@ -1798,7 +1811,7 @@ bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room)
         return false;
     }
     const int32 Feed = ACompartmentCameraRig::FeedForRoom(Room);
-    if (const auto Previous = ActiveOptic.Pin())
+    if (const auto Previous = ActiveOptic)
     {
         Previous->bClosed = true;
     }
@@ -1841,6 +1854,11 @@ bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind,
                       ? FString::Printf(TEXT("[PULSE STRIP] %s // LIVE TELEMETRY"), Crew[Subject])
                       : FString::Printf(TEXT("[COMPARTMENT SCHEMATIC] %s // BULKHEAD INDICATION"),
                                         DirectOrScut::RoomName(Subject));
+    if (ActiveInjection && ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
+    {
+        ActiveInjection->bClosed = true;
+    }
+    ActiveInjection = Block;
     AppendTerminalBlock(Block);
     return true;
 }
@@ -1921,6 +1939,10 @@ bool SDirectOrScutWorkstationWidget::HandlePresentationCommand(const FString &In
         {
             Accepted = PresentInstrument(ETerminalInstrument::Schematic, RoomId(Words[2]));
         }
+        if (Words.Num() == 3 && Words[1] == TEXT("pip"))
+        {
+            Accepted = PresentSecondaryOptic(RoomId(Words[2]));
+        }
         if (Words.Num() == 3 && Words[1] == TEXT("ecg"))
         {
             const TCHAR *Names[] = {TEXT("vale"), TEXT("chen"), TEXT("ortiz"), TEXT("ash")};
@@ -1935,7 +1957,7 @@ bool SDirectOrScutWorkstationWidget::HandlePresentationCommand(const FString &In
         if (!Accepted)
         {
             AppendTerminalProse(
-                TEXT("SYSTEM> Usage: show_widget ecg <vale|chen|ortiz|ash> or show_widget schematic <room>."));
+                TEXT("SYSTEM> Usage: show_widget ecg <vale|chen|ortiz|ash> or show_widget schematic|pip <room>."));
         }
         return true;
     }
@@ -1964,6 +1986,13 @@ void SDirectOrScutWorkstationWidget::UpdateTerminalPresentation(float Delta, con
             FLinearColor(FMath::Max(1.f, float(Pixels.X)), FMath::Max(1.f, float(Pixels.Y)), 0, 0));
         TerminalSurfaceMaterial->SetScalarParameterValue(TEXT("PresentationTimeSeconds"), PresentationSeconds);
     }
+    for (int32 Crew = 0; Crew < 4; ++Crew)
+    {
+        if (!bCrewReportOverride[Crew])
+        {
+            ReportedCrewRooms[Crew] = Sim->Simulation.Bodies[Crew].Room;
+        }
+    }
     bool bTyping = false;
     for (const auto &Block : TerminalStream)
     {
@@ -1972,7 +2001,11 @@ void SDirectOrScutWorkstationWidget::UpdateTerminalPresentation(float Delta, con
             Block->Characters = FMath::Min(float(Block->Text.Len()), Block->Characters + Step * 100);
             bTyping = true;
         }
-        if (Block->Kind != FTerminalStreamBlock::EKind::Optic || Block->bClosed)
+    }
+    const TSharedPtr<FTerminalStreamBlock> OpticalBlocks[] = {ActiveOptic, ActiveInjection};
+    for (const auto &Block : OpticalBlocks)
+    {
+        if (!Block || Block->Kind != FTerminalStreamBlock::EKind::Optic || Block->bClosed)
         {
             continue;
         }
@@ -2001,9 +2034,13 @@ int32 SDirectOrScutWorkstationWidget::PaintTerminalInstrument(FSlateWindowElemen
                                                               const FGeometry &Geometry, ETerminalInstrument Kind,
                                                               int32 Subject) const
 {
+    if (Kind == ETerminalInstrument::StationMap)
+    {
+        Subject = ACompartmentCameraRig::RoomForFeed(ActiveFeed);
+    }
     if (!Sim.IsValid() || Subject < 0 || Subject >= (Kind == ETerminalInstrument::ECG ? 4 : 8) ||
         (Kind != ETerminalInstrument::ECG && Kind != ETerminalInstrument::Schematic &&
-         Kind != ETerminalInstrument::Reticle))
+         Kind != ETerminalInstrument::Reticle && Kind != ETerminalInstrument::StationMap))
     {
         return Layer;
     }
@@ -2016,32 +2053,92 @@ int32 SDirectOrScutWorkstationWidget::PaintTerminalInstrument(FSlateWindowElemen
         BuildPulseTrace(Size, PresentationSeconds, Sim->TerminalBiometrics(Subject).HeartRateBPM, Points);
         DrawTerminalLines(Elements, Layer, Geometry, Points, Tint);
     }
-    else if (Kind == ETerminalInstrument::Schematic)
+    else if (Kind == ETerminalInstrument::Schematic || Kind == ETerminalInstrument::StationMap)
     {
+        FVector2f Minimum(0, 0), Maximum(5200, 5200);
+        if (Kind == ETerminalInstrument::Schematic)
+        {
+            BuildCompartmentOutline(Subject, FVector2f(5200, 5200), Points);
+            Minimum = FVector2f(FLT_MAX, FLT_MAX);
+            Maximum = FVector2f(-FLT_MAX, -FLT_MAX);
+            for (const auto &Point : Points)
+            {
+                Minimum.X = FMath::Min(Minimum.X, Point.X);
+                Minimum.Y = FMath::Min(Minimum.Y, Point.Y);
+                Maximum.X = FMath::Max(Maximum.X, Point.X);
+                Maximum.Y = FMath::Max(Maximum.Y, Point.Y);
+            }
+        }
+        const FVector2f Span = Maximum - Minimum;
+        const float Scale = FMath::Max(
+            0.f, FMath::Min((Size.X - 24) / FMath::Max(Span.X, 1.f), (Size.Y - 24) / FMath::Max(Span.Y, 1.f)));
+        const FVector2f Offset = (Size - Span * Scale) * .5f - Minimum * Scale;
+        const auto Project = [&](FVector2D P) { return (FVector2f(2600 + P.X, 2600 - P.Y) * Scale) + Offset; };
         for (int32 I = 0; I < 8; ++I)
         {
-            BuildCompartmentOutline(I, Size, Points);
-            DrawTerminalLines(Elements, Layer, Geometry, Points, I == Subject ? Tint : Tint * .22f);
-        }
-        const float Scale = FMath::Min(Size.X, Size.Y) / 5200.f;
-        for (const auto &Door : DirectOrScut::DoorSites())
-        {
-            if (Door.RoomA != Subject && Door.RoomB != Subject)
+            if (Kind == ETerminalInstrument::Schematic && I != Subject)
             {
                 continue;
             }
-            const FVector2f Center(Size.X * .5f + Door.Position.X * Scale, Size.Y * .5f - Door.Position.Y * Scale);
-            bool bSealed = false;
+            BuildCompartmentOutline(I, FVector2f(5200, 5200), Points);
+            for (auto &Point : Points)
+            {
+                Point = Point * Scale + Offset;
+            }
+            FLinearColor RoomTint = TerminalTint(I);
+            if (Sim->StationRooms[I].Power != EPowerState::Nominal || Sim->StationRooms[I].OxygenPct < 60)
+            {
+                RoomTint = FLinearColor(.95f, .52f, .12f);
+            }
+            DrawTerminalLines(Elements, Layer, Geometry, Points, I == Subject ? RoomTint : RoomTint * .7f);
+            if (Kind == ETerminalInstrument::StationMap)
+            {
+                const FVector2f P = Project(DirectOrScut::RoomWaypoint(I)) + FVector2f(-4, -15);
+                FSlateDrawElement::MakeText(
+                    Elements, Layer + 2, Geometry.ToPaintGeometry(FVector2f(24, 16), FSlateLayoutTransform(P)),
+                    FString::FromInt(I), FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, RoomTint);
+            }
+        }
+        for (const auto &Door : DirectOrScut::DoorSites())
+        {
+            if (Kind == ETerminalInstrument::Schematic && Door.RoomA != Subject && Door.RoomB != Subject)
+            {
+                continue;
+            }
+            bool Sealed = false;
             for (const auto &State : Sim->Simulation.Doors)
             {
                 if (State.RoomA == Door.RoomA && State.RoomB == Door.RoomB)
                 {
-                    bSealed = !State.bIsOpen;
+                    Sealed = !State.bIsOpen;
                     break;
                 }
             }
-            BuildSealIndicator(Center, 4, bSealed, Points);
-            DrawTerminalLines(Elements, Layer + 1, Geometry, Points, Tint);
+            BuildSealIndicator(Project(FVector2D(Door.Position)), 4, Sealed, Points);
+            DrawTerminalLines(Elements, Layer + 1, Geometry, Points,
+                              Sealed ? FLinearColor(1, .6f, .2f) : EvaluatePhosphorColor(.65f));
+        }
+        if (Kind == ETerminalInstrument::StationMap)
+        {
+            const TCHAR *Names[] = {TEXT("V"), TEXT("C"), TEXT("O"), TEXT("A")};
+            for (int32 Crew = 0; Crew < 4; ++Crew)
+            {
+                const int32 Reported = GetReportedCrewRoom(Crew);
+                if (Reported < 0 || Reported >= 8)
+                {
+                    continue;
+                }
+                const FVector2f P =
+                    Project(DirectOrScut::RoomWaypoint(Reported)) + FVector2f(Crew % 2 ? 12 : -12, Crew / 2 ? 10 : -1);
+                Points = {P + FVector2f(-3, 0), P + FVector2f(0, -3), P + FVector2f(3, 0), P + FVector2f(0, 3),
+                          P + FVector2f(-3, 0)};
+                DrawTerminalLines(Elements, Layer + 2, Geometry, Points, FLinearColor(.8f, 1, .7f));
+                FSlateDrawElement::MakeText(
+                    Elements, Layer + 3,
+                    Geometry.ToPaintGeometry(FVector2f(18, 14), FSlateLayoutTransform(P + FVector2f(4, -5))),
+                    Names[Crew], FCoreStyle::GetDefaultFontStyle("Bold", 9), ESlateDrawEffect::None,
+                    FLinearColor(.8f, 1, .7f));
+            }
         }
     }
     else
@@ -2050,59 +2147,365 @@ int32 SDirectOrScutWorkstationWidget::PaintTerminalInstrument(FSlateWindowElemen
         BuildReticlePoints(Size * .5f, FMath::Min(Size.X, Size.Y) * .42f, 4, .22f, Arcs);
         for (const auto &Arc : Arcs)
         {
-            DrawTerminalLines(Elements, Layer, Geometry, Arc, Tint * .5f);
+            DrawTerminalLines(Elements, Layer, Geometry, Arc, Tint * .35f);
+        }
+        for (int32 Corner = 0; Corner < 4; ++Corner)
+        {
+            const FVector2f Direction(Corner % 2 ? -1.f : 1.f, Corner / 2 ? -1.f : 1.f);
+            const FVector2f P(Corner % 2 ? Size.X - 10 : 10, Corner / 2 ? Size.Y - 10 : 10);
+            Points = {P + FVector2f(Direction.X * 20, 0), P, P + FVector2f(0, Direction.Y * 20)};
+            DrawTerminalLines(Elements, Layer + 1, Geometry, Points, Tint);
         }
     }
-    return Layer + 1;
+    return Layer + 4;
+}
+namespace
+{
+TSharedRef<SWidget> TerminalDeckPanel(FName Tag, const TCHAR *Title, TSharedRef<SWidget> Content)
+{
+    return SNew(SBorder)
+        .Tag(Tag)
+        .Clipping(EWidgetClipping::ClipToBounds)
+        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+        .BorderBackgroundColor(FLinearColor(.07f, .24f, .12f))
+        .Padding(1)[SNew(SBorder)
+                        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                        .BorderBackgroundColor(FLinearColor(.006f, .018f, .01f))
+                        .Padding(9)[SNew(SVerticalBox) +
+                                    SVerticalBox::Slot().AutoHeight().Padding(
+                                        0, 0, 0, 6)[SNew(STextBlock)
+                                                        .Text(FText::FromString(Title))
+                                                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+                                                        .ColorAndOpacity(FLinearColor(.48f, .87f, .58f))
+                                                        .Clipping(EWidgetClipping::ClipToBounds)] +
+                                    SVerticalBox::Slot().FillHeight(1)[Content]]];
+}
+} // namespace
+bool SDirectOrScutWorkstationWidget::SetReportedCrewRoom(int32 Crew, int32 Room)
+{
+    if (Crew < 0 || Crew >= 4 || Room < -1 || Room >= 8)
+    {
+        return false;
+    }
+    ReportedCrewRooms[Crew] = Room;
+    bCrewReportOverride[Crew] = true;
+    return true;
+}
+int32 SDirectOrScutWorkstationWidget::GetReportedCrewRoom(int32 Crew) const
+{
+    return Crew >= 0 && Crew < 4 ? ReportedCrewRooms[Crew] : -1;
+}
+bool SDirectOrScutWorkstationWidget::PresentSecondaryOptic(int32 Room)
+{
+    if (!Rig.IsValid() || Room < 0 || Room >= 8)
+    {
+        return false;
+    }
+    if (ActiveInjection && ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
+    {
+        ActiveInjection->bClosed = true;
+    }
+    const int32 Feed = ACompartmentCameraRig::FeedForRoom(Room);
+    auto Block = MakeShared<FTerminalStreamBlock>();
+    Block->Kind = FTerminalStreamBlock::EKind::Optic;
+    Block->Subject = Room;
+    Block->Text = FString::Printf(TEXT("[SECONDARY OPTIC] %s"), DirectOrScut::RoomName(Room));
+    if (TerminalMaterials[Feed].IsValid())
+    {
+        Block->Material.Reset(UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
+        ApplyTerminalMaterialParameters(*Block->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(320, 180),
+                                        PresentationSeconds, 0, 0);
+        Block->Brush.SetResourceObject(Block->Material.Get());
+    }
+    else
+    {
+        Block->Brush.SetResourceObject(Rig->Targets[Feed].Get());
+    }
+    Block->Brush.ImageSize = FVector2D(1024, 576);
+    Block->Brush.DrawAs = ESlateBrushDrawType::Image;
+    ActiveInjection = Block;
+    AppendTerminalBlock(Block);
+    return true;
+}
+float SDirectOrScutWorkstationWidget::PrimaryOpticHeight() const
+{
+    const float Width = MediationColumn.IsValid() ? float(MediationColumn->GetCachedGeometry().GetLocalSize().X) : 640;
+    return FMath::Max(1.f, Width - 14.f) * .5625f;
+}
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildOpticFrame(TSharedRef<FTerminalStreamBlock> Block,
+                                                                    bool Primary)
+{
+    auto View = SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds) +
+                SOverlay::Slot()[SAssignNew(Block->Image, SImage)
+                                     .Image(&Block->Brush)
+                                     .Tag(Primary ? TEXT("ScutPrimaryOpticImage") : TEXT("ScutSecondaryOpticImage"))] +
+                SOverlay::Slot()[SNew(SDirectOrScutInstrument)
+                                     .Owner(SharedThis(this))
+                                     .Kind(ETerminalInstrument::Reticle)
+                                     .Subject(Block->Subject)
+                                     .Visibility(EVisibility::HitTestInvisible)];
+    TSharedRef<SWidget> Image = View;
+    if (!Primary)
+    {
+        Image = SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SBox).WidthOverride(480).HeightOverride(270)[View]];
+    }
+    return SNew(SBorder)
+        .Tag(Primary ? TEXT("ScutInlineOptic") : TEXT("ScutInlinePiP"))
+        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+        .BorderBackgroundColor(FLinearColor(.08f, .3f, .14f))
+        .Padding(1)[SNew(SBorder)
+                        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                        .BorderBackgroundColor(FLinearColor(.004f, .012f, .007f))
+                        .Padding(6)[SNew(SVerticalBox) +
+                                    SVerticalBox::Slot().AutoHeight().Padding(
+                                        0, 0, 0, 5)[SNew(STextBlock)
+                                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                                        .ColorAndOpacity(EvaluatePhosphorColor(.95f))
+                                                        .Text_Lambda(
+                                                            [this, Block]()
+                                                            {
+                                                                return FText::FromString(
+                                                                    Block->Text +
+                                                                    (Sim->StationRooms[Block->Subject].Power ==
+                                                                             EPowerState::Offline
+                                                                         ? TEXT(" // OFFLINE; NO LIVE CARRIER")
+                                                                         : TEXT(" // LIVE")));
+                                                            })] +
+                                    SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride_Lambda(
+                                        [this, Primary]() { return Primary ? PrimaryOpticHeight() : 100.f; })[Image]]]];
+}
+void SDirectOrScutWorkstationWidget::RebuildTerminalEvidence()
+{
+    if (bDebugEightCamGrid || !PrimaryOpticSlot || !InjectionSlot)
+    {
+        return;
+    }
+    if (ActiveOptic)
+    {
+        PrimaryOpticSlot->SetContent(BuildOpticFrame(ActiveOptic.ToSharedRef(), true));
+    }
+    if (!ActiveInjection)
+    {
+        InjectionSlot->SetContent(SNullWidget::NullWidget);
+        return;
+    }
+    if (ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
+    {
+        InjectionSlot->SetContent(BuildOpticFrame(ActiveInjection.ToSharedRef(), false));
+    }
+    else
+    {
+        const auto Block = ActiveInjection;
+        InjectionSlot->SetContent(TerminalDeckPanel(
+            TEXT("ScutActiveInjection"), *Block->Text,
+            SNew(SBox).HeightOverride(
+                86)[SNew(SDirectOrScutInstrument)
+                        .Owner(SharedThis(this))
+                        .Kind(Block->Instrument)
+                        .Subject(Block->Subject)
+                        .Clipping(EWidgetClipping::ClipToBounds)
+                        .Tag(Block->Instrument == ETerminalInstrument::ECG ? TEXT("ScutInlineECG")
+                                                                           : TEXT("ScutZoomedRoomSchematic"))]));
+    }
+}
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
+{
+    auto Deck = SNew(SVerticalBox);
+    auto Map = SNew(SHorizontalBox);
+    Map->AddSlot().FillWidth(
+        .64f)[SNew(SBox).Tag(TEXT("ScutInlineSchematic"))[SNew(SDirectOrScutInstrument)
+                                                              .Tag(TEXT("ScutOverheadStationMap"))
+                                                              .Owner(SharedThis(this))
+                                                              .Kind(ETerminalInstrument::StationMap)
+                                                              .Subject(0)
+                                                              .Clipping(EWidgetClipping::ClipToBounds)]];
+    auto Legend = SNew(SVerticalBox);
+    for (int32 Room = 0; Room < 8; ++Room)
+    {
+        Legend->AddSlot().FillHeight(
+            1)[SNew(STextBlock)
+                   .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                   .Clipping(EWidgetClipping::ClipToBounds)
+                   .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
+                   .Text_Lambda(
+                       [this, Room]()
+                       {
+                           return FText::FromString(FString::Printf(
+                               TEXT("%s%d  %s"),
+                               ACompartmentCameraRig::RoomForFeed(ActiveFeed) == Room ? TEXT(">") : TEXT(" "), Room,
+                               DirectOrScut::RoomName(Room)));
+                       })];
+    }
+    Map->AddSlot().FillWidth(.36f).Padding(4, 4, 0, 0)[Legend];
+    Deck->AddSlot().FillHeight(.43f).Padding(
+        0, 0, 0,
+        8)[TerminalDeckPanel(TEXT("ScutStationPanel"), TEXT("STATION OVERHEAD // AI-REPORTED CREW FIXES"), Map)];
+    auto Vitals = SNew(SVerticalBox).Tag(TEXT("ScutVitalsArray"));
+    const TCHAR *Names[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"), TEXT("ASH")};
+    for (int32 Crew = 0; Crew < 4; ++Crew)
+    {
+        Vitals->AddSlot().FillHeight(1).Padding(
+            0, 2)[SNew(SHorizontalBox)
+                      .Tag(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)))
+                      .Clipping(EWidgetClipping::ClipToBounds) +
+                  SHorizontalBox::Slot().AutoWidth().VAlign(
+                      VAlign_Center)[SNew(SBox).WidthOverride(48)[SNew(STextBlock)
+                                                                      .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+                                                                      .Text(FText::FromString(Names[Crew]))
+                                                                      .ColorAndOpacity(EvaluatePhosphorColor(.9f))]] +
+                  SHorizontalBox::Slot().FillWidth(.28f).Padding(4, 0, 8,
+                                                                 0)[SNew(SDirectOrScutInstrument)
+                                                                        .Owner(SharedThis(this))
+                                                                        .Kind(ETerminalInstrument::ECG)
+                                                                        .Subject(Crew)
+                                                                        .Clipping(EWidgetClipping::ClipToBounds)] +
+                  SHorizontalBox::Slot().FillWidth(.72f).VAlign(
+                      VAlign_Center)[SNew(STextBlock)
+                                         .Tag(FName(*FString::Printf(TEXT("ScutVitalsReadout%d"), Crew)))
+                                         .Clipping(EWidgetClipping::ClipToBounds)
+                                         .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                         .ColorAndOpacity(EvaluatePhosphorColor(.9f))
+                                         .Text_Lambda(
+                                             [this, Crew]()
+                                             {
+                                                 const auto P = Sim->TerminalBiometrics(Crew);
+                                                 const int32 Room = GetReportedCrewRoom(Crew);
+                                                 return FText::FromString(FString::Printf(
+                                                     TEXT("%3.0f BPM / %2.0f RPM / %s"), P.HeartRateBPM,
+                                                     P.RespirationRateRPM,
+                                                     Room < 0 ? TEXT("NO FIX") : DirectOrScut::RoomName(Room)));
+                                             })]];
+    }
+    Deck->AddSlot().FillHeight(.25f).Padding(
+        0, 0, 0, 8)[TerminalDeckPanel(TEXT("ScutVitalsPanel"), TEXT("SUBJECT VITALS // AI-REPORTED LOCATION"), Vitals)];
+    auto Matrix = SNew(SVerticalBox).Tag(TEXT("ScutEnvironmentMatrix"));
+    auto Head = SNew(SHorizontalBox);
+    const TCHAR *Columns[] = {TEXT("ID / COMPARTMENT"), TEXT("O2"), TEXT("%"), TEXT("PWR"), TEXT("SEAL")};
+    const float Widths[] = {.42f, .18f, .1f, .11f, .19f};
+    for (int32 I = 0; I < 5; ++I)
+    {
+        Head->AddSlot().FillWidth(Widths[I])[SNew(STextBlock)
+                                                 .Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+                                                 .Text(FText::FromString(Columns[I]))
+                                                 .ColorAndOpacity(EvaluatePhosphorColor(.8f))];
+    }
+    Matrix->AddSlot().AutoHeight().Padding(0, 0, 0, 4)[Head];
+    for (int32 Room = 0; Room < 8; ++Room)
+    {
+        Matrix->AddSlot().FillHeight(1).Padding(
+            0,
+            1)[SNew(SHorizontalBox)
+                   .Tag(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)))
+                   .Clipping(EWidgetClipping::ClipToBounds) +
+               SHorizontalBox::Slot().FillWidth(Widths[0]).VAlign(VAlign_Center)
+                   [SNew(STextBlock)
+                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                        .Clipping(EWidgetClipping::ClipToBounds)
+                        .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
+                        .Text(FText::FromString(FString::Printf(TEXT("%d %s"), Room, DirectOrScut::RoomName(Room))))] +
+               SHorizontalBox::Slot().FillWidth(Widths[1]).Padding(
+                   0, 6, 8,
+                   6)[SNew(SProgressBar)
+                          .Style(&OxygenBarStyle)
+                          .Percent_Lambda([this, Room]()
+                                          { return FMath::Clamp(Sim->StationRooms[Room].OxygenPct / 100.f, 0.f, 1.f); })
+                          .FillColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })] +
+               SHorizontalBox::Slot().FillWidth(Widths[2]).VAlign(
+                   VAlign_Center)[SNew(STextBlock)
+                                      .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                                      .ColorAndOpacity(EvaluatePhosphorColor(.85f))
+                                      .Text_Lambda(
+                                          [this, Room]()
+                                          {
+                                              return FText::FromString(
+                                                  FString::Printf(TEXT("%.0f"), Sim->StationRooms[Room].OxygenPct));
+                                          })] +
+               SHorizontalBox::Slot().FillWidth(Widths[3]).VAlign(
+                   VAlign_Center)[SNew(STextBlock)
+                                      .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                                      .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
+                                      .Text_Lambda(
+                                          [this, Room]()
+                                          {
+                                              return FText::FromString(
+                                                  Sim->StationRooms[Room].Power == EPowerState::Offline ? TEXT("OFF")
+                                                  : Sim->StationRooms[Room].Power == EPowerState::Low   ? TEXT("LOW")
+                                                                                                        : TEXT("NOM"));
+                                          })] +
+               SHorizontalBox::Slot().FillWidth(Widths[4]).VAlign(VAlign_Center)
+                   [SNew(STextBlock)
+                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                        .ColorAndOpacity(EvaluatePhosphorColor(.85f))
+                        .Text_Lambda(
+                            [this, Room]()
+                            { return FText::FromString(Sim->IsRoomSealed(Room) ? TEXT("SEALED") : TEXT("OPEN")); })]];
+    }
+    Deck->AddSlot().FillHeight(
+        .32f)[TerminalDeckPanel(TEXT("ScutEnvironmentPanel"), TEXT("COMPARTMENT ENVIRONMENT // STATION BUS"), Matrix)];
+    return Deck;
 }
 TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const FText &Draft)
 {
-    auto Stream = SNew(SVerticalBox);
-    Stream->AddSlot().AutoHeight().Padding(
-        0, 0, 0, 12)[SNew(STextBlock)
-                         .Tag(TEXT("ScutCarrier"))
-                         .Font(FCoreStyle::GetDefaultFontStyle("Bold", 18))
-                         .ColorAndOpacity(EvaluatePhosphorColor(1))
-                         .Text(FText::FromString(TEXT("CARRIER: THETA-9 // PROJECT: GLASS HOUSE")))];
-    Stream->AddSlot().AutoHeight().Padding(
-        0, 0, 0,
-        12)[SNew(STextBlock)
-                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-                .ColorAndOpacity(EvaluatePhosphorColor(.8f))
-                .Text(FText::FromString(TEXT(
-                    "MOTHER-7 / OPTICAL MEDIATION TERMINAL                                      F9: DIAGNOSTICS")))];
-    Stream->AddSlot().FillHeight(
-        1)[SAssignNew(LogScroll, SScrollBox)
-               .Tag(TEXT("ScutTerminalStream"))
-               .ScrollBarStyle(&SlimScrollStyle)
-               .ScrollBarThickness(FVector2D(3, 3))
-               .OnUserScrolled_Lambda([this](float Offset)
-                                      { bLogAutoScroll = Offset >= LogScroll->GetScrollOffsetOfEnd() - 2; }) +
-           SScrollBox::Slot()[SAssignNew(Log, SVerticalBox).Tag(TEXT("ScutInlineStream"))]];
-    // Briefing is an inline system block; initialization is still a validated queued command.
-    Stream->AddSlot().AutoHeight()[SNew(SButton)
-                                       .Tag(TEXT("ScutInitializeExperiment"))
-                                       .IsFocusable(false)
-                                       .Visibility_Lambda(
-                                           [this]()
-                                           {
-                                               return Sim->ExperimentPhase == EExperimentPhase::Briefing
-                                                          ? EVisibility::Visible
-                                                          : EVisibility::Collapsed;
-                                           })
-                                       .Text(FText::FromString(TEXT("[ENTER] INITIALIZE EXPERIMENT")))
-                                       .OnClicked_Lambda(
-                                           [this]()
-                                           {
-                                               Sim->QueueConsoleCommand(TEXT("start_experiment"));
-                                               return FReply::Handled();
-                                           })];
+    auto Workstation = SNew(SVerticalBox);
+    Workstation->AddSlot().AutoHeight().Padding(
+        0, 0, 0, 10)[SNew(SBox)
+                         .HeightOverride(28)
+                         .Tag(TEXT("ScutStatusCarrierBar"))
+                         .Clipping(EWidgetClipping::ClipToBounds)
+                             [SNew(STextBlock)
+                                  .Tag(TEXT("ScutCarrier"))
+                                  .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+                                  .ColorAndOpacity(EvaluatePhosphorColor(1))
+                                  .Clipping(EWidgetClipping::ClipToBounds)
+                                  .Text_Lambda(
+                                      [this]()
+                                      {
+                                          const auto &M = Sim->Simulation;
+                                          const int32 T = FMath::Max(0, 600 - int32(M.TickIndex / 30));
+                                          return FText::FromString(FString::Printf(
+                                              TEXT("CARRIER: THETA-9 // PROJECT: GLASS HOUSE | T-%02d:%02d | OBJ "
+                                                   "%.0f%% | SUSP %.0f%% | AI-LINK:%s | F9: DEBUG"),
+                                              T / 60, T % 60, M.ObjectiveProgress * 100, M.CollectiveSuspicion() * 100,
+                                              Sim->bAILink ? TEXT("LINKED") : TEXT("LOCAL")));
+                                      })]];
+    auto Left = SNew(SVerticalBox);
+    Left->AddSlot().AutoHeight().Padding(0, 0, 0,
+                                         8)[SAssignNew(PrimaryOpticSlot, SBox).Tag(TEXT("ScutPrimaryOpticSlot"))];
+    Left->AddSlot().AutoHeight().Padding(0, 0, 0, 8)[SAssignNew(InjectionSlot, SBox).Tag(TEXT("ScutInjectionSlot"))];
+    Left->AddSlot().FillHeight(1)[TerminalDeckPanel(
+        TEXT("ScutTeletypePanel"), TEXT("MOTHER-7> // MEDIATION TRANSCRIPT"),
+        SAssignNew(LogScroll, SScrollBox)
+                .Tag(TEXT("ScutTerminalStream"))
+                .Clipping(EWidgetClipping::ClipToBoundsAlways)
+                .ScrollBarStyle(&SlimScrollStyle)
+                .ScrollBarThickness(FVector2D(3, 3))
+                .OnUserScrolled_Lambda([this](float Offset)
+                                       { bLogAutoScroll = Offset >= LogScroll->GetScrollOffsetOfEnd() - 2; }) +
+            SScrollBox::Slot()[SAssignNew(Log, SVerticalBox).Tag(TEXT("ScutInlineStream"))])];
+    Left->AddSlot().AutoHeight().Padding(0, 5, 0, 0)[SNew(SButton)
+                                                         .Tag(TEXT("ScutInitializeExperiment"))
+                                                         .IsFocusable(false)
+                                                         .Visibility_Lambda(
+                                                             [this]()
+                                                             {
+                                                                 return Sim->ExperimentPhase ==
+                                                                                EExperimentPhase::Briefing
+                                                                            ? EVisibility::Visible
+                                                                            : EVisibility::Collapsed;
+                                                             })
+                                                         .Text(FText::FromString(TEXT("[ENTER] INITIALIZE EXPERIMENT")))
+                                                         .OnClicked_Lambda(
+                                                             [this]()
+                                                             {
+                                                                 Sim->QueueConsoleCommand(TEXT("start_experiment"));
+                                                                 return FReply::Handled();
+                                                             })];
     auto Bar = SNew(SHorizontalBox);
     const TCHAR *Labels[] = {TEXT("[1] FINDINGS"),      TEXT("[2] SUBJECTS"), TEXT("[3] BLINDSPOTS"),
                              TEXT("[4] CROSS-EXAMINE"), TEXT("[5] OVERRIDE"), TEXT("[R] SCRUB 15S")};
     for (int32 I = 0; I < 6; ++I)
     {
-        Bar->AddSlot().AutoWidth().Padding(0, 8, 14,
+        Bar->AddSlot().AutoWidth().Padding(0, 7, 10,
                                            6)[SNew(SButton)
                                                   .IsFocusable(false)
                                                   .Tag(FName(*FString::Printf(TEXT("ScutInquiry%d"), I + 1)))
@@ -2113,41 +2516,50 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                                                           Inquiry(I);
                                                           return FReply::Handled();
                                                       })[SNew(STextBlock)
-                                                             .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                                             .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
                                                              .ColorAndOpacity(EvaluatePhosphorColor(1))
                                                              .Text(FText::FromString(Labels[I]))]];
     }
-    Stream->AddSlot().AutoHeight()[Bar];
-    Stream->AddSlot().AutoHeight()
-        [SNew(SHorizontalBox) +
-         SHorizontalBox::Slot().AutoWidth().VAlign(
-             VAlign_Center)[SNew(STextBlock)
-                                .Text(FText::FromString(TEXT("> ")))
-                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 18))
-                                .ColorAndOpacity(EvaluatePhosphorColor(1))] +
-         SHorizontalBox::Slot().FillWidth(
-             1)[SAssignNew(Prompt, SEditableTextBox)
-                    .Tag(TEXT("ScutPrompt"))
-                    .Text(Draft)
-                    .Font(FCoreStyle::GetDefaultFontStyle("Regular", 15))
-                    .ForegroundColor(EvaluatePhosphorColor(1))
-                    .BackgroundColor(FLinearColor(.003f, .008f, .004f))
-                    .ClearKeyboardFocusOnCommit(false)
-                    .HintText(FText::FromString(TEXT("show_cam med_bay | show_widget ecg vale | operational command")))
-                    .OnKeyCharHandler_Lambda(
-                        [this](const FGeometry &, const FCharacterEvent &E)
-                        {
-                            const bool Suppress = SuppressPromptChar &&
-                                                  (E.GetCharacter() == SuppressPromptChar || E.GetCharacter() == '~');
-                            SuppressPromptChar = 0;
-                            return Suppress ? FReply::Handled() : FReply::Unhandled();
-                        })
-                    .OnTextCommitted(this, &SDirectOrScutWorkstationWidget::Commit)]];
+    Left->AddSlot().AutoHeight()[Bar];
+    Left->AddSlot().AutoHeight()[SNew(SHorizontalBox) +
+                                 SHorizontalBox::Slot().AutoWidth().VAlign(
+                                     VAlign_Center)[SNew(STextBlock)
+                                                        .Text(FText::FromString(TEXT("> ")))
+                                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 17))
+                                                        .ColorAndOpacity(EvaluatePhosphorColor(1))] +
+                                 SHorizontalBox::Slot().FillWidth(
+                                     1)[SAssignNew(Prompt, SEditableTextBox)
+                                            .Tag(TEXT("ScutPrompt"))
+                                            .Text(Draft)
+                                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
+                                            .ForegroundColor(EvaluatePhosphorColor(1))
+                                            .BackgroundColor(FLinearColor(.003f, .008f, .004f))
+                                            .ClearKeyboardFocusOnCommit(false)
+                                            .HintText(FText::FromString(TEXT(
+                                                "show_cam med_bay | show_widget ecg vale | show_widget pip bridge")))
+                                            .OnKeyCharHandler_Lambda(
+                                                [this](const FGeometry &, const FCharacterEvent &E)
+                                                {
+                                                    const bool Suppress =
+                                                        SuppressPromptChar && (E.GetCharacter() == SuppressPromptChar ||
+                                                                               E.GetCharacter() == '~');
+                                                    SuppressPromptChar = 0;
+                                                    return Suppress ? FReply::Handled() : FReply::Unhandled();
+                                                })
+                                            .OnTextCommitted(this, &SDirectOrScutWorkstationWidget::Commit)]];
+    Workstation->AddSlot().FillHeight(1)
+        [SNew(SHorizontalBox).Tag(TEXT("ScutPaneledWorkspace")) +
+         SHorizontalBox::Slot().FillWidth(.56f).Padding(0, 0, 7,
+                                                        0)[SAssignNew(MediationColumn, SBox)
+                                                               .Tag(TEXT("ScutMediationColumn"))
+                                                               .Clipping(EWidgetClipping::ClipToBounds)[Left]] +
+         SHorizontalBox::Slot().FillWidth(.44f).Padding(7, 0, 0, 0)
+             [SNew(SBox).Tag(TEXT("ScutReadoutColumn")).Clipping(EWidgetClipping::ClipToBounds)[BuildTelemetryDeck()]]];
     return SNew(SBorder)
         .Tag(TEXT("ScutUnifiedTerminal"))
         .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
         .BorderBackgroundColor(FLinearColor(.003f, .009f, .005f))
-        .Padding(FMargin(30, 20))[Stream];
+        .Padding(16)[Workstation];
 }
 void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
 {
@@ -2155,73 +2567,31 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
     {
         return;
     }
+    RebuildTerminalEvidence();
     const float Offset = LogScroll->GetScrollOffset();
     Log->ClearChildren();
     for (const auto &Block : TerminalStream)
     {
-        auto Contents = SNew(SVerticalBox);
-        Contents->AddSlot()
-            .AutoHeight()[SNew(STextBlock)
-                              .AutoWrapText(true)
-                              .Font(FCoreStyle::GetDefaultFontStyle(
-                                  "Regular", Block->Kind == FTerminalStreamBlock::EKind::Prose ? 15 : 12))
-                              .ColorAndOpacity(EvaluatePhosphorColor(.9f))
-                              .Text_Lambda(
-                                  [this, Block]()
-                                  {
-                                      if (Block->Kind == FTerminalStreamBlock::EKind::Prose)
-                                      {
-                                          return FText::FromString(Block->Text.Left(int32(Block->Characters)));
-                                      }
-                                      if (Block->Kind == FTerminalStreamBlock::EKind::Optic)
-                                      {
-                                          return FText::FromString(
-                                              Block->Text +
-                                              (Block->bClosed ? TEXT(" // CLOSED; NO RECORDED FRAME")
-                                               : Sim->StationRooms[Block->Subject].Power == EPowerState::Offline
-                                                   ? TEXT(" // OFFLINE; NO LIVE CARRIER")
-                                                   : TEXT(" // LIVE OPTICAL SOURCE")));
-                                      }
-                                      return FText::FromString(Block->Text);
-                                  })];
-        if (Block->Kind == FTerminalStreamBlock::EKind::Optic && !Block->bClosed)
+        // Evidence lives in the two dedicated panes; keep the transcript for mediator/system prose.
+        if (Block->Kind != FTerminalStreamBlock::EKind::Prose)
         {
-            Contents->AddSlot()
-                .AutoHeight()
-                .HAlign(HAlign_Left)
-                .Padding(0, 8)
-                    [SNew(SBox)
-                         .WidthOverride_Lambda(
-                             [this]()
-                             { return FMath::Clamp(float(GetCachedGeometry().GetLocalSize().X) - 80.f, 160.f, 480.f); })
-                         .HeightOverride_Lambda(
-                             [this]()
-                             {
-                                 return FMath::Clamp(float(GetCachedGeometry().GetLocalSize().X) - 80.f, 160.f, 480.f) *
-                                        .5625f;
-                             })
-                         .Tag(TEXT("ScutInlineOptic"))
-                             [SNew(SOverlay) + SOverlay::Slot()[SAssignNew(Block->Image, SImage).Image(&Block->Brush)] +
-                              SOverlay::Slot()[SNew(SDirectOrScutInstrument)
-                                                   .Owner(SharedThis(this))
-                                                   .Kind(ETerminalInstrument::Reticle)
-                                                   .Subject(Block->Subject)
-                                                   .Visibility(EVisibility::HitTestInvisible)]]];
+            continue;
         }
-        else if (Block->Kind == FTerminalStreamBlock::EKind::Instrument)
-        {
-            Contents->AddSlot().AutoHeight().HAlign(HAlign_Left)[SNew(SBox).WidthOverride_Lambda(
-                [this]()
-                {
-                    return FMath::Clamp(float(GetCachedGeometry().GetLocalSize().X) - 80.f, 160.f, 720.f);
-                })[SNew(SDirectOrScutInstrument)
-                       .Owner(SharedThis(this))
-                       .Kind(Block->Instrument)
-                       .Subject(Block->Subject)
-                       .Tag(Block->Instrument == ETerminalInstrument::ECG ? TEXT("ScutInlineECG")
-                                                                          : TEXT("ScutInlineSchematic"))]];
-        }
-        Log->AddSlot().AutoHeight().Padding(0, 4, 0, 8)[Contents];
+        Log->AddSlot().AutoHeight().Padding(
+            0, 2, 0, 4)[SNew(STextBlock)
+                            .Tag(TEXT("ScutTeletypeLine"))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
+                            .AutoWrapText(true)
+                            .ColorAndOpacity(EvaluatePhosphorColor(.9f))
+                            .Text_Lambda(
+                                [Block]()
+                                {
+                                    return FText::FromString(
+                                        Block->Kind == FTerminalStreamBlock::EKind::Prose
+                                            ? Block->Text.Left(int32(Block->Characters))
+                                            : TEXT("SYSTEM> DISPLAY ") + Block->Text +
+                                                  (Block->bClosed ? TEXT(" // CLOSED; NO RECORDED FRAME") : TEXT("")));
+                                })];
     }
     if (bLogAutoScroll)
     {

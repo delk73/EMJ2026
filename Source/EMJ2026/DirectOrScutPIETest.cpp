@@ -2295,6 +2295,9 @@ class FExperimentEndingsCheck : public IAutomationLatentCommand
         case 3:
             Click(TEXT("ScutSwitchScenario"));
             S->AdvanceSteps(1);
+            Test->AddInfo(FString::Printf(TEXT("Scenario switch state: medical=%d phase=%d tick=%llu cues=%d"),
+                                          S->bMedicalScenario, int32(S->ExperimentPhase), M.TickIndex,
+                                          S->CinematicCues.Num()));
             Test->TestTrue(TEXT("Switch click returns behavioral Briefing"),
                            !S->bMedicalScenario && S->ExperimentPhase == EExperimentPhase::Briefing &&
                                M.TickIndex == 0 && S->CinematicCues.IsEmpty());
@@ -2987,6 +2990,89 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                     FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut") / Name)));
             }
         };
+        auto CheckPanels = [&]()
+        {
+            const TCHAR *Required[] = {
+                TEXT("ScutMediationColumn"), TEXT("ScutReadoutColumn"),    TEXT("ScutPrimaryOpticSlot"),
+                TEXT("ScutInjectionSlot"),   TEXT("ScutTeletypePanel"),    TEXT("ScutOverheadStationMap"),
+                TEXT("ScutVitalsPanel"),     TEXT("ScutEnvironmentPanel"), TEXT("ScutStatusCarrierBar")};
+            for (const TCHAR *Tag : Required)
+            {
+                auto Widget = Find(Tag);
+                Test->TestTrue(FString::Printf(TEXT("Paneled terminal has %s"), Tag), Widget.IsValid());
+                if (!Widget)
+                {
+                    return;
+                }
+                const auto Size = Widget->GetCachedGeometry().GetLocalSize();
+                Test->TestTrue(FString::Printf(TEXT("%s has positive geometry"), Tag), Size.X > 20 && Size.Y > 10);
+            }
+            const auto Left = Find(TEXT("ScutMediationColumn"))->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto Right = Find(TEXT("ScutReadoutColumn"))->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto Header = Find(TEXT("ScutStatusCarrierBar"))->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto Transcript = Find(TEXT("ScutTerminalStream"))->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto Image = Find(TEXT("ScutPrimaryOpticImage"))->GetCachedGeometry().GetRenderBoundingRect();
+            Test->TestTrue(TEXT("Mediation/readout columns do not overlap"),
+                           Left.Right <= Right.Left && Header.Bottom <= Left.Top + 1);
+            Test->TestTrue(
+                TEXT("Asymmetric 56/44 workstation split"),
+                FMath::Abs((Left.Right - Left.Left) / ((Left.Right - Left.Left) + (Right.Right - Right.Left)) - .56f) <
+                    .02f);
+            Test->TestTrue(TEXT("Primary camera fills column at 16:9"),
+                           FMath::Abs((Image.Right - Image.Left) / (Image.Bottom - Image.Top) - 16.f / 9) < .02f &&
+                               Image.Right - Image.Left > (Left.Right - Left.Left) * .95f);
+            Test->TestTrue(TEXT("Transcript is separated from header and primary optic"),
+                           Transcript.Top >= Header.Bottom && Transcript.Top >= Image.Bottom);
+            Test->TestTrue(TEXT("Teletype enforces clipping"),
+                           Find(TEXT("ScutTerminalStream"))->GetClipping() == EWidgetClipping::ClipToBoundsAlways);
+            auto HeaderText = StaticCastSharedPtr<STextBlock>(Find(TEXT("ScutCarrier")));
+            Test->TestTrue(TEXT("Carrier line fits without truncation"),
+                           HeaderText->GetDesiredSize().X <= HeaderText->GetCachedGeometry().GetLocalSize().X + 1);
+            for (int32 Crew = 0; Crew < 4; ++Crew)
+            {
+                const auto Row = Find(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)));
+                Test->TestTrue(TEXT("All four persistent vitals have geometry"),
+                               Row.IsValid() && Row->GetCachedGeometry().GetLocalSize().Y > 12);
+                if (Crew > 0 && Row)
+                {
+                    const auto Previous = Find(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew - 1)));
+                    Test->TestTrue(TEXT("Vitals rows never overlap"),
+                                   Previous->GetCachedGeometry().GetLayoutBoundingRect().Bottom <=
+                                       Row->GetCachedGeometry().GetLayoutBoundingRect().Top + 1);
+                }
+            }
+            for (int32 Room = 0; Room < 8; ++Room)
+            {
+                const auto Row = Find(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)));
+                Test->TestTrue(TEXT("All eight environment rows have geometry"),
+                               Row.IsValid() && Row->GetCachedGeometry().GetLocalSize().Y > 12);
+                if (Room > 0 && Row)
+                {
+                    const auto Previous = Find(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room - 1)));
+                    Test->TestTrue(TEXT("Environment rows never overlap"),
+                                   Previous->GetCachedGeometry().GetLayoutBoundingRect().Bottom <=
+                                       Row->GetCachedGeometry().GetLayoutBoundingRect().Top + 1);
+                }
+            }
+            TFunction<void(TSharedRef<SWidget>)> CheckText;
+            CheckText = [&](TSharedRef<SWidget> Widget)
+            {
+                if (Widget->GetTypeAsString() == TEXT("STextBlock"))
+                {
+                    const auto Text = StaticCastSharedRef<STextBlock>(Widget);
+                    const auto Size = Text->GetCachedGeometry().GetLocalSize();
+                    const auto Desired = Text->GetDesiredSize();
+                    Test->TestTrue(TEXT("Persistent deck text fits its cell without clipping"),
+                                   Desired.X <= Size.X + 1 && Desired.Y <= Size.Y + 1);
+                }
+                auto *Children = Widget->GetChildren();
+                for (int32 I = 0; I < Children->Num(); ++I)
+                {
+                    CheckText(Children->GetChildAt(I));
+                }
+            };
+            CheckText(Find(TEXT("ScutReadoutColumn")).ToSharedRef());
+        };
         auto Key = [&](FKey K)
         {
             auto &App = FSlateApplication::Get();
@@ -3010,12 +3096,27 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Ready = Now + 1.5;
             break;
         case 1:
+        {
+            CheckPanels();
+            const auto Prose = Find(TEXT("ScutTeletypeLine"));
+            Test->TestTrue(TEXT("Clinical mediator prose remains visible above inquiry bar"),
+                           Prose.IsValid() && StaticCastSharedPtr<STextBlock>(Prose)->GetText().ToString().StartsWith(
+                                                  TEXT("MOTHER-7>")));
             Capture(TEXT("UnifiedTerminalPIE.png"));
+            ActualReportedCrewRoom = Sim->Simulation.Bodies[0].Room;
+            Test->TestTrue(TEXT("AI report accepts a contradictory location"),
+                           Workstation->SetReportedCrewRoom(0, (ActualReportedCrewRoom + 1) % 8));
+            Test->TestEqual(TEXT("Map report uses mediated location"), Workstation->GetReportedCrewRoom(0),
+                            (ActualReportedCrewRoom + 1) % 8);
+            Test->TestEqual(TEXT("AI location report cannot move authoritative crew"), Sim->Simulation.Bodies[0].Room,
+                            ActualReportedCrewRoom);
+            Test->TestEqual(TEXT("AI location report cannot change model hash"), Sim->SurveillanceStateHash(), Hash);
             Key(EKeys::F9);
             Test->TestTrue(TEXT("F9 enables diagnostics"), Workstation->IsDebugEightCamGrid());
             Test->TestEqual(TEXT("F9 does not change authoritative hash"), Sim->SurveillanceStateHash(), Hash);
             Ready = Now + .3;
             break;
+        }
         case 2:
         {
             for (int32 I = 1; I <= 8; ++I)
@@ -3112,6 +3213,14 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                 Test->TestEqual(TEXT("Online compartment clears offline carrier"),
                                 MID->K2_GetScalarParameterValue(TEXT("SignalOfflineNoise")), 0.f);
             }
+            Test->TestTrue(TEXT("Zoomed room injection is present"), Find(TEXT("ScutZoomedRoomSchematic")).IsValid());
+            const int32 Primary = Workstation->ActiveFeed;
+            Test->TestTrue(TEXT("Secondary PiP director request"),
+                           Workstation->HandlePresentationCommand(TEXT("show_widget pip med_bay")));
+            Test->TestEqual(TEXT("PiP does not replace primary optic"), Workstation->ActiveFeed, Primary);
+            Test->TestTrue(TEXT("PiP injection slot exists"), Find(TEXT("ScutInlinePiP")).IsValid());
+            Test->TestFalse(TEXT("Invalid PiP room rejected"), Workstation->PresentSecondaryOptic(8));
+            Test->TestFalse(TEXT("Invalid report rejected"), Workstation->SetReportedCrewRoom(4, 0));
             Test->TestFalse(TEXT("Invalid subject rejected"),
                             Workstation->PresentInstrument(ETerminalInstrument::ECG, 4));
             Test->TestFalse(TEXT("Invalid room rejected"), Workstation->PresentOptic(8));
@@ -3128,6 +3237,8 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Test->TestFalse(TEXT("Reset retains default unified mode"), Workstation->IsDebugEightCamGrid());
             Test->TestEqual(TEXT("Reset clears stream history to startup instruments"),
                             Workstation->GetInlineInstrumentCount(), 2);
+            Test->TestEqual(TEXT("Reset clears report overrides"), Workstation->GetReportedCrewRoom(0),
+                            Sim->Simulation.Bodies[0].Room);
             return true;
         }
         return false;
@@ -3135,7 +3246,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
 
   private:
     FAutomationTestBase *Test;
-    int32 Stage = 0;
+    int32 Stage = 0, ActualReportedCrewRoom = -1;
     uint64 Hash = 0, Tick = 0;
     double Started = 0, Ready = 0;
 };

@@ -1,3 +1,13 @@
+# P2-01a paneled CRT workstation - 2026-11-14
+
+**P2-01a Complete.** Replaced the single-column empty space with a 56/44 paneled workstation, a clipped single-line status carrier, full-width 16:9 primary optics, one active ECG/zoomed schematic/PiP injection slot, and a dedicated clipped teletype console. Added a persistent eight-room overhead map, four subject ECG/vitals rows, and an eight-row environment matrix. Crew blips and location readouts share presentation-owned room reports with override/reset semantics; reports cannot move authoritative crew.
+
+All changes stay in the existing widget pair and consolidated PIE tests. The F9 / `debug_grid` / `/debug` implementation is unchanged and remains pure presentation. No `.cpp`, `.uasset`, or Loom dependency was added. Expanded geometry, clipping, report-separation and PiP checks pass. The final full `preflight.ps1` passed compile/link and NullRHI boot; `Scripts/Test-DirectOrScut.ps1 -ReportName PaneledTerminal` passed **10**, failed **0**, not run **0**, warnings **0** on D3D12 SM6. The fresh 1564x830 `UnifiedTerminalPIE.png` and offline screenshot were inspected: both columns are utilized, MOTHER-7 prose remains visible, and readouts stay inside their panels. Initial zero-scale text and scenario-switch failures are resolved; the text scaling wrapper was removed and detached pane references are released on debug entry. Source architecture, Loom absence/reference scan and `git diff --check` passed; the debug toggle function matches HEAD exactly. Existing engine/plugin and non-Windows SDK warnings remain. No new cook or packaged-game verification was performed.
+
+See [P2-01a implementation](DIRECT_OR_SCUT.md#p2-01a-implementation---2026-11-14) for scope and final verification evidence. Existing P2-00/P2-01 results below remain historical.
+
+---
+
 # P2-01 unified phosphor terminal - 2026-11-14
 
 **P2-01 Complete.** Implemented the default full-viewport MOTHER-7 terminal, typed prose and bounded inline optical/instrument blocks, the compact inquiry row and free-text prompt. The owned CRT material processes the terminal retainer with explicit `OpticRenderTarget` binding, while per-block MIDs drive 0.65-second raster wipes, room power/O2 tint and offline carrier noise. Bounded scrub/voice hooks are present for later milestones.

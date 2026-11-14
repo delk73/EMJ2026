@@ -19,7 +19,8 @@ enum class ETerminalInstrument : uint8
 {
     ECG,
     Schematic,
-    Reticle
+    Reticle,
+    StationMap
 };
 struct FTerminalStreamBlock;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
@@ -49,6 +50,9 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void SetDebugEightCamGrid(bool Enabled);
     bool HandlePresentationCommand(const FString &Input);
     bool PresentOptic(int32 Room);
+    bool PresentSecondaryOptic(int32 Room);
+    bool SetReportedCrewRoom(int32 Crew, int32 Room);
+    int32 GetReportedCrewRoom(int32 Crew) const;
     bool PresentInstrument(ETerminalInstrument Kind, int32 Subject);
     void SetPresentationNoise(float ScrubTracking, float VoiceBleed);
     float GetInlineWipeProgress() const;
@@ -91,7 +95,14 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     float PresentationSeconds = 0;
     int32 UnifiedEventCursor = 0;
     TArray<TSharedPtr<FTerminalStreamBlock>> TerminalStream;
-    TWeakPtr<FTerminalStreamBlock> ActiveOptic;
+    TSharedPtr<FTerminalStreamBlock> ActiveOptic, ActiveInjection;
+    int32 ReportedCrewRooms[4] = {-1, -1, -1, -1};
+    bool bCrewReportOverride[4]{};
+    TSharedPtr<SBox> MediationColumn, PrimaryOpticSlot, InjectionSlot;
+    TSharedRef<SWidget> BuildOpticFrame(TSharedRef<FTerminalStreamBlock> Block, bool Primary);
+    TSharedRef<SWidget> BuildTelemetryDeck();
+    void RebuildTerminalEvidence();
+    float PrimaryOpticHeight() const;
     TStrongObjectPtr<UMaterialInstanceDynamic> TerminalSurfaceMaterial;
     TSharedRef<SWidget> BuildUnifiedTerminal(const FText &Draft);
     void RebuildUnifiedStream();
@@ -120,6 +131,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     TSharedPtr<SRetainerWidget> Retainer;
     TSharedPtr<SScrollBox> LogScroll, MenuScroll;
     FScrollBarStyle SlimScrollStyle;
+    FProgressBarStyle OxygenBarStyle;
     TArray<TSharedPtr<SWidget>> MenuEntries;
     int32 ActiveCategory = 0, HighlightedChoice = 0;
     bool bLogAutoScroll = true;
