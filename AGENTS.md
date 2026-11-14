@@ -8,7 +8,7 @@ Updated 2026-11-14. This root `AGENTS.md` is the canonical source of truth for a
 - Keep `FDirectOrScutSimulation` / `UDirectOrScutSimSubsystem` authoritative at 30 Hz for physics, room state, command validation, and a rolling 15s optic buffer history. Presentation, voice timing, and model latency cannot advance or rewrite ground truth. Forensic scrub is read-only playback, never simulation rewind.
 - `AI-LINK>` uses a hybrid small-LLM director with deterministic fallback. It emits validated structured `show_cam`, `show_widget`, `sim_action`, and `voice_blend` directives. Only accepted `sim_action` commands enter the bounded next-fixed-tick mutation path. Unreliable claims and curated optics belong to mediation, not simulation truth.
 - Plan `FVoicePresentationState` progression `TextOnly` -> `HybridTextAndVoice` -> `VoiceOnly`. In the Act III fourth-wall transition MOTHER-7 stops teletype output and speaks solely via voice; operator input and necessary system feedback remain available.
-- Reuse existing personal CRT, scanline, wipe, and distortion shader assets through UI-domain `UMaterialInstanceDynamic` parameters. Inspect and bind the available assets during implementation; do not invent asset paths or rewrite these shaders from scratch.
+- `Content/Loom/` is temporary reference only, never a runtime dependency. Complete Phase II — Stage 00 (`P2-00`): Reference Audit, Math Porting, & `Content/Loom/` Removal before closing P2-01. Prefer UE 5.9 native Slate and curve APIs; port only selected, corrected math into `SDirectOrScutWorkstationWidget.h/.cpp` and one owned `MD_UI` material, `/Game/Materials/M_DirectOrScut_Terminal`. Bind its parameters through `UMaterialInstanceDynamic`. This supersedes direct reuse of personal shader assets: no Loom functions, instances, curves, atlases, redirectors, or soft/hard references may survive the purge. See the Reference Gap Audit in `DIRECT_OR_SCUT.md`; its proposed signatures are implementation contracts, not existing APIs.
 - Preserve deterministic room/crew consequences and the contradiction/override loop. `[1]`-`[5]` TUI inquiry probes and 15s forensic scrub let the operator challenge MOTHER-7. Subtle shader deception tells affect presentation only.
 
 ## Milestones and source discipline
@@ -17,6 +17,7 @@ Slice 1-14 is retired historical nomenclature for the completed multi-tile works
 
 | Milestone | Scope |
 | --- | --- |
+| Phase II — Stage 00 (`P2-00`) | Reference Audit, Math Porting, & `Content/Loom/` Removal. Native-first implementation, owned math/material, dependency audit and purge gate before P2-01 completion. |
 | Phase II — Stage 01 (`P2-01`) | Unified Phosphor Terminal, Custom CRT Shader Integration, & AI-Directed Inline `[OPTIC BUFFER]` Wipes. |
 | Phase II — Stage 02 (`P2-02`) | Hybrid Small-LLM Tool-Calling Director, `[1]`-`[5]` TUI Inquiry Probes, 15s Forensic Buffer Scrub, & Contradiction/Override Loop. |
 | Phase II — Stage 03 (`P2-03`) | Directional Room Acoustics, Deception Carrier Tells, & `TextOnly` -> `VoiceOnly` Act III Transition. |
