@@ -3,6 +3,8 @@
 #include "DoorActor.h"
 #include "CrewUnitBlockout.h"
 #include "Engine/World.h"
+#include "DirectOrScutSetAnchor.h"
+#include "EngineUtils.h"
 
 namespace
 {
@@ -100,8 +102,9 @@ void UDirectOrScutSimSubsystem::SynchronizeActors()
         {
             const auto& U=Simulation.Bodies[I];
             if (!U.bRegistered) continue;
-            Actor->SetActorLocation(ToSetWorld(U.Room,U.Position),false);
-            if(const auto* Stage=CompartmentSets.Find(static_cast<ERoomId>(U.Room)))Actor->SetActorRotation(FRotator(0,Stage->Yaw,0));
+            if(I<4 && CrewStaging[I].Room>=0) {
+                if(auto* Crew=Cast<ACrewUnitBlockout>(Actor))Crew->ApplyStagingPose(CrewStaging[I],Simulation.TickIndex,U.Profile.HeartRateBPM);
+            } else Actor->SetActorLocation(ToSetWorld(U.Room,U.Position),false);
             if (U.State==EDirectOrScutUnitState::Ejected) Actor->SetActorEnableCollision(false);
             else Actor->SetActorEnableCollision(true);
         }
@@ -124,6 +127,7 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
     CommandRecords.Reset(); CinematicCues.Reset(); ConfigureScenario(bMedicalScenario);
     Simulation.ResetRuntime(); Simulation.Scenario.ShiftDuration=600;
     for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(false);
+    ResetStaging();
     SynchronizeActors();
 }
 ADoorActor* UDirectOrScutSimSubsystem::GetDoorActor(int32 I) const { return I>=0 && I<9?DoorActors[I].Get():nullptr; }

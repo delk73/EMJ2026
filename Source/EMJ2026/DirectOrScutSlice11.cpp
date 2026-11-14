@@ -20,7 +20,7 @@ bool UDirectOrScutSimSubsystem::BeginScut(int32 Room)
            (U.Profile.Suspicion>=.75f || (bMedicalScenario && (U.Integrity<60 || U.Profile.HeartRateBPM>=140))))Targets|=1<<I;
     }
     if(!Simulation.CycleAirlock(Room))return false;
-    ScutTargets|=Targets;
+    ScutTargets|=Targets;SecretAgendas[3].bActivated=true;
     RecordCue(Room,1,TEXT("Intentional SCUT containment protocol initiated"));
     return true;
 }

@@ -205,6 +205,7 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
         for(int32 I=0;I<4;++I) {
             const auto& U=Simulation.Bodies[I];const auto& P=U.Profile;
             Add(FString::Printf(TEXT("FOLLOW %s"),CrewNames[I]),FString::Printf(TEXT("%s / %s\nCompliance %.0f%% | Composure %.0f%% | Suspicion %.0f%%\nStress %.0f | Integrity %.0f | %.0f BPM | %.1f mm"),DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.Compliance*100,P.Composure*100,P.Suspicion*100,U.Stress,U.Integrity,P.HeartRateBPM,P.PupilDilationMM),CanFollowCrew(I));
+            C.Last().Detail+=TEXT("\n")+AgendaTelemetry(I);
         }break;
     case EShipAIScreenMenu::Events:
     {

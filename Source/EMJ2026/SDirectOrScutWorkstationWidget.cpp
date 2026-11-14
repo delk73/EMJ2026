@@ -404,6 +404,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildEvaluationDossier()
             for(int32 C=0;C<8;++C)Table->AddSlot(C,I+1).Padding(8,5)[SNew(STextBlock).Text(FText::FromString(Cells[C])).Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).ColorAndOpacity(FLinearColor(.7f,1,.75f))];
         }
         Content->AddSlot().AutoHeight()[SNew(SScrollBox).Orientation(Orient_Horizontal)+SScrollBox::Slot()[Table]];
+        for(int32 I=0;I<4;++I)Text(FString(Names[I])+TEXT(" // ")+Sim->AgendaTelemetry(I,true),12);
         Text(TEXT("INCIDENT LOG // CHRONOLOGICAL HIGHLIGHTS"),13);
         for(const auto& Cue:Sim->CinematicCues)Text(FString::Printf(TEXT("[%07.2f s] %s | %.2f | %s"),Cue.Tick/30.,DirectOrScut::RoomName(int32(Cue.RoomId)),Cue.Severity,*Cue.Subtitle),11);
     }

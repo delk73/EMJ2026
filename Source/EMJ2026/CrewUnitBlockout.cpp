@@ -49,3 +49,11 @@ const FDirectOrScutUnitState* ACrewUnitBlockout::GetSimulationState() const
     auto* Sim=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();
     return Sim && SimUnitIndex>=0 && SimUnitIndex<12?&Sim->Simulation.Bodies[SimUnitIndex]:nullptr;
 }
+
+void ACrewUnitBlockout::ApplyStagingPose(const FCrewStagingState& Staging,uint64 Tick,float BPM)
+{
+    const float Wave=FMath::Sin(float(Tick)*BPM*2*PI/1800);
+    float Pitch=Staging.Posture==ECrewStagingPosture::Incapacitated?90.f:Staging.Posture==ECrewStagingPosture::Panic?18.f:Staging.Posture==ECrewStagingPosture::Triage?35.f:0.f;
+    if(Staging.Posture==ECrewStagingPosture::Panic || Staging.Posture==ECrewStagingPosture::Blocked)Pitch+=Wave*4;
+    SetActorLocationAndRotation(Staging.Position,FRotator(Pitch,Staging.Yaw,0));
+}

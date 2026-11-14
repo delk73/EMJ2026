@@ -10,6 +10,7 @@ enum class EExperimentEnding : uint8 { None, COVERT_SUCCESS, MUTINY_EXPOSED, CRE
 enum class ECameraFeedState : uint8 { Online, Looped, Offline };
 struct FSurveillanceCameraState { ECameraFeedState State=ECameraFeedState::Online; uint32 TamperTicks=0, RepairGraceTicks=0; };
 
+UENUM()
 enum class ERoomId : uint8 { ReactorCore=0, RingCorridor=1, Bridge=2, MedBay=3, ObservationDeck=4, QuartersMess=5, ServerArchive=6, AirlockChamber=7 };
 struct FCompartmentSetTransform
 {
@@ -48,6 +49,19 @@ struct FShipAIScreenChoice
 {
     FString Label, Detail;
     bool bEnabled=true;
+};
+class ADirectOrScutSetAnchor;
+enum class ECrewStagingPosture : uint8 { Upright, Panic, Blocked, Incapacitated, Triage };
+struct FCrewStagingState {
+    FVector Position=FVector::ZeroVector;
+    float Yaw=0;
+    int32 Room=-1, Anchor=INDEX_NONE, Partner=INDEX_NONE;
+    ECrewStagingPosture Posture=ECrewStagingPosture::Upright;
+    bool bHuddle=false;
+};
+struct FCrewSecretAgenda {
+    uint32 Progress=0, ObservedTicks=0, Interruptions=0, Completions=0;
+    bool bActivated=false, bCompleted=false;
 };
 class ADoorActor;
 class ACrewUnitBlockout;
@@ -141,6 +155,14 @@ private:
     void ExecuteScreenDirective(const FString& Command);
     void ExecuteScenarioEvent(int32 Choice);
 public:
+    void RegisterSetAnchor(ADirectOrScutSetAnchor* Anchor);
+    void ResetStaging();
+    void StepStagingAndAgendas();
+    FString AgendaTelemetry(int32 Crew, bool Reveal=false) const;
+    TArray<TWeakObjectPtr<ADirectOrScutSetAnchor>> SetAnchors;
+    FCrewStagingState CrewStaging[4];
+    FCrewSecretAgenda SecretAgendas[4];
+    uint32 StagingDoorRevision=0;
     void RegisterDoor(ADoorActor* Door);
     void RegisterCrew(ACrewUnitBlockout* Crew);
     FBiometricCrossing OnHeartbeatTick, OnBreathCycle;

@@ -1,6 +1,7 @@
 #include "DirectOrScutBakeCommandlet.h"
 #if WITH_EDITOR
 #include "DirectOrScutGameMode.h"
+#include "DirectOrScutSetAnchor.h"
 #include "DirectOrScutHullActor.h"
 #include "CompartmentCameraRig.h"
 #include "Engine/DirectionalLight.h"
@@ -71,6 +72,7 @@ int32 UDirectOrScutBakeCommandlet::Main(const FString& Params)
     World->GetWorldSettings()->DefaultGameMode=ADirectOrScutGameMode::StaticClass();
     World->SpawnActor<ADirectOrScutHullActor>();
     World->SpawnActor<ACompartmentCameraRig>();
+    ADirectOrScutSetAnchor::PopulateDefaults(World);
     auto* OverviewKey=World->SpawnActor<ADirectionalLight>(FVector(5250,6000,8000),FRotator(-35,-90,0));
     OverviewKey->bIsEditorOnlyActor=true;
     OverviewKey->Tags.Add(TEXT("ScutEditorOverview"));

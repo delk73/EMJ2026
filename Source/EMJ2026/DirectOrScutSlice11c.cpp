@@ -99,5 +99,11 @@ uint64 UDirectOrScutSimSubsystem::SurveillanceStateHash() const
     Add(uint64(ExperimentPhase));Add(uint64(ExperimentEnding));Add(uint64(InspectedRoom+1));Add(uint64(FollowedCrew+1));
     for(const auto& C:Cameras){Add(uint64(C.State));Add(C.TamperTicks);Add(C.RepairGraceTicks);}
     for(int32 I=0;I<12;++I){Add(TallyTicks[I]);Add(uint64(TallyRoom[I]+1));}
+    for(int32 I=0;I<4;++I){
+        const auto& C=CrewStaging[I];const auto& A=SecretAgendas[I];
+        Add(uint64(C.Room+1));Add(uint64(C.Anchor+1));Add(uint64(C.Partner+1));Add(uint64(C.Posture));Add(C.bHuddle);
+        Add(uint64(FMath::RoundToInt64(C.Position.X*1000)));Add(uint64(FMath::RoundToInt64(C.Position.Y*1000)));Add(uint64(FMath::RoundToInt64(C.Position.Z*1000)));Add(uint64(FMath::RoundToInt(C.Yaw*1000)));
+        Add(A.Progress);Add(A.ObservedTicks);Add(A.Interruptions);Add(A.Completions);Add(A.bActivated);Add(A.bCompleted);
+    }
     return Hash;
 }
