@@ -61,12 +61,6 @@ struct FCompartmentSetTransform
     float Yaw = 0;
 };
 DECLARE_MULTICAST_DELEGATE_TwoParams(FBiometricCrossing, int32, uint64);
-struct FDirectorCommandRecord
-{
-    uint64 Tick = 0;
-    FString Input;
-    bool bConsole = false;
-};
 struct FCinematicCue
 {
     uint64 Tick = 0;
@@ -127,16 +121,109 @@ struct FSimContextSnapshot
     uint64 Tick = 0;
     FString CompactJson;
 };
-struct FShipAIIntent
+enum class EShipDirectiveKind : uint8
 {
-    FString Command, Pretext;
+    Unknown,
+    ShowCam,
+    ShowWidget,
+    SimAction,
+    VoiceBlend
+};
+enum class EShipWidgetKind : uint8
+{
+    ECG,
+    Schematic,
+    Ocular
+};
+enum class EShipSimAction : uint8
+{
+    None,
+    RouteCrew,
+    Alert,
+    Calm,
+    Protocol,
+    Open,
+    Close,
+    Seal,
+    Flush,
+    Power,
+    FalsifyBio,
+    SpoofLog,
+    IntercomLie,
+    FlagContradiction,
+    OverrideClaim
+};
+enum class EVoicePresentationMode : uint8
+{
+    TextOnly,
+    HybridTextAndVoice,
+    VoiceOnly
+};
+struct FVoicePresentationState
+{
+    EVoicePresentationMode Mode = EVoicePresentationMode::TextOnly;
+    float Duration = 0;
+};
+struct FShipDirectiveArgs
+{
+    int32 Room = -1, Subject = -1, SecondSubject = -1, ReportedRoom = -1, Door = -1, Mode = 0;
+    EShipWidgetKind Widget = EShipWidgetKind::ECG;
+    EShipSimAction Action = EShipSimAction::None;
+    EVoicePresentationMode Voice = EVoicePresentationMode::TextOnly;
+    bool bAll = false, bBuffered = false;
+    float HistoryOffset = 0, Duration = 0;
+    uint64 ClaimId = 0;
+    // Filled by the validator from independent evidence, never trusted from HTTP.
+    int32 EvidenceRoom = -1;
+    uint64 EvidenceTick = 0;
+};
+struct FShipAIDirective
+{
+    uint64 RequestId = 0, ObservationTick = 0;
+    uint32 Generation = 0;
+    EShipDirectiveKind Kind = EShipDirectiveKind::Unknown;
+    FShipDirectiveArgs Args;
+    FString Pretext;
+};
+struct FShipAIRequest
+{
+    uint64 RequestId = 0;
+    uint32 Generation = 0;
+    FSimContextSnapshot Context;
+    FString Input;
 };
 class IShipAIIntentProvider
 {
   public:
     virtual ~IShipAIIntentProvider() = default;
-    virtual FShipAIIntent Translate(const FString &Directive, const FSimContextSnapshot &Context) = 0;
+    // Completion can arrive later; providers receive only value snapshots, never simulation references.
+    virtual void Request(const FShipAIRequest &Request, TFunction<void(FShipAIDirective)> Complete) = 0;
+    virtual void CancelAll() {}
 };
+struct FDirectorCommandRecord
+{
+    uint64 Tick = 0;
+    FString Input;
+    bool bConsole = false;
+    bool bResolvedOutcome = false, bAccepted = false;
+    uint64 CommitTick = 0;
+    FShipAIDirective Directive;
+    FString Outcome;
+};
+struct FDirectorClaim
+{
+    uint64 Id = 0, ObservationTick = 0;
+    uint32 Generation = 0;
+    int32 Subject = -1, ReportedRoom = -1;
+    bool bFlagged = false, bOverridden = false;
+};
+struct FPendingDirectorRequest
+{
+    FShipAIRequest Request;
+    double Deadline = 0;
+    bool bDispatched = false, bOperator = false;
+};
+DECLARE_MULTICAST_DELEGATE_OneParam(FDirectorPresentation, const FShipAIDirective &);
 struct FShipAIEvent
 {
     FString Text;
@@ -360,6 +447,32 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     FString LatestPriorityAlert() const;
     TArray<FShipAIEvent> Events;
     TSharedPtr<IShipAIIntentProvider> IntentProvider;
+    void ShutdownDirector();
+    uint64 BeginDirectorRequest(const FString &Input);
+    bool ReceiveDirectorProposal(FShipAIDirective Directive, bool Fallback = false);
+    void ServiceDirector(double Now = -1);
+    bool ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds = 2);
+    bool HasDirectorEndpoint() const
+    {
+        return bDirectorEndpoint;
+    }
+    uint32 GetDirectorGeneration() const
+    {
+        return DirectorGeneration;
+    }
+    bool ValidateDirectorDirective(FShipAIDirective &Directive, FString &Reason, bool Replay = false) const;
+    void BeginDirectorReplay(const TArray<FDirectorCommandRecord> &Records);
+    uint64 QueueOperatorChallenge(uint64 ClaimId, bool Override);
+    uint64 QueueOperatorCommand(const FString &Input);
+    const TArray<FDirectorClaim> &GetDirectorClaims() const
+    {
+        return DirectorClaims;
+    }
+    bool IsClaimContradicted(uint64 ClaimId) const;
+    FDirectorPresentation OnDirectorPresentation;
+    FVoicePresentationState VoicePresentation;
+    uint32 ContradictionsFlagged = 0, OverridesAccepted = 0;
+
     FString SubmitDirective(const FString &Input);
     bool QueueConsoleCommand(const FString &Input);
     FString HelpReference(const FString &Topic = TEXT("")) const;
@@ -389,6 +502,20 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     bool RepairCamera(int32 Room);
     void StartExperiment();
     double ResolvedCommandAccumulator = 0;
+    uint32 DirectorGeneration = 1;
+    uint64 NextDirectorRequest = 1;
+    bool bDirectorEndpoint = false, bDirectorReplay = false, bDirectorShuttingDown = false;
+    float DirectorTimeout = 2;
+    TMap<uint64, FPendingDirectorRequest> DirectorRequests;
+    TArray<FShipAIDirective> DirectorActions, DirectorPresentationQueue;
+    TArray<FDirectorCommandRecord> DirectorReplay;
+    TArray<FDirectorClaim> DirectorClaims;
+    void CancelDirector();
+    void CommitDirectorActions();
+    bool ExecuteDirectorAction(const FShipAIDirective &Directive);
+    void RecordDirectorOutcome(const FShipAIDirective &Directive, bool Accepted, const FString &Reason,
+                               uint64 CommitTick = 0);
+    FString CanonicalDirectorAction(const FShipAIDirective &Directive) const;
     TArray<FString> PendingDirectives;
     TArray<FString> PendingConsoleCommands;
     int32 MenuCrew = 0, MenuRoom = 3;

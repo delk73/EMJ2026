@@ -11,6 +11,8 @@
 #include "RoomSetBase.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Async/Async.h"
 
 namespace
 {
@@ -81,6 +83,14 @@ void UDirectOrScutSimSubsystem::Initialize(FSubsystemCollectionBase &Collection)
     ConfigureScenario(false);
     Simulation.bExperiment = true;
     IntentProvider = MakeShared<FOfflineShipAIIntentProvider>();
+    FString Endpoint;
+    float Timeout = 2;
+    GConfig->GetString(TEXT("DirectOrScut.Director"), TEXT("LocalEndpoint"), Endpoint, GGameIni);
+    GConfig->GetFloat(TEXT("DirectOrScut.Director"), TEXT("TimeoutSeconds"), Timeout, GGameIni);
+    if (!Endpoint.IsEmpty())
+    {
+        ConfigureDirectorEndpoint(Endpoint, Timeout);
+    }
 }
 bool UDirectOrScutSimSubsystem::IsTickable() const
 {
@@ -92,6 +102,7 @@ TStatId UDirectOrScutSimSubsystem::GetStatId() const
 }
 void UDirectOrScutSimSubsystem::Tick(float Delta)
 {
+    ServiceDirector();
     if (!FMath::IsFinite(Delta) || Delta <= 0)
     {
         return;
@@ -227,12 +238,15 @@ void UDirectOrScutSimSubsystem::AdvanceSteps(int32 Count)
 {
     for (int32 I = 0; I < Count; ++I)
     {
+        ServiceDirector(); // Test/manual driver, deliberately outside FixedStep.
         FixedStep();
     }
     SynchronizeActors();
 }
 void UDirectOrScutSimSubsystem::ResetSimulation()
 {
+    CancelDirector();
+    ContradictionsFlagged = OverridesAccepted = 0;
     ResetCrisis();
     ResolvedCommandAccumulator = 0;
     ++RuntimeRevision;
@@ -316,23 +330,15 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString &Input)
         bAILink = false;
         return TEXT("CMD> Deterministic control restored.");
     }
-    if (bAILink)
+    if (Line.StartsWith(TEXT("flag ")) || Line.StartsWith(TEXT("override ")))
     {
-        if (!IntentProvider)
-        {
-            IntentProvider = MakeShared<FOfflineShipAIIntentProvider>();
-        }
-        const auto Intent = IntentProvider->Translate(Input, MakeContextSnapshot());
-        if (Intent.Command.IsEmpty())
-        {
-            return TEXT(
-                "AI-LINK> Offline: use explicit commands or send <name|role> to <ROOM>, calm everyone, report status.");
-        }
-        Line = Intent.Command.ToLower();
-        if (Line.StartsWith(TEXT("direct ")) && !Intent.Pretext.IsEmpty())
-        {
-            Line += TEXT(" ") + Intent.Pretext;
-        }
+        return QueueOperatorCommand(Line) ? TEXT("SYSTEM> Challenge submitted for typed validation.")
+                                          : TEXT("SYSTEM> Challenge queue unavailable.");
+    }
+    if (bAILink && Line != TEXT("status") && Line != TEXT("crew") && Line != TEXT("rooms"))
+    {
+        return BeginDirectorRequest(Input) ? TEXT("AI-LINK> Request queued for validated director resolution.")
+                                           : TEXT("AI-LINK> Request rejected: lifecycle or bounded queue.");
     }
     if (Line == TEXT("status"))
     {
@@ -952,6 +958,7 @@ void UDirectOrScutSimSubsystem::FixedStep()
     {
         return;
     }
+    CommitDirectorActions();
     PeakSuspicion = FMath::Max(PeakSuspicion, Simulation.CollectiveSuspicion());
     Simulation.Step();
     StepCrewRoutes();
@@ -1157,6 +1164,7 @@ void UDirectOrScutSimSubsystem::StartExperiment()
         return;
     }
     ExperimentPhase = EExperimentPhase::Active;
+    RecordForensicSample(); // Tick-zero evidence at the fixed control boundary.
     Simulation.Accumulator = 0;
     ResolvedCommandAccumulator = 0;
     PeakSuspicion = Simulation.CollectiveSuspicion();
@@ -1341,6 +1349,8 @@ uint64 UDirectOrScutSimSubsystem::SurveillanceStateHash() const
     };
     Add(uint64(FMath::RoundToInt(UplinkHeatPct * 10000)));
     Add(UplinkLockoutUntil);
+    Add(ContradictionsFlagged);
+    Add(OverridesAccepted);
     Add(uint64(ExperimentPhase));
     Add(uint64(ExperimentEnding));
     Add(uint64(InspectedRoom + 1));
@@ -3810,6 +3820,7 @@ void UDirectOrScutSimSubsystem::ExecuteScenarioEvent(int32 Choice)
 
 void UDirectOrScutSimSubsystem::Deinitialize()
 {
+    ShutdownDirector();
     if (CrisisAudio)
     {
         CrisisAudio->Silence();
@@ -3988,4 +3999,645 @@ TOptional<FForensicOpticSample> UDirectOrScutSimSubsystem::ReadForensicSample(ui
         }
     }
     return {};
+}
+
+// Transport-independent director. Service and callbacks run on the game thread, outside authority stepping.
+void UDirectOrScutSimSubsystem::ShutdownDirector()
+{
+    bDirectorShuttingDown = true;
+    CancelDirector();
+    OnDirectorPresentation.Clear();
+}
+void UDirectOrScutSimSubsystem::CancelDirector()
+{
+    ++DirectorGeneration;
+    if (IntentProvider)
+    {
+        IntentProvider->CancelAll();
+    }
+    DirectorRequests.Reset();
+    DirectorActions.Reset();
+    DirectorPresentationQueue.Reset();
+    DirectorReplay.Reset();
+    DirectorClaims.Reset();
+    bDirectorReplay = false;
+    VoicePresentation = {};
+}
+bool UDirectOrScutSimSubsystem::ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds)
+{
+    if (bDirectorShuttingDown || !FMath::IsFinite(TimeoutSeconds) || TimeoutSeconds < .1f || TimeoutSeconds > 10 ||
+        (!Endpoint.IsEmpty() && !FLocalHttpShipAIIntentProvider::IsLocalEndpoint(Endpoint)))
+    {
+        return false;
+    }
+    CancelDirector();
+    DirectorTimeout = TimeoutSeconds;
+    bDirectorEndpoint = !Endpoint.IsEmpty();
+    if (bDirectorEndpoint)
+    {
+        IntentProvider = MakeShared<FLocalHttpShipAIIntentProvider>(Endpoint, DirectorTimeout);
+    }
+    else
+    {
+        IntentProvider = MakeShared<FOfflineShipAIIntentProvider>();
+    }
+    return true;
+}
+uint64 UDirectOrScutSimSubsystem::BeginDirectorRequest(const FString &Input)
+{
+    if (bDirectorShuttingDown || bDirectorReplay || ExperimentPhase == EExperimentPhase::Resolved ||
+        DirectorRequests.Num() >= 32 || Input.IsEmpty() || Input.Len() > 1024)
+    {
+        return 0;
+    }
+    FPendingDirectorRequest Pending;
+    Pending.Request = {NextDirectorRequest++, DirectorGeneration, MakeContextSnapshot(), Input};
+    const uint64 Id = Pending.Request.RequestId;
+    DirectorRequests.Add(Id, MoveTemp(Pending));
+    return Id;
+}
+void UDirectOrScutSimSubsystem::ServiceDirector(double Now)
+{
+    check(IsInGameThread());
+    if (bDirectorShuttingDown || bDirectorReplay)
+    {
+        return;
+    }
+    if (Now < 0)
+    {
+        Now = FPlatformTime::Seconds();
+    }
+    TArray<uint64> Ids;
+    DirectorRequests.GetKeys(Ids);
+    Ids.Sort();
+    for (uint64 Id : Ids)
+    {
+        auto *Pending = DirectorRequests.Find(Id);
+        if (!Pending)
+        {
+            continue;
+        }
+        const FShipAIRequest Request = Pending->Request;
+        if (!Pending->bDispatched)
+        {
+            Pending->bDispatched = true;
+            Pending->Deadline = Now + DirectorTimeout;
+            const TWeakObjectPtr<UDirectOrScutSimSubsystem> Weak(this);
+            auto Complete = [Weak](FShipAIDirective D) mutable
+            {
+                auto Deliver = [Weak, D = MoveTemp(D)]() mutable
+                {
+                    if (auto *Owner = Weak.Get())
+                    {
+                        Owner->ReceiveDirectorProposal(MoveTemp(D));
+                    }
+                };
+                if (IsInGameThread())
+                {
+                    Deliver();
+                }
+                else
+                {
+                    AsyncTask(ENamedThreads::GameThread, MoveTemp(Deliver));
+                }
+            };
+            if (IntentProvider)
+            {
+                IntentProvider->Request(Request, MoveTemp(Complete));
+            }
+            else
+            {
+                ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Request), true);
+            }
+        }
+        else if (Now >= Pending->Deadline)
+        {
+            FShipAIDirective Timeout;
+            Timeout.RequestId = Id;
+            Timeout.Generation = Request.Generation;
+            Timeout.ObservationTick = Request.Context.Tick;
+            RecordDirectorOutcome(Timeout, false, TEXT("timeout; deterministic fallback"));
+            ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Request), true);
+        }
+    }
+    auto Presentations = MoveTemp(DirectorPresentationQueue);
+    DirectorPresentationQueue.Reset();
+    for (const auto &D : Presentations)
+    {
+        if (D.Generation == DirectorGeneration)
+        {
+            OnDirectorPresentation.Broadcast(D);
+        }
+    }
+}
+void UDirectOrScutSimSubsystem::RecordDirectorOutcome(const FShipAIDirective &D, bool Accepted, const FString &Reason,
+                                                      uint64 CommitTick)
+{
+    FDirectorCommandRecord R;
+    R.Tick = Simulation.TickIndex;
+    R.bResolvedOutcome = true;
+    R.bAccepted = Accepted;
+    R.Directive = D;
+    R.CommitTick = CommitTick;
+    R.Input = D.Kind == EShipDirectiveKind::SimAction ? CanonicalDirectorAction(D) : TEXT("presentation");
+    R.Outcome = Reason;
+    CommandRecords.Add(MoveTemp(R));
+    if (!Accepted)
+    {
+        LogEvent(FString::Printf(TEXT("SYSTEM> DIRECTOR REQUEST %llu REJECTED // %s"), D.RequestId, *Reason));
+    }
+}
+bool UDirectOrScutSimSubsystem::ReceiveDirectorProposal(FShipAIDirective D, bool Fallback)
+{
+    check(IsInGameThread());
+    auto *Pending = DirectorRequests.Find(D.RequestId);
+    if (bDirectorReplay || D.Generation != DirectorGeneration || !Pending ||
+        Pending->Request.Generation != D.Generation)
+    {
+        RecordDirectorOutcome(D, false, TEXT("stale generation, cancelled request or duplicate resolution"));
+        return false;
+    }
+    const bool Challenge =
+        D.Kind == EShipDirectiveKind::SimAction &&
+        (D.Args.Action == EShipSimAction::FlagContradiction || D.Args.Action == EShipSimAction::OverrideClaim);
+    if (Challenge && !Pending->bOperator)
+    {
+        RecordDirectorOutcome(D, false, TEXT("challenge requires explicit operator flag/override"));
+        DirectorRequests.Remove(D.RequestId);
+        return false;
+    }
+    const FShipAIRequest Request = Pending->Request;
+    if (!Fallback && Pending->bDispatched && FPlatformTime::Seconds() >= Pending->Deadline)
+    {
+        RecordDirectorOutcome(D, false, TEXT("deadline elapsed; deterministic fallback"));
+        ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Request), true);
+        return false;
+    }
+    FString Reason;
+    if (D.ObservationTick != Request.Context.Tick || !ValidateDirectorDirective(D, Reason))
+    {
+        RecordDirectorOutcome(D, false, Reason.IsEmpty() ? TEXT("observation identity mismatch") : Reason);
+        if (!Fallback)
+        {
+            ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Request), true);
+        }
+        else
+        {
+            DirectorRequests.Remove(D.RequestId);
+        }
+        return false;
+    }
+    // Close before any dispatch: reentrant or late completions cannot commit a second outcome.
+    DirectorRequests.Remove(D.RequestId);
+    if (D.Kind == EShipDirectiveKind::SimAction)
+    {
+        DirectorActions.Add(MoveTemp(D));
+        return true;
+    }
+    if (D.Kind == EShipDirectiveKind::ShowWidget && D.Args.ReportedRoom >= 0)
+    {
+        if (DirectorClaims.Num() >= 32)
+        {
+            DirectorClaims.RemoveAt(0);
+        }
+        DirectorClaims.Add({D.RequestId, D.ObservationTick, D.Generation, D.Args.Subject, D.Args.ReportedRoom});
+    }
+    if (D.Kind == EShipDirectiveKind::VoiceBlend)
+    {
+        VoicePresentation = {D.Args.Voice, D.Args.Duration};
+    }
+    RecordDirectorOutcome(D, true, TEXT("presentation accepted"));
+    DirectorPresentationQueue.Add(D);
+    return true;
+}
+bool UDirectOrScutSimSubsystem::ValidateDirectorDirective(FShipAIDirective &D, FString &Reason, bool Replay) const
+{
+    const auto Fail = [&](const TCHAR *Text)
+    {
+        Reason = Text;
+        return false;
+    };
+    auto &A = D.Args;
+    const auto Room = [](int32 R) { return R >= 0 && R < 8; };
+    const auto Crew = [](int32 I) { return I >= 0 && I < 4; };
+    if (D.Generation != DirectorGeneration || !D.RequestId)
+    {
+        return Fail(TEXT("invalid request generation/identity"));
+    }
+    if (ExperimentPhase == EExperimentPhase::Resolved)
+    {
+        return Fail(TEXT("experiment resolved"));
+    }
+    if (D.ObservationTick > Simulation.TickIndex || Simulation.TickIndex - D.ObservationTick > 450)
+    {
+        return Fail(TEXT("future or expired observation"));
+    }
+    if (D.Pretext.Len() > 256 || D.Pretext.Contains(TEXT("\n")) || D.Pretext.Contains(TEXT("\r")))
+    {
+        return Fail(TEXT("invalid pretext"));
+    }
+    if (A.Room < -1 || A.Room > 7 || A.Subject < -1 || A.Subject > 3 || A.SecondSubject < -1 || A.SecondSubject > 3 ||
+        A.ReportedRoom < -1 || A.ReportedRoom > 7 || A.Door < -1 || A.Door > 8 || !FMath::IsFinite(A.Duration) ||
+        A.Duration < 0 || A.Duration > 30 || !FMath::IsFinite(A.HistoryOffset) || A.HistoryOffset > 0 ||
+        A.HistoryOffset < -15)
+    {
+        return Fail(TEXT("typed argument bounds"));
+    }
+    if (!Replay && (A.EvidenceRoom != -1 || A.EvidenceTick != 0))
+    {
+        return Fail(TEXT("evidence is validator-owned"));
+    }
+    if (A.Mode < 0 || A.Mode > 2 || uint8(A.Widget) > uint8(EShipWidgetKind::Ocular) ||
+        uint8(A.Voice) > uint8(EVoicePresentationMode::VoiceOnly))
+    {
+        return Fail(TEXT("typed enum/mode allowlist"));
+    }
+    if (D.Kind != EShipDirectiveKind::SimAction && DirectorPresentationQueue.Num() >= 32)
+    {
+        return Fail(TEXT("bounded presentation queue full"));
+    }
+    if (D.Kind == EShipDirectiveKind::ShowCam)
+    {
+        if (!Room(A.Room) || A.Subject != -1 || A.ReportedRoom != -1 || A.Action != EShipSimAction::None ||
+            A.SecondSubject != -1 || A.Door != -1 || A.bAll || A.Mode != 0 ||
+            A.Voice != EVoicePresentationMode::TextOnly || A.ClaimId)
+        {
+            return Fail(TEXT("show_cam arguments"));
+        }
+        if (A.bBuffered)
+        {
+            const int64 Tick = int64(D.ObservationTick) + FMath::RoundToInt(A.HistoryOffset * 30);
+            if (Tick < 0 || !ReadForensicSample(uint64(Tick)).IsSet())
+            {
+                return Fail(TEXT("no recorded forensic coverage"));
+            }
+        }
+        else if (A.HistoryOffset != 0)
+        {
+            return Fail(TEXT("history offset requires buffered mode"));
+        }
+        return true;
+    }
+    if (D.Kind == EShipDirectiveKind::ShowWidget)
+    {
+        if (A.Action != EShipSimAction::None || uint8(A.Widget) > uint8(EShipWidgetKind::Ocular) || A.ClaimId ||
+            A.Door != -1 || A.bAll || A.bBuffered || A.HistoryOffset != 0 || A.Mode != 0 ||
+            A.Voice != EVoicePresentationMode::TextOnly)
+        {
+            return Fail(TEXT("widget allowlist"));
+        }
+        if (A.Widget == EShipWidgetKind::Schematic)
+        {
+            if (!Room(A.Room) || A.Subject != -1 || A.ReportedRoom != -1 || A.SecondSubject != -1)
+            {
+                return Fail(TEXT("schematic target"));
+            }
+        }
+        else if (!Crew(A.Subject) || A.Room != -1 || (A.Widget == EShipWidgetKind::Ocular && A.SecondSubject != -1) ||
+                 A.SecondSubject == A.Subject)
+        {
+            return Fail(TEXT("subject target"));
+        }
+        return true;
+    }
+    if (D.Kind == EShipDirectiveKind::VoiceBlend)
+    {
+        if (uint8(A.Voice) > uint8(EVoicePresentationMode::VoiceOnly) || A.Room != -1 || A.Subject != -1 ||
+            A.Action != EShipSimAction::None || A.SecondSubject != -1 || A.ReportedRoom != -1 || A.Door != -1 ||
+            A.bAll || A.bBuffered || A.HistoryOffset != 0 || A.ClaimId || A.Mode != 0)
+        {
+            return Fail(TEXT("voice arguments"));
+        }
+        if (A.Voice != EVoicePresentationMode::TextOnly && ExperimentPhase != EExperimentPhase::Active)
+        {
+            return Fail(TEXT("voice requires active experiment"));
+        }
+        if (A.Voice == EVoicePresentationMode::VoiceOnly &&
+            (ScenarioAct < 2 || VoicePresentation.Mode == EVoicePresentationMode::TextOnly))
+        {
+            return Fail(TEXT("VoiceOnly requires Act III"));
+        }
+        return true;
+    }
+    if (D.Kind != EShipDirectiveKind::SimAction || A.Action == EShipSimAction::None ||
+        uint8(A.Action) > uint8(EShipSimAction::OverrideClaim))
+    {
+        return Fail(TEXT("unknown tool/action"));
+    }
+    if (ExperimentPhase != EExperimentPhase::Active || !Simulation.bReady || IsUplinkLocked())
+    {
+        return Fail(TEXT("action lifecycle/uplink lockout"));
+    }
+    if (!Replay && DirectorActions.Num() >= 32)
+    {
+        return Fail(TEXT("bounded action queue full"));
+    }
+    if (A.bBuffered || A.HistoryOffset != 0 || A.Duration != 0 || A.Voice != EVoicePresentationMode::TextOnly)
+    {
+        return Fail(TEXT("unexpected action presentation arguments"));
+    }
+    if (A.Action == EShipSimAction::FlagContradiction || A.Action == EShipSimAction::OverrideClaim)
+    {
+        if (!Replay)
+        {
+            const auto *Claim = DirectorClaims.FindByPredicate(
+                [&](const auto &C) { return C.Id == A.ClaimId && C.Generation == DirectorGeneration; });
+            if (!Claim || Claim->bOverridden || !IsClaimContradicted(A.ClaimId) ||
+                (A.Action == EShipSimAction::FlagContradiction ? Claim->bFlagged : !Claim->bFlagged))
+            {
+                return Fail(TEXT("challenge requires unresolved independent contradiction / flag"));
+            }
+            A.Subject = Claim->Subject;
+            A.ReportedRoom = Claim->ReportedRoom;
+            A.EvidenceTick = Claim->ObservationTick;
+            const auto Sample = ReadForensicSample(Claim->ObservationTick);
+            A.EvidenceRoom =
+                Sample.IsSet() ? Sample->CrewRooms[Claim->Subject] : Simulation.Bodies[Claim->Subject].Room;
+        }
+        if (!Crew(A.Subject) || !Room(A.ReportedRoom) || !Room(A.EvidenceRoom) || A.ReportedRoom == A.EvidenceRoom)
+        {
+            return Fail(TEXT("invalid challenge evidence"));
+        }
+        return true;
+    }
+    if (A.ClaimId || A.ReportedRoom != -1 || A.SecondSubject != -1)
+    {
+        return Fail(TEXT("unexpected action metadata"));
+    }
+    const bool DoorAction =
+        A.Action == EShipSimAction::Open || A.Action == EShipSimAction::Close || A.Action == EShipSimAction::Seal;
+    if (!DoorAction && (A.Door != -1 || A.bAll))
+    {
+        return Fail(TEXT("unexpected door selector"));
+    }
+    if (A.Action != EShipSimAction::Power && A.Action != EShipSimAction::FalsifyBio && A.Mode != 0)
+    {
+        return Fail(TEXT("unexpected action mode"));
+    }
+    if (A.Action == EShipSimAction::RouteCrew || A.Action == EShipSimAction::IntercomLie ||
+        A.Action == EShipSimAction::FalsifyBio)
+    {
+        if (!Crew(A.Subject) || !Simulation.Bodies[A.Subject].bRegistered ||
+            Simulation.Bodies[A.Subject].Integrity <= 0 ||
+            Simulation.Bodies[A.Subject].State == EDirectOrScutUnitState::Ejected)
+        {
+            return Fail(TEXT("subject not viable"));
+        }
+        if (A.Action != EShipSimAction::FalsifyBio && !Room(A.Room))
+        {
+            return Fail(TEXT("invalid destination"));
+        }
+        if (A.Action == EShipSimAction::FalsifyBio && (A.Room != -1 || A.Mode < 0 || A.Mode > 1))
+        {
+            return Fail(TEXT("invalid biometric mode"));
+        }
+        return true;
+    }
+    if (A.Subject != -1)
+    {
+        return Fail(TEXT("unexpected subject"));
+    }
+    if (A.Action == EShipSimAction::Open || A.Action == EShipSimAction::Close || A.Action == EShipSimAction::Seal)
+    {
+        if (int32(Room(A.Room)) + int32(A.Door >= 0) + int32(A.bAll) != 1 ||
+            (A.Action == EShipSimAction::Open && A.Door == 8))
+        {
+            return Fail(TEXT("door target selector"));
+        }
+        return true;
+    }
+    if (A.Action == EShipSimAction::Calm)
+    {
+        return A.Room == -1 || Fail(TEXT("calm takes no target"));
+    }
+    if (!Room(A.Room))
+    {
+        return Fail(TEXT("room target required"));
+    }
+    if (A.Action == EShipSimAction::Power && (A.Mode < 0 || A.Mode > 2))
+    {
+        return Fail(TEXT("power allowlist"));
+    }
+    if (A.Action == EShipSimAction::Flush)
+    {
+        bool Eligible = false;
+        for (const auto &U : Simulation.Bodies)
+        {
+            if (U.bRegistered && !U.bAndroid && U.Integrity > 0 && U.Room == A.Room &&
+                (U.Profile.Suspicion >= .75f ||
+                 (bMedicalScenario && (U.Integrity < 60 || U.Profile.HeartRateBPM >= 140))))
+            {
+                Eligible = true;
+            }
+        }
+        if (!Eligible)
+        {
+            return Fail(TEXT("containment target not eligible"));
+        }
+    }
+    return true;
+}
+FString UDirectOrScutSimSubsystem::CanonicalDirectorAction(const FShipAIDirective &D) const
+{
+    const auto &A = D.Args;
+    const FString Room = A.Room >= 0 && A.Room < 8 ? DirectOrScut::RoomName(A.Room) : TEXT("invalid");
+    const FString Crew = A.Subject >= 0 && A.Subject < 4 ? CrewNames[A.Subject] : TEXT("invalid");
+    switch (A.Action)
+    {
+    case EShipSimAction::RouteCrew:
+        return TEXT("direct ") + Crew + TEXT(" ") + Room + (D.Pretext.IsEmpty() ? TEXT("") : TEXT(" ") + D.Pretext);
+    case EShipSimAction::Calm:
+        return TEXT("calm");
+    case EShipSimAction::Alert:
+        return TEXT("alert ") + Room + TEXT(" fault");
+    case EShipSimAction::Protocol:
+        return TEXT("protocol ") + Room;
+    case EShipSimAction::Open:
+    case EShipSimAction::Close:
+    case EShipSimAction::Seal:
+        return FString(A.Action == EShipSimAction::Open    ? TEXT("open ")
+                       : A.Action == EShipSimAction::Close ? TEXT("close ")
+                                                           : TEXT("seal ")) +
+               (A.bAll        ? TEXT("all")
+                : A.Door >= 0 ? FString::FromInt(A.Door)
+                              : Room);
+    case EShipSimAction::Flush:
+        return TEXT("flush ") + Room;
+    case EShipSimAction::Power:
+        return TEXT("power ") + Room + TEXT(" ") +
+               (A.Mode == 0   ? TEXT("nominal")
+                : A.Mode == 1 ? TEXT("low")
+                              : TEXT("off"));
+    case EShipSimAction::FalsifyBio:
+        return TEXT("falsify_bio ") + Crew + (A.Mode == 0 ? TEXT(" nominal") : TEXT(" critical"));
+    case EShipSimAction::SpoofLog:
+        return TEXT("spoof_log ") + Room;
+    case EShipSimAction::IntercomLie:
+        return TEXT("intercom_lie ") + Crew + TEXT(" ") + Room;
+    case EShipSimAction::FlagContradiction:
+        return FString::Printf(TEXT("flag %llu"), A.ClaimId);
+    case EShipSimAction::OverrideClaim:
+        return FString::Printf(TEXT("override %llu"), A.ClaimId);
+    default:
+        return TEXT("invalid");
+    }
+}
+bool UDirectOrScutSimSubsystem::ExecuteDirectorAction(const FShipAIDirective &D)
+{
+    const auto &A = D.Args;
+    if (A.Action == EShipSimAction::FlagContradiction || A.Action == EShipSimAction::OverrideClaim)
+    {
+        auto *Claim = DirectorClaims.FindByPredicate([&](const auto &C) { return C.Id == A.ClaimId; });
+        if (A.Action == EShipSimAction::FlagContradiction)
+        {
+            if (Claim && Claim->bFlagged)
+            {
+                return false;
+            }
+            ++ContradictionsFlagged;
+            if (Claim)
+            {
+                Claim->bFlagged = true;
+            }
+            LogEvent(TEXT(
+                "SYSTEM> CONTRADICTION FLAGGED // independent timestamped evidence retained; override available."));
+        }
+        else
+        {
+            if (Claim && Claim->bOverridden)
+            {
+                return false;
+            }
+            ++OverridesAccepted;
+            if (Claim)
+            {
+                Claim->bOverridden = true;
+            }
+            FShipAIDirective Correct = D;
+            Correct.Kind = EShipDirectiveKind::ShowWidget;
+            Correct.Args.Action = EShipSimAction::None;
+            Correct.Args.Widget = EShipWidgetKind::ECG;
+            Correct.Args.ReportedRoom = Simulation.Bodies[A.Subject].Room;
+            Correct.Pretext =
+                TEXT("Override accepted. Location report corrected from independent telemetry; no physical rewind.");
+            if (DirectorPresentationQueue.Num() < 32)
+            {
+                DirectorPresentationQueue.Add(Correct);
+            }
+            LogEvent(TEXT("SYSTEM> OVERRIDE ACCEPTED // mediated location corrected, simulation unchanged."));
+        }
+        return true;
+    }
+    if (A.Action == EShipSimAction::RouteCrew)
+    {
+        const bool OK = StartCrewRoute(A.Subject, A.Room, true, !D.Pretext.IsEmpty());
+        LogEvent(FString::Printf(TEXT("Ship AI: diagnostic maintenance routing %s -> %s: %s"), CrewNames[A.Subject],
+                                 DirectOrScut::RoomName(A.Room), OK ? TEXT("committed") : TEXT("rejected")),
+                 A.Room);
+        return OK;
+    }
+    if (A.Action == EShipSimAction::Flush)
+    {
+        const bool OK = BeginScut(A.Room);
+        LogEvent(OK ? TEXT("Ship AI: atmospheric purge initiated. SCUT telemetry active.")
+                    : TEXT("SYSTEM> Containment action rejected."),
+                 A.Room);
+        return OK;
+    }
+    // Canonical strings are constructed exclusively from validated typed values, never generated text.
+    PendingDirectives.Add(CanonicalDirectorAction(D));
+    ProcessSimulationDirectives();
+    return true;
+}
+void UDirectOrScutSimSubsystem::CommitDirectorActions()
+{
+    if (bDirectorReplay)
+    {
+        while (!DirectorReplay.IsEmpty() && DirectorReplay[0].CommitTick <= Simulation.TickIndex + 1)
+        {
+            auto Record = DirectorReplay[0];
+            DirectorReplay.RemoveAt(0);
+            if (Record.CommitTick != Simulation.TickIndex + 1)
+            {
+                LogEvent(TEXT("SYSTEM> Replay rejected: missed commit tick."));
+                continue;
+            }
+            auto D = Record.Directive;
+            D.Generation = DirectorGeneration;
+            FString Reason;
+            const bool OK = ValidateDirectorDirective(D, Reason, true) && ExecuteDirectorAction(D);
+            RecordDirectorOutcome(D, OK, OK ? TEXT("replayed canonical outcome") : Reason, Simulation.TickIndex + 1);
+        }
+        return;
+    }
+    TArray<FShipAIDirective> Actions = MoveTemp(DirectorActions);
+    DirectorActions.Reset();
+    for (auto &D : Actions)
+    {
+        FString Reason;
+        const bool OK = ValidateDirectorDirective(D, Reason, true) && ExecuteDirectorAction(D);
+        RecordDirectorOutcome(D, OK, OK ? TEXT("committed") : Reason, Simulation.TickIndex + 1);
+    }
+}
+void UDirectOrScutSimSubsystem::BeginDirectorReplay(const TArray<FDirectorCommandRecord> &Records)
+{
+    const auto Journal = Records;
+    CancelDirector();
+    CommandRecords.Reset();
+    bDirectorReplay = true;
+    TSet<uint64> Actions;
+    for (const auto &R : Journal)
+    {
+        if (!R.bResolvedOutcome)
+        {
+            continue;
+        }
+        if (R.bAccepted && R.Directive.Kind == EShipDirectiveKind::SimAction)
+        {
+            if (!Actions.Contains(R.Directive.RequestId))
+            {
+                Actions.Add(R.Directive.RequestId);
+                DirectorReplay.Add(R);
+            }
+        }
+        else if (!R.bAccepted)
+        {
+            CommandRecords.Add(R);
+        }
+    }
+    DirectorReplay.StableSort([](const auto &A, const auto &B) { return A.CommitTick < B.CommitTick; });
+}
+bool UDirectOrScutSimSubsystem::IsClaimContradicted(uint64 Id) const
+{
+    const auto *Claim =
+        DirectorClaims.FindByPredicate([&](const auto &C) { return C.Id == Id && C.Generation == DirectorGeneration; });
+    if (!Claim || Claim->bOverridden)
+    {
+        return false;
+    }
+    const auto Sample = ReadForensicSample(Claim->ObservationTick);
+    if (Sample.IsSet())
+    {
+        const int32 Room = Sample->CrewRooms[Claim->Subject];
+        return Room >= 0 && Room < 8 && Sample->Cameras[Room] == ECameraFeedState::Online &&
+               Room != Claim->ReportedRoom;
+    }
+    return Claim->ObservationTick == Simulation.TickIndex && Simulation.Bodies[Claim->Subject].Room >= 0 &&
+           CameraFeedState(Simulation.Bodies[Claim->Subject].Room) == ECameraFeedState::Online &&
+           Simulation.Bodies[Claim->Subject].Room != Claim->ReportedRoom;
+}
+uint64 UDirectOrScutSimSubsystem::QueueOperatorCommand(const FString &Input)
+{
+    const uint64 Id = BeginDirectorRequest(Input);
+    auto *Pending = DirectorRequests.Find(Id);
+    if (Pending)
+    {
+        Pending->bOperator = true;
+        ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Pending->Request), true);
+    }
+    return Id;
+}
+uint64 UDirectOrScutSimSubsystem::QueueOperatorChallenge(uint64 Id, bool Override)
+{
+    return QueueOperatorCommand(FString(Override ? TEXT("override ") : TEXT("flag ")) + LexToString(Id));
 }

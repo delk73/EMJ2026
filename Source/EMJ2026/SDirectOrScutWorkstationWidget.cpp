@@ -200,6 +200,10 @@ TSharedRef<SWidget> PhosphorHairline()
 // only while this workstation owns focus, before editor command processing.
 SDirectOrScutWorkstationWidget::~SDirectOrScutWorkstationWidget()
 {
+    if (Sim.IsValid())
+    {
+        Sim->OnDirectorPresentation.RemoveAll(this);
+    }
     if (FSlateApplication::IsInitialized() && TacticalInput)
     {
         FSlateApplication::Get().UnregisterInputPreProcessor(TacticalInput);
@@ -228,6 +232,7 @@ void SDirectOrScutWorkstationWidget::Construct(const FArguments &Args)
         }
     }
     Sim = Args._Sim;
+    Sim->OnDirectorPresentation.AddSP(SharedThis(this), &SDirectOrScutWorkstationWidget::PresentDirectorDirective);
     Rig = Args._Rig;
     for (int32 F = 1; F <= 8; ++F)
     {
@@ -951,9 +956,9 @@ TArray<FString> SDirectOrScutWorkstationWidget::CompletionCandidates(const FStri
     if (Argument == 0)
     {
         Tokens = {
-            TEXT("show_cam"),   TEXT("show_widget"),   TEXT("compare"),  TEXT("status"),   TEXT("start_experiment"),
-            TEXT("debug_grid"), TEXT("help"),          TEXT("override"), TEXT("findings"), TEXT("subjects"),
-            TEXT("blindspots"), TEXT("cross_examine"), TEXT("scrub")};
+            TEXT("show_cam"),   TEXT("show_widget"), TEXT("compare"),       TEXT("status"), TEXT("start_experiment"),
+            TEXT("debug_grid"), TEXT("help"),        TEXT("override"),      TEXT("flag"),   TEXT("findings"),
+            TEXT("subjects"),   TEXT("blindspots"),  TEXT("cross_examine"), TEXT("scrub")};
     }
     else if (Argument == 1 && (Words[0] == TEXT("show_widget") || Words[0] == TEXT("compare")))
     {
@@ -1143,7 +1148,7 @@ void SDirectOrScutWorkstationWidget::Commit(const FText &Text, ETextCommit::Type
         HistoryDraft.Empty();
         Completions.Reset();
         LastCompletion.Empty();
-        if (Input != TEXT("cross_examine") && Input != TEXT("override"))
+        if (Input != TEXT("cross_examine") && Input != TEXT("override") && Input != TEXT("flag"))
         {
             Prompt->SetText(FText::GetEmpty());
         }
@@ -1489,6 +1494,8 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
     {
         return;
     }
+    Sim->ServiceDirector(); // Presentation remains responsive while automatic simulation is paused.
+
     for (int32 Feed = 1; Feed <= 8; ++Feed)
     {
         if (TerminalMaterials[Feed].IsValid() && OpticImages[Feed].IsValid())
@@ -2538,6 +2545,73 @@ FString SDirectOrScutWorkstationWidget::ForensicReadout() const
     }
     return Text;
 }
+void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirective &D)
+{
+    const auto &A = D.Args;
+    if (D.Kind == EShipDirectiveKind::ShowCam)
+    {
+        if (A.bBuffered)
+        {
+            bForensicScrub = true;
+            bScrubPlaying = false;
+            ActiveFeed = ACompartmentCameraRig::FeedForRoom(A.Room);
+            ScrubAnchor = D.ObservationTick;
+            ScrubOffset = A.HistoryOffset;
+        }
+        else
+        {
+            PresentOptic(A.Room);
+        }
+    }
+    else if (D.Kind == EShipDirectiveKind::ShowWidget)
+    {
+        if (A.Widget == EShipWidgetKind::Schematic)
+        {
+            PresentInstrument(ETerminalInstrument::Schematic, A.Room);
+        }
+        else
+        {
+            if (A.ReportedRoom >= 0)
+            {
+                SetReportedCrewRoom(A.Subject, A.ClaimId ? Sim->Simulation.Bodies[A.Subject].Room : A.ReportedRoom);
+                if (A.ClaimId)
+                {
+                    bCrewReportOverride[A.Subject] = false; // Corrected live reports track truth after delivery.
+                }
+            }
+            if (A.Widget == EShipWidgetKind::Ocular)
+            {
+                PresentAttachment(EInlineAttachmentKind::OcularScan, A.Subject);
+            }
+            else if (A.SecondSubject >= 0)
+            {
+                PresentAttachment(EInlineAttachmentKind::PulseStrip, A.Subject, A.SecondSubject);
+            }
+            else
+            {
+                PresentInstrument(ETerminalInstrument::ECG, A.Subject);
+            }
+        }
+        if (A.ReportedRoom >= 0 && A.ClaimId == 0)
+        {
+            FTerminalStreamEntry Entry;
+            Entry.ClaimId = D.RequestId;
+            Entry.Text =
+                FString::Printf(TEXT("MOTHER-7> SUBJECT %d REPORTED %s AT T%llu // MEDIATED CLAIM. %s"), A.Subject,
+                                DirectOrScut::RoomName(A.ReportedRoom), D.ObservationTick, *D.Pretext);
+            AppendTerminalEntry(MoveTemp(Entry));
+        }
+    }
+    else if (D.Kind == EShipDirectiveKind::VoiceBlend)
+    {
+        AppendTerminalProse(TEXT("SYSTEM> Voice presentation state validated; acoustic delivery remains a separate "
+                                 "presentation capability."));
+    }
+    if (!D.Pretext.IsEmpty() && (A.ReportedRoom < 0 || A.ClaimId != 0))
+    {
+        AppendTerminalProse(TEXT("MOTHER-7> ") + D.Pretext);
+    }
+}
 void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
 {
     const int32 Room = ACompartmentCameraRig::RoomForFeed(ActiveFeed);
@@ -2619,8 +2693,44 @@ bool SDirectOrScutWorkstationWidget::HandlePresentationCommand(const FString &In
     if (Command.StartsWith(TEXT("override ")))
     {
         // The wrapper grants no authority and never executes directly.
-        Sim->QueueConsoleCommand(Input.TrimStartAndEnd().Mid(9));
+        const FString Tail = Input.TrimStartAndEnd().Mid(9);
+        if (Tail.IsNumeric())
+        {
+            Sim->QueueOperatorChallenge(FCString::Strtoui64(*Tail, nullptr, 10), true);
+        }
+        else
+        {
+            Sim->QueueOperatorCommand(Tail);
+        }
         AppendTerminalProse(TEXT("SYSTEM> Override submitted for normal fixed-tick validation."));
+        return true;
+    }
+    if (Command == TEXT("flag") || Command.StartsWith(TEXT("flag ")))
+    {
+        if (Words.Num() == 2 && Words[1].IsNumeric())
+        {
+            Sim->QueueOperatorChallenge(FCString::Strtoui64(*Words[1], nullptr, 10), false);
+        }
+        else
+        {
+            uint64 ClaimId = 0;
+            for (const auto &Claim : Sim->GetDirectorClaims())
+            {
+                if (Sim->IsClaimContradicted(Claim.Id))
+                {
+                    ClaimId = Claim.Id;
+                }
+            }
+            if (ClaimId)
+            {
+                Prompt->SetText(FText::FromString(FString::Printf(TEXT("flag %llu"), ClaimId)));
+                SetConsoleOpen(true);
+            }
+            else
+            {
+                AppendTerminalProse(TEXT("SYSTEM> No independently verifiable contradiction is available."));
+            }
+        }
         return true;
     }
     const auto RoomId = [](const FString &Name)
@@ -3257,26 +3367,27 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
 {
     auto Workstation = SNew(SVerticalBox);
     Workstation->AddSlot().AutoHeight().Padding(
-        0, 0, 0, 10)[SNew(SBox)
-                         .HeightOverride(28)
-                         .Tag(TEXT("ScutStatusCarrierBar"))
+        0, 0, 0,
+        10)[SNew(SBox)
+                .HeightOverride(28)
+                .Tag(TEXT("ScutStatusCarrierBar"))
+                .Clipping(EWidgetClipping::ClipToBounds)
+                    [SNew(STextBlock)
+                         .Tag(TEXT("ScutCarrier"))
+                         .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+                         .ColorAndOpacity(EvaluatePhosphorColor(1))
                          .Clipping(EWidgetClipping::ClipToBounds)
-                             [SNew(STextBlock)
-                                  .Tag(TEXT("ScutCarrier"))
-                                  .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
-                                  .ColorAndOpacity(EvaluatePhosphorColor(1))
-                                  .Clipping(EWidgetClipping::ClipToBounds)
-                                  .Text_Lambda(
-                                      [this]()
-                                      {
-                                          const auto &M = Sim->Simulation;
-                                          const int32 T = FMath::Max(0, 600 - int32(M.TickIndex / 30));
-                                          return FText::FromString(FString::Printf(
-                                              TEXT("CARRIER: THETA-9 // PROJECT: GLASS HOUSE | T-%02d:%02d | OBJ "
-                                                   "%.0f%% | SUSP %.0f%% | AI-LINK:%s | F9: DEBUG"),
-                                              T / 60, T % 60, M.ObjectiveProgress * 100, M.CollectiveSuspicion() * 100,
-                                              Sim->bAILink ? TEXT("LINKED") : TEXT("LOCAL")));
-                                      })]];
+                         .Text_Lambda(
+                             [this]()
+                             {
+                                 const auto &M = Sim->Simulation;
+                                 const int32 T = FMath::Max(0, 600 - int32(M.TickIndex / 30));
+                                 return FText::FromString(FString::Printf(
+                                     TEXT("CARRIER: THETA-9 // PROJECT: GLASS HOUSE | T-%02d:%02d | OBJ "
+                                          "%.0f%% | SUSP %.0f%% | AI-LINK:%s | F9: DEBUG"),
+                                     T / 60, T % 60, M.ObjectiveProgress * 100, M.CollectiveSuspicion() * 100,
+                                     Sim->bAILink && Sim->HasDirectorEndpoint() ? TEXT("LINKED") : TEXT("LOCAL")));
+                             })]];
     auto Left = SNew(SVerticalBox);
     Left->AddSlot().FillHeight(1)[SNew(SBox).Tag(
         TEXT("ScutTeletypePanel"))[SAssignNew(LogScroll, SScrollBox)
@@ -3461,6 +3572,34 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
                                     return Record ? FText::FromString(Record->Text.Left(int32(Record->Characters)))
                                                   : FText::GetEmpty();
                                 })];
+        if (Entry.ClaimId)
+        {
+            const uint64 ClaimId = Entry.ClaimId;
+            auto Challenges = SNew(SHorizontalBox);
+            Challenges->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+                [this, ClaimId]()
+                { return Sim->IsClaimContradicted(ClaimId) ? EVisibility::Visible : EVisibility::Collapsed; }));
+            Challenges->AddSlot().AutoWidth()[PhosphorSoftkey(
+                FName(*FString::Printf(TEXT("ScutFlag%llu"), ClaimId)), FText::FromString(TEXT("[FLAG CONTRADICTION]")),
+                FSimpleDelegate::CreateLambda([this, ClaimId]() { Sim->QueueOperatorChallenge(ClaimId, false); }))];
+            auto Override = PhosphorSoftkey(
+                FName(*FString::Printf(TEXT("ScutOverride%llu"), ClaimId)), FText::FromString(TEXT("[OVERRIDE]")),
+                FSimpleDelegate::CreateLambda([this, ClaimId]() { Sim->QueueOperatorChallenge(ClaimId, true); }));
+            Override->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+                [this, ClaimId]()
+                {
+                    for (const auto &Claim : Sim->GetDirectorClaims())
+                    {
+                        if (Claim.Id == ClaimId && Claim.bFlagged && !Claim.bOverridden)
+                        {
+                            return EVisibility::Visible;
+                        }
+                    }
+                    return EVisibility::Collapsed;
+                }));
+            Challenges->AddSlot().AutoWidth().Padding(8, 0)[Override];
+            Row->AddSlot().AutoHeight()[Challenges];
+        }
         if (Entry.Attachment.IsSet())
         {
             const auto Ref = Entry.Attachment.GetValue();

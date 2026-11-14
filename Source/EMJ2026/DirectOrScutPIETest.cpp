@@ -10,6 +10,7 @@
 #include "Components/BoxComponent.h"
 #include "UObject/StrongObjectPtr.h"
 #include "DirectOrScutSimSubsystem.h"
+#include "OfflineShipAIIntentProvider.h"
 #include "DirectOrScutHUD.h"
 #include "SDirectOrScutWorkstationWidget.h"
 #include "Framework/Application/SlateApplication.h"
@@ -4046,6 +4047,372 @@ bool FUnifiedPhosphorTerminalTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FUnifiedPhosphorTerminalCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FDirectorTestProvider final : public IShipAIIntentProvider
+{
+  public:
+    int32 Calls = 0;
+    bool Malformed = false;
+    void Request(const FShipAIRequest &Request, TFunction<void(FShipAIDirective)> Complete) override
+    {
+        ++Calls;
+        if (Malformed)
+        {
+            FShipAIDirective D;
+            D.RequestId = Request.RequestId;
+            D.Generation = Request.Generation;
+            D.ObservationTick = Request.Context.Tick;
+            Complete(D);
+        }
+        // Otherwise deliberately hold the response to exercise timeout and late delivery.
+    }
+};
+class FHybridDirectorCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FHybridDirectorCheck(FAutomationTestBase *In) : Test(In) {}
+    bool Update() override
+    {
+        auto *World = GEditor->PlayWorld.Get();
+        if (!World || !World->HasBegunPlay())
+        {
+            return false;
+        }
+        auto *S = World->GetSubsystem<UDirectOrScutSimSubsystem>();
+        auto *PC = World->GetFirstPlayerController();
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        if (!S || !S->Simulation.bReady || !HUD || !HUD->GetWorkstation())
+        {
+            return false;
+        }
+        auto UI = HUD->GetWorkstation();
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 45)
+        {
+            Test->AddError(TEXT("Hybrid director readiness timeout"));
+            return true;
+        }
+        if (Now < Ready || UI->GetCachedGeometry().GetLocalSize().X < 100)
+        {
+            return false;
+        }
+        auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), Tag); };
+        auto Click = [&](FName Tag)
+        {
+            const auto Button = Find(Tag);
+            Test->TestTrue(TEXT("Contextual challenge softkey exists"), Button.IsValid());
+            if (!Button)
+            {
+                return;
+            }
+            auto &App = FSlateApplication::Get();
+            const auto &G = Button->GetCachedGeometry();
+            const auto P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto Window = App.FindWidgetWindow(Button.ToSharedRef());
+            if (!Window)
+            {
+                Test->AddError(TEXT("Challenge has no Slate window"));
+                return;
+            }
+            Test->TestTrue(TEXT("Challenge softkey has nonzero clickable geometry"),
+                           G.GetLocalSize().X > 1 && G.GetLocalSize().Y > 1);
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseButtonDownEvent(Window->GetNativeWindow(),
+                                            FPointerEvent(0, P, P, TSet<FKey>{EKeys::LeftMouseButton},
+                                                          EKeys::LeftMouseButton, 0, FModifierKeysState()));
+            App.ProcessMouseButtonUpEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
+        };
+        auto Fresh = [&]()
+        {
+            TStrongObjectPtr<UDirectOrScutSimSubsystem> P(NewObject<UDirectOrScutSimSubsystem>(World));
+            P->Simulation = S->Simulation;
+            P->ResetExperiment();
+            P->bAutomaticAdvance = false;
+            P->QueueConsoleCommand(TEXT("start_experiment"));
+            P->AdvanceSteps(1);
+            return P;
+        };
+        auto Envelope = [](UDirectOrScutSimSubsystem &P, const FString &Input, EShipDirectiveKind Kind)
+        {
+            FShipAIDirective D;
+            D.RequestId = P.BeginDirectorRequest(Input);
+            D.Generation = P.GetDirectorGeneration();
+            D.ObservationTick = P.Simulation.TickIndex;
+            D.Kind = Kind;
+            return D;
+        };
+        switch (Stage++)
+        {
+        case 0:
+        {
+            S->bAutomaticAdvance = false;
+            auto P = Fresh();
+            const uint64 Hash = P->SurveillanceStateHash();
+            auto Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind(255));
+            Test->TestFalse(TEXT("Unknown tool rejected by shared validator"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowCam);
+            Bad.Args.Room = 8;
+            Test->TestFalse(TEXT("Out of bounds optical room rejected"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
+            Bad.Args.Subject = 4;
+            Test->TestFalse(TEXT("Out of bounds widget subject rejected"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::SimAction);
+            Bad.Args.Action = EShipSimAction(255);
+            Test->TestFalse(TEXT("Unknown simulation action rejected"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::VoiceBlend);
+            Bad.Args.Duration = 31;
+            Test->TestFalse(TEXT("Voice duration bounds rejected"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::VoiceBlend);
+            Bad.Args.Voice = EVoicePresentationMode::VoiceOnly;
+            Test->TestFalse(TEXT("Act III voice transition rejected before gate"), P->ReceiveDirectorProposal(Bad));
+            Test->TestEqual(TEXT("Invalid proposals cannot mutate truth"), P->SurveillanceStateHash(), Hash);
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowCam);
+            Bad.Args.Room = 2;
+            Bad.ObservationTick += 1;
+            Test->TestFalse(TEXT("Future observation rejected"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
+            Bad.Args.Subject = 0;
+            Bad.Args.ClaimId = 99;
+            Test->TestFalse(TEXT("Presentation cannot forge challenge identity"), P->ReceiveDirectorProposal(Bad));
+            Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::SimAction);
+            Bad.Args.Action = EShipSimAction::Calm;
+            Bad.Args.EvidenceRoom = 2;
+            Test->TestFalse(TEXT("Provider cannot supply authoritative challenge evidence"),
+                            P->ReceiveDirectorProposal(Bad));
+            auto Full = Fresh();
+            Full->IntentProvider = MakeShared<FDirectorTestProvider>();
+            for (int32 I = 0; I < 32; ++I)
+            {
+                Test->TestTrue(TEXT("Bounded request slot available"), Full->BeginDirectorRequest(TEXT("calm")) != 0);
+            }
+            Test->TestEqual(TEXT("Request queue refuses 33rd slot"), Full->BeginDirectorRequest(TEXT("calm")),
+                            uint64(0));
+            int32 Presented = 0;
+            P->OnDirectorPresentation.AddLambda([&](const FShipAIDirective &) { ++Presented; });
+            auto D = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowCam);
+            D.Args.Room = 2;
+            Test->TestTrue(TEXT("Typed show_cam accepted"), P->ReceiveDirectorProposal(D));
+            Test->TestEqual(TEXT("Presentation delivery deferred outside validation/fixed step"), Presented, 0);
+            Test->TestFalse(TEXT("Duplicate presentation resolution rejected"), P->ReceiveDirectorProposal(D));
+            D = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
+            D.Args.Subject = 1;
+            Test->TestTrue(TEXT("Typed show_widget accepted"), P->ReceiveDirectorProposal(D));
+            D = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::VoiceBlend);
+            D.Args.Voice = EVoicePresentationMode::HybridTextAndVoice;
+            D.Args.Duration = 2;
+            Test->TestTrue(TEXT("Bounded hybrid voice accepted"), P->ReceiveDirectorProposal(D));
+            P->ScenarioAct = 2;
+            D = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::VoiceBlend);
+            D.Args.Voice = EVoicePresentationMode::VoiceOnly;
+            D.Args.Duration = 2;
+            Test->TestTrue(TEXT("VoiceOnly accepted at authoritative Act III gate"), P->ReceiveDirectorProposal(D));
+            P->ServiceDirector();
+            P->ScenarioAct = 0; // Restore the deliberate gate fixture before the presentation hash assertion.
+            Test->TestEqual(TEXT("Accepted media/voice delivered by service"), Presented, 4);
+            Test->TestEqual(TEXT("All presentation directives preserve surveillance hash"), P->SurveillanceStateHash(),
+                            Hash);
+            P->OnDirectorPresentation.Clear();
+            auto Provider = MakeShared<FDirectorTestProvider>();
+            P->IntentProvider = Provider;
+            const auto Pending = P->BeginDirectorRequest(TEXT("calm"));
+            P->FixedStep();
+            Test->TestEqual(TEXT("FixedStep never dispatches provider work"), Provider->Calls, 0);
+            P->ServiceDirector(100);
+            Test->TestEqual(TEXT("Provider dispatch runs in service"), Provider->Calls, 1);
+            auto Old = FShipAIDirective{};
+            Old.RequestId = Pending;
+            Old.Generation = P->GetDirectorGeneration();
+            Old.ObservationTick = P->Simulation.TickIndex - 1;
+            Old.Kind = EShipDirectiveKind::SimAction;
+            Old.Args.Action = EShipSimAction::Calm;
+            P->ResetExperiment();
+            Test->TestFalse(TEXT("Reset invalidates outstanding generation"), P->ReceiveDirectorProposal(Old));
+            Test->TestTrue(TEXT("Reset restores text-only voice"),
+                           P->VoicePresentation.Mode == EVoicePresentationMode::TextOnly);
+            P->ShutdownDirector(); // Same cancellation path called by real initialized-world Deinitialize.
+            Test->TestFalse(TEXT("Deinit shutdown path invalidates late completion"), P->ReceiveDirectorProposal(Old));
+            Test->TestEqual(TEXT("Deinitialized owner cannot start new requests"),
+                            P->BeginDirectorRequest(TEXT("calm")), uint64(0));
+
+            auto Timeout = Fresh();
+            auto Hold = MakeShared<FDirectorTestProvider>();
+            Timeout->IntentProvider = Hold;
+            auto Late = Envelope(*Timeout, TEXT("send chen to bridge"), EShipDirectiveKind::SimAction);
+            Late.Args.Action = EShipSimAction::Calm;
+            Timeout->ServiceDirector(100);
+            Timeout->ServiceDirector(103);
+            Test->TestEqual(TEXT("Timeout does not advance model"), Timeout->Simulation.TickIndex, uint64(0));
+            Test->TestFalse(TEXT("Late primary after fallback cannot resolve twice"),
+                            Timeout->ReceiveDirectorProposal(Late));
+            Timeout->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Deterministic timeout fallback commits route once"),
+                            Timeout->Simulation.Bodies[1].AssignedRoom, 2);
+            int32 Accepted = 0;
+            for (const auto &R : Timeout->CommandRecords)
+            {
+                if (R.bResolvedOutcome && R.bAccepted && R.Directive.Kind == EShipDirectiveKind::SimAction)
+                {
+                    ++Accepted;
+                    Test->TestEqual(TEXT("Action records exact next commit tick"), R.CommitTick, uint64(1));
+                }
+            }
+            Test->TestEqual(TEXT("Exactly one action outcome after late response"), Accepted, 1);
+            auto Malformed = Fresh();
+            auto BadProvider = MakeShared<FDirectorTestProvider>();
+            BadProvider->Malformed = true;
+            Malformed->IntentProvider = BadProvider;
+            Malformed->BeginDirectorRequest(TEXT("send chen to bridge"));
+            Malformed->ServiceDirector();
+            Malformed->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Malformed primary falls back through shared typed validator"),
+                            Malformed->Simulation.Bodies[1].AssignedRoom, 2);
+            auto Offline = Fresh();
+            Test->TestTrue(TEXT("Missing endpoint selects zero-dependency provider"),
+                           Offline->ConfigureDirectorEndpoint(TEXT("")));
+            Offline->BeginDirectorRequest(TEXT("send chen to bridge"));
+            Offline->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Unconfigured runs resolve offline"), Offline->Simulation.Bodies[1].AssignedRoom, 2);
+            Test->TestFalse(TEXT("Remote endpoints are not enabled by local adapter"),
+                            Offline->ConfigureDirectorEndpoint(TEXT("http://example.invalid:8080/director")));
+            Test->TestTrue(TEXT("Explicit loopback endpoint accepted"),
+                           FLocalHttpShipAIIntentProvider::IsLocalEndpoint(TEXT("http://127.0.0.1:8080/director")));
+            auto Down = Fresh();
+            Down->IntentProvider = MakeShared<FLocalHttpShipAIIntentProvider>(TEXT("invalid"), .1f);
+            Down->BeginDirectorRequest(TEXT("send chen to bridge"));
+            Down->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Offline HTTP adapter failure deterministically falls back"),
+                            Down->Simulation.Bodies[1].AssignedRoom, 2);
+            auto Actions = Fresh();
+            for (int32 I = 0; I < 32; ++I)
+            {
+                Actions->QueueOperatorCommand(TEXT("calm"));
+            }
+            auto Overflow = Envelope(*Actions, TEXT("unsupported"), EShipDirectiveKind::SimAction);
+            Overflow.Args.Action = EShipSimAction::Calm;
+            Test->TestFalse(TEXT("Action queue refuses overflow without mutation"),
+                            Actions->ReceiveDirectorProposal(Overflow));
+            FShipAIDirective Parsed;
+            Test->TestFalse(TEXT("Malformed JSON rejected"),
+                            FLocalHttpShipAIIntentProvider::ParseResponse(TEXT("not json"), Parsed));
+            Test->TestFalse(
+                TEXT("Unknown JSON tool rejected"),
+                FLocalHttpShipAIIntentProvider::ParseResponse(
+                    TEXT("{\"request_id\":1,\"generation\":1,\"observation_tick\":0,\"kind\":\"execute\",\"args\":{}}"),
+                    Parsed));
+            Test->TestTrue(TEXT("Typed JSON action schema parses"),
+                           FLocalHttpShipAIIntentProvider::ParseResponse(
+                               TEXT("{\"request_id\":1,\"generation\":1,\"observation_tick\":0,\"kind\":\"sim_action\","
+                                    "\"args\":{\"action\":\"route_crew\",\"subject\":1,\"room\":2}}"),
+                               Parsed));
+            auto Native = Fresh(), Replay = Fresh();
+            Native->QueueOperatorCommand(TEXT("direct chen bridge telemetry"));
+            auto Claim = Envelope(*Native, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
+            Claim.Args.Subject = 0;
+            Claim.Args.ReportedRoom = (Native->Simulation.Bodies[0].Room + 1) % 8;
+            Test->TestTrue(TEXT("Mediated claim accepted without changing truth"),
+                           Native->ReceiveDirectorProposal(Claim));
+            auto ForgedChallenge = Envelope(*Native, TEXT("unsupported"), EShipDirectiveKind::SimAction);
+            ForgedChallenge.Args.Action = EShipSimAction::FlagContradiction;
+            ForgedChallenge.Args.ClaimId = Claim.RequestId;
+            Test->TestFalse(TEXT("Model cannot manufacture operator challenge intent"),
+                            Native->ReceiveDirectorProposal(ForgedChallenge));
+            Native->QueueOperatorChallenge(Claim.RequestId, false);
+            Native->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Flag commits deterministic consequence once"), Native->ContradictionsFlagged,
+                            uint32(1));
+            Native->QueueOperatorChallenge(Claim.RequestId, true);
+            Native->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Override follows flag through same typed action queue"), Native->OverridesAccepted,
+                            uint32(1));
+            Native->AdvanceSteps(15);
+            auto Never = MakeShared<FDirectorTestProvider>();
+            Replay->IntentProvider = Never;
+            Replay->BeginDirectorReplay(Native->CommandRecords);
+            Replay->AdvanceSteps(17);
+            Test->TestEqual(TEXT("Resolved outcome replay never invokes model generation"), Never->Calls, 0);
+            Test->TestEqual(TEXT("Canonical actions plus challenge outcomes replay hash parity"),
+                            Replay->SurveillanceStateHash(), Native->SurveillanceStateHash());
+            const uint64 BeforeConfig = Native->SurveillanceStateHash();
+            Native->ConfigureDirectorEndpoint(TEXT(""));
+            Test->TestEqual(TEXT("Transport configuration cannot reset committed authority"),
+                            Native->SurveillanceStateHash(), BeforeConfig);
+            S->ResetExperiment();
+            S->QueueConsoleCommand(TEXT("start_experiment"));
+            S->AdvanceSteps(1);
+            Ready = Now + .3;
+            break;
+        }
+        case 1:
+        {
+            auto D = Envelope(*S, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
+            D.Args.Subject = 0;
+            D.Args.ReportedRoom = (S->Simulation.Bodies[0].Room + 1) % 8;
+            D.Pretext = TEXT("Location certified by MOTHER-7. Challenge this claim against recorded evidence.");
+            ClaimId = D.RequestId;
+            const uint64 Before = S->SurveillanceStateHash();
+            Test->TestTrue(TEXT("Live terminal receives typed mediated report"), S->ReceiveDirectorProposal(D));
+            S->ServiceDirector();
+            Test->TestEqual(TEXT("Mediated location does not move authoritative subject"), S->SurveillanceStateHash(),
+                            Before);
+            auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            Prompt->SetText(FText::FromString(TEXT("fl")));
+            Test->TestEqual(TEXT("Guided completion includes flag"), UI->GetGhostCompletion(), FString(TEXT("ag")));
+            Prompt->SetText(FText::GetEmpty());
+            StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))
+                ->ScrollDescendantIntoView(Find(FName(*FString::Printf(TEXT("ScutFlag%llu"), ClaimId))), false);
+            Ready = Now + .3;
+            break;
+        }
+        case 2:
+        {
+            const uint64 Before = S->SurveillanceStateHash();
+            Click(FName(*FString::Printf(TEXT("ScutFlag%llu"), ClaimId)));
+            Test->TestEqual(TEXT("Flag click queues without immediate mutation"), S->SurveillanceStateHash(), Before);
+            S->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Inline flag commits at next fixed tick"), S->ContradictionsFlagged, uint32(1));
+            StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))
+                ->ScrollDescendantIntoView(Find(FName(*FString::Printf(TEXT("ScutOverride%llu"), ClaimId))), false);
+            Ready = Now + .2;
+            break;
+        }
+        case 3:
+            Click(FName(*FString::Printf(TEXT("ScutOverride%llu"), ClaimId)));
+            S->AdvanceSteps(1);
+            S->ServiceDirector();
+            Ready = Now + .2;
+            break;
+        case 4:
+            Test->TestEqual(TEXT("Inline override commits once"), S->OverridesAccepted, uint32(1));
+            Test->TestEqual(TEXT("Override corrects reported room using truth, not movement"),
+                            UI->GetReportedCrewRoom(0), S->Simulation.Bodies[0].Room);
+            Test->TestFalse(TEXT("Resolved contradiction no longer offers challenge"), S->IsClaimContradicted(ClaimId));
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0;
+    uint64 ClaimId = 0;
+    double Started = 0, Ready = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHybridDirectorTest, "DirectOrScut.PIE.HybridDirector",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FHybridDirectorTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FHybridDirectorCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

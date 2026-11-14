@@ -7,6 +7,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/Texture2D.h"
 class UDirectOrScutSimSubsystem;
+struct FShipAIDirective;
 class ACompartmentCameraRig;
 class SEditableTextBox;
 class SVerticalBox;
@@ -48,7 +49,7 @@ struct FInlineAttachmentRef
 };
 struct FTerminalStreamEntry
 {
-    uint64 Id = 0;
+    uint64 Id = 0, ClaimId = 0;
     FString Text;
     float Characters = 0;
     float PresentedAt = 0;
@@ -176,6 +177,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void RebuildUnifiedStream();
     void AppendTerminalProse(const FString &Text);
     void Inquiry(int32 Index);
+    void PresentDirectorDirective(const FShipAIDirective &Directive);
     void ResetTerminalPresentation();
     void UpdateTerminalPresentation(float Delta, const FGeometry &Geometry);
     void InitializePhosphorCurve();
