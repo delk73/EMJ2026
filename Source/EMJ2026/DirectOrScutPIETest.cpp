@@ -20,6 +20,7 @@
 #include "Misc/FileHelper.h"
 #include "DirectOrScutSetAnchor.h"
 #include "RoomSetBase.h"
+#include "Components/PointLightComponent.h"
 #include "CompartmentCameraRig.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "DirectOrScutAudioComponent.h"
@@ -1303,6 +1304,9 @@ class FCrisisLoopCheck : public IAutomationLatentCommand
         };
         auto Cmd = [&](const TCHAR *C)
         {
+            // Isolate legacy crisis assertions from the separately covered uplink budget.
+            S->UplinkHeatPct = 0;
+            S->UplinkLockoutUntil = 0;
             T->TestTrue(TEXT("CLI accepted"), S->QueueConsoleCommand(C));
             S->AdvanceSteps(1);
         };
@@ -2494,6 +2498,403 @@ bool FArchitectureRegressionTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FArchitectureRegressionCommand>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FTactileSurveillanceCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FTactileSurveillanceCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+
+    static TSharedPtr<SWidget> Find(const TSharedRef<SWidget> &Widget, FName Tag)
+    {
+        if (Widget->GetTag() == Tag)
+        {
+            return Widget;
+        }
+        auto *Children = Widget->GetChildren();
+        for (int32 Index = 0; Index < Children->Num(); ++Index)
+        {
+            if (auto Found = Find(Children->GetChildAt(Index), Tag))
+            {
+                return Found;
+            }
+        }
+        return nullptr;
+    }
+
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (Started == 0)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 120)
+        {
+            Test->AddError(TEXT("Tactile surveillance readiness timeout"));
+            return true;
+        }
+        auto *World = GEditor->PlayWorld.Get();
+        if (!World || !World->HasBegunPlay())
+        {
+            return false;
+        }
+        auto *Sim = World->GetSubsystem<UDirectOrScutSimSubsystem>();
+        auto *Controller = World->GetFirstPlayerController();
+        auto *HUD = Controller ? Cast<ADirectOrScutHUD>(Controller->GetHUD()) : nullptr;
+        if (!Sim || !Sim->Simulation.bReady || !HUD || !HUD->GetWorkstation())
+        {
+            return false;
+        }
+        auto UI = HUD->GetWorkstation();
+        if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
+        {
+            return false;
+        }
+        Sim->bAutomaticAdvance = false;
+        auto &Model = Sim->Simulation;
+        auto Fresh = [&]()
+        {
+            Sim->ResetExperiment();
+            Sim->QueueConsoleCommand(TEXT("start_experiment"));
+            Sim->AdvanceSteps(1);
+        };
+        auto Settle = [&](int32 Crew, int32 Room)
+        {
+            Sim->CancelCrewRoute(Crew);
+            auto &Unit = Model.Bodies[Crew];
+            Unit.Room = Unit.AssignedRoom = Room;
+            Unit.State = EDirectOrScutUnitState::Working;
+            Sim->InitializeCrewStaging(Crew);
+            Sim->CrewStaging[Crew].AnchorHoldTicks = 2000;
+        };
+        auto QuietCrew = [&]()
+        {
+            for (int32 Crew = 0; Crew < 3; ++Crew)
+            {
+                Settle(Crew, 3);
+            }
+        };
+        auto Crisis = [&](const TCHAR *Command)
+        {
+            TArray<FString> Tokens;
+            FString(Command).ParseIntoArrayWS(Tokens);
+            Test->TestTrue(TEXT("Crisis command recognized"), Sim->ExecuteCrisisCommand(Tokens));
+        };
+        auto Key = [&](FKey Value)
+        {
+            auto &App = FSlateApplication::Get();
+            App.ProcessKeyDownEvent(FKeyEvent(Value, FModifierKeysState(), 0, false, 0, 0));
+            App.ProcessKeyUpEvent(FKeyEvent(Value, FModifierKeysState(), 0, false, 0, 0));
+        };
+        if (Stage == 0)
+        {
+            ++Stage;
+            for (int32 Crew = 0; Crew < 3; ++Crew)
+            {
+                for (int32 Room : {2, 6})
+                {
+                    Fresh();
+                    QuietCrew();
+                    Settle(Crew, Room);
+                    const float Before = Model.Bodies[Crew].Profile.Suspicion;
+                    Test->TestTrue(TEXT("Settled console has terminal line of sight"), Sim->CanWitnessInjection(Crew));
+                    Crisis(Room == 2 ? TEXT("falsify_bio ash nominal") : TEXT("spoof_log MED_BAY"));
+                    // Ortiz's log-audit penalty is independent of the new 18% terminal witness penalty.
+                    const float Audit = Crew == 2 && Room == 6 ? .12f : 0.f;
+                    Test->TestTrue(TEXT("Live injection marks the physical human witness"),
+                                   Model.Bodies[Crew].bObservedInjection);
+                    Test->TestTrue(
+                        TEXT("Witness suspicion rises by exactly eighteen percent"),
+                        FMath::IsNearlyEqual(Model.Bodies[Crew].Profile.Suspicion, Before + .18f + Audit, .0001f));
+                    Test->TestTrue(TEXT("Witness telemetry identifies live packet injection"),
+                                   Sim->TerminalBuffer().Contains(TEXT("[WITNESS]")) &&
+                                       Sim->TerminalBuffer().Contains(TEXT("observed live packet injection")));
+                }
+            }
+            for (int32 Mask = 0; Mask < 7; ++Mask)
+            {
+                Fresh();
+                QuietCrew();
+                Settle(0, 2);
+                if (Mask == 0)
+                {
+                    Sim->StationRooms[2].Power = EPowerState::Low;
+                }
+                if (Mask == 1)
+                {
+                    Sim->StationRooms[2].Power = EPowerState::Offline;
+                }
+                if (Mask == 2)
+                {
+                    Model.Rooms[2].AlertSeconds = 10;
+                }
+                if (Mask == 3)
+                {
+                    Model.Bodies[0].State = EDirectOrScutUnitState::Panic;
+                }
+                if (Mask == 4)
+                {
+                    Sim->StartCrewRoute(0, 3, true);
+                }
+                if (Mask == 5)
+                {
+                    Settle(0, 4);
+                }
+                if (Mask == 6)
+                {
+                    Sim->CrewStaging[0].Position += FVector(300, 0, 0);
+                }
+                Crisis(TEXT("falsify_bio ash nominal"));
+                Test->TestFalse(TEXT("Power, fault, distraction, relocation and console distance mask a witness"),
+                                Model.Bodies[0].bObservedInjection);
+            }
+            Fresh();
+            QuietCrew();
+            Settle(3, 2);
+            Crisis(TEXT("spoof_log BRIDGE"));
+            Test->TestFalse(TEXT("Android is not a human witness"), Model.Bodies[3].bObservedInjection);
+            Fresh();
+            Sim->UplinkHeatPct = 70;
+            Sim->AdvanceSteps(30);
+            Test->TestTrue(TEXT("Uplink cools by 3.5 percent per second"),
+                           FMath::IsNearlyEqual(Sim->UplinkHeatPct, 66.5f, .002f));
+            Fresh();
+            Sim->AddUplinkHeat(85);
+            Test->TestFalse(TEXT("Exactly eighty-five percent does not trip diagnostics"), Sim->IsUplinkLocked());
+            Sim->AddUplinkHeat(.01f);
+            Test->TestTrue(TEXT("Crossing threshold starts six-second lockout"),
+                           Sim->IsUplinkLocked() && FMath::IsNearlyEqual(Sim->UplinkLockoutSeconds(), 6.f));
+            Test->TestTrue(TEXT("AI latency adds ten percent suspicion"),
+                           FMath::IsNearlyEqual(Model.Bodies[1].Profile.Suspicion, .12f, .0001f));
+            Sim->AdvanceSteps(179);
+            Test->TestTrue(TEXT("Lockout persists through tick 179"), Sim->IsUplinkLocked());
+            Sim->AdvanceSteps(1);
+            Test->TestFalse(TEXT("Lockout expires exactly at tick 180"), Sim->IsUplinkLocked());
+            Fresh();
+            for (const TCHAR *Command :
+                 {TEXT("power MED_BAY low"), TEXT("power MED_BAY off"), TEXT("power MED_BAY nominal"),
+                  TEXT("power OBSERVATION_DECK low"), TEXT("seal BRIDGE")})
+            {
+                Sim->QueueConsoleCommand(Command);
+            }
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Four back-to-back reroutes overheat the uplink"), Sim->IsUplinkLocked());
+            Test->TestTrue(TEXT("Threshold-crossing command executes"), Sim->StationRooms[4].Power == EPowerState::Low);
+            Test->TestFalse(TEXT("Subsequent same-tick seal is rejected"), Sim->IsRoomSealed(2));
+            const uint64 BeforeSpoof = Sim->MedicalSpoofs[0].Until;
+            Crisis(TEXT("falsify_bio vale critical"));
+            Test->TestEqual(TEXT("Lockout prevents spoof mutation"), Sim->MedicalSpoofs[0].Until, BeforeSpoof);
+            Sim->SubmitDirective(TEXT("llm"));
+            Sim->SubmitDirective(TEXT("send chen to BRIDGE"));
+            Sim->AdvanceSteps(1);
+            Test->TestEqual(TEXT("AI-LINK cannot bypass command lockout"), Model.Bodies[1].AssignedRoom, 3);
+            Sim->SubmitDirective(TEXT("cmd"));
+            Test->TestTrue(TEXT("Diagnostic warning is visible"), Sim->TerminalBuffer().Contains(TEXT("[AI LATENCY]")));
+            Fresh();
+            Test->TestTrue(TEXT("Reset clears heat, cooldown and witness memory"),
+                           Sim->UplinkHeatPct == 0 && !Sim->IsUplinkLocked() && !Model.Bodies[0].bObservedInjection);
+            auto Replay = [&]()
+            {
+                TStrongObjectPtr<UDirectOrScutSimSubsystem> Copy(NewObject<UDirectOrScutSimSubsystem>(World));
+                Copy->Simulation = Model;
+                Copy->ResetExperiment();
+                Copy->QueueConsoleCommand(TEXT("start_experiment"));
+                Copy->AdvanceSteps(1);
+                for (int32 Index = 0; Index < 4; ++Index)
+                {
+                    Copy->QueueConsoleCommand(TEXT("power MED_BAY low"));
+                }
+                return Copy;
+            };
+            auto A = Replay(), B = Replay();
+            for (int32 Tick = 0; Tick < 300; ++Tick)
+            {
+                A->Tick(1.f / 30);
+            }
+            for (int32 Frame = 0; Frame < 600; ++Frame)
+            {
+                B->Tick(1.f / 60);
+            }
+            Test->TestEqual(TEXT("Heat and cooldown replay identically at thirty/sixty Hz"), A->SurveillanceStateHash(),
+                            B->SurveillanceStateHash());
+            Test->TestEqual(TEXT("Witness/latency telemetry replays identically"), A->TerminalBuffer(),
+                            B->TerminalBuffer());
+            Fresh();
+            UI->SetConsoleOpen(false);
+            UI->ShowGrid();
+            FSlateApplication::Get().SetKeyboardFocus(UI);
+            const FKey FeedKeys[] = {EKeys::One,  EKeys::Two, EKeys::Three, EKeys::Four,
+                                     EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight};
+            for (int32 Feed = 0; Feed < 8; ++Feed)
+            {
+                Key(FeedKeys[Feed]);
+                Test->TestEqual(TEXT("One-key feed selection remains intact"), UI->ActiveFeed, Feed + 1);
+            }
+            Key(EKeys::Four);
+            Key(EKeys::E);
+            Test->TestTrue(TEXT("Power quick-action is queued until the next fixed step"),
+                           Sim->StationRooms[4].Power == EPowerState::Nominal);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("E switches selected room to low power"),
+                           Sim->StationRooms[4].Power == EPowerState::Low);
+            Key(EKeys::E);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("E cycles low to offline"), Sim->StationRooms[4].Power == EPowerState::Offline);
+            Key(EKeys::E);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("E restores nominal power"), Sim->StationRooms[4].Power == EPowerState::Nominal);
+            Sim->UplinkHeatPct = 0;
+            Key(EKeys::B);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("B seals selected room"), Sim->IsRoomSealed(4));
+            Key(EKeys::B);
+            Sim->AdvanceSteps(1);
+            Test->TestFalse(TEXT("B unseals selected room"), Sim->IsRoomSealed(4));
+            Sim->UplinkHeatPct = 0;
+            Key(EKeys::Q);
+            Sim->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Q lures crew into the selected feed room"), Sim->VoiceSpoof.Room, 4);
+            Sim->SecretAgendas[2].Progress = 50;
+            Key(EKeys::X);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("X uses authoritative log-spoof path"), Sim->SecretAgendas[2].Progress <= 1);
+            auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(UI->GetContentRoot(), TEXT("ScutPrompt")));
+            FSlateApplication::Get().SetKeyboardFocus(Prompt);
+            const auto Power = Sim->StationRooms[4].Power;
+            Key(EKeys::E);
+            Sim->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Typing into CMD does not trigger quick-actions"), Sim->StationRooms[4].Power == Power);
+            Fresh();
+            UI->SetConsoleOpen(false);
+            FSlateApplication::Get().SetKeyboardFocus(UI);
+            auto *Room = Sim->RoomSetActors[4].Get();
+            Test->TestNotNull(TEXT("Room lighting owner exists"), Room);
+            if (Room)
+            {
+                for (auto State : {EPowerState::Low, EPowerState::Offline, EPowerState::Nominal})
+                {
+                    Sim->StationRooms[4].Power = State;
+                    Sim->SynchronizeActors();
+                    TInlineComponentArray<UPointLightComponent *> Lights(Room);
+                    Test->TestEqual(TEXT("Three standard stage lights retained"), Lights.Num(), 3);
+                    for (auto *Light : Lights)
+                    {
+                        Test->TestEqual(TEXT("Lighting visibility follows power"), Light->IsVisible(),
+                                        State != EPowerState::Offline);
+                        Test->TestTrue(TEXT("Lighting intensity follows power"),
+                                       FMath::IsNearlyEqual(Light->Intensity, State == EPowerState::Nominal ? 6500.f
+                                                                              : State == EPowerState::Low   ? 650.f
+                                                                                                            : 0.f));
+                        if (State == EPowerState::Low)
+                        {
+                            Test->TestTrue(TEXT("Emergency light is amber"), Light->LightColor.R > Light->LightColor.B);
+                        }
+                        if (State == EPowerState::Nominal)
+                        {
+                            Test->TestTrue(TEXT("Nominal neutral lighting restored"),
+                                           Light->LightColor == FColor::White && Light->bUseTemperature &&
+                                               Light->Temperature == 5800.f);
+                        }
+                    }
+                }
+            }
+            Settle(0, 2);
+            Settle(1, 2);
+            Sim->CrewStaging[0].bHuddle = Sim->CrewStaging[1].bHuddle = true;
+            Sim->CrewStaging[0].Partner = 1;
+            Sim->CrewStaging[1].Partner = 0;
+            Sim->PairTrust[0][1] = Sim->PairTrust[1][0] = .7f;
+            Sim->MedicalSpoofs[0].Until = Model.TickIndex + 1800;
+            Sim->VoiceSpoof.Room = 4;
+            Sim->VoiceSpoof.MoveUntil = Model.TickIndex + 900;
+            Sim->StationRooms[3].OxygenPct = 60;
+            Sim->StationRooms[3].Power = EPowerState::Low;
+            Sim->StationRooms[6].Power = EPowerState::Offline;
+            Sim->BreachCrew = 3;
+            Sim->BreachRoom = 2;
+            Sim->BreachTicks = 1350;
+            Sim->UplinkHeatPct = 78;
+            const FString Bridge = Sim->RoomSurveillanceBadges(2);
+            Test->TestTrue(TEXT("Tile exposes spoof, alliance and breach countdown"),
+                           Bridge.Contains(TEXT("[SPOOFED]")) && Bridge.Contains(TEXT("[ALLIANCE]")) &&
+                               Bridge.Contains(TEXT("[UPLINK BREACH: 45.0s]")));
+            Test->TestTrue(TEXT("Room badges expose voice lure and low oxygen"),
+                           Sim->RoomSurveillanceBadges(4).Contains(TEXT("[VOICE LURE]")) &&
+                               Sim->RoomSurveillanceBadges(3).Contains(TEXT("[LOW O2]")));
+            Sim->SynchronizeActors();
+            UI->ShowGrid();
+            UI->SelectFeed(2, false);
+            Ready = Now + 1;
+            return false;
+        }
+        auto Slate = Find(UI->GetContentRoot(), TEXT("ScutFeedInterrupted6"));
+        Test->TestTrue(TEXT("Offline feed uses a visible interruption slate"),
+                       Slate.IsValid() && Slate->GetVisibility() == EVisibility::Visible);
+        Test->TestTrue(TEXT("Quick-action strip remains in the desk"),
+                       Find(UI->GetContentRoot(), TEXT("ScutQuickActionContext")).IsValid());
+        auto Border = StaticCastSharedPtr<SBorder>(Find(UI->GetContentRoot(), TEXT("ScutCamera2")));
+        Test->TestTrue(TEXT("Breach overrides the selected monitor border with crimson"),
+                       Border.IsValid() && Border->GetBorderBackgroundColor().GetSpecifiedColor().R >
+                                               Border->GetBorderBackgroundColor().GetSpecifiedColor().G);
+        TArray<FColor> Pixels;
+        FIntVector Size;
+        const bool Captured = FSlateApplication::Get().TakeScreenshot(UI->GetContentRoot(), Pixels, Size);
+        Test->TestTrue(TEXT("Tactile surveillance verification screenshot captured"), Captured);
+        if (Captured)
+        {
+            TArray64<uint8> PNG;
+            FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, PNG);
+            Test->TestTrue(TEXT("Tactile surveillance screenshot saved"),
+                           FFileHelper::SaveArrayToFile(
+                               PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut/TactileSurveillance.png"))));
+        }
+        auto PowerButton = Find(UI->GetContentRoot(), TEXT("ScutQuickAction1"));
+        Test->TestTrue(TEXT("Selected-room quick-action button exists"), PowerButton.IsValid());
+        if (PowerButton)
+        {
+            auto &App = FSlateApplication::Get();
+            const auto &Geometry = PowerButton->GetCachedGeometry();
+            const FVector2D Point = Geometry.LocalToAbsolute(Geometry.GetLocalSize() * .5);
+            auto Window = App.FindWidgetWindow(PowerButton.ToSharedRef());
+            if (!Window)
+            {
+                Test->AddError(TEXT("Quick-action window missing"));
+            }
+            else
+            {
+                App.ProcessMouseMoveEvent(FPointerEvent(0, Point, Point - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid,
+                                                        0, FModifierKeysState()));
+                App.ProcessMouseButtonDownEvent(Window->GetNativeWindow(),
+                                                FPointerEvent(0, Point, Point, TSet<FKey>{EKeys::LeftMouseButton},
+                                                              EKeys::LeftMouseButton, 0, FModifierKeysState()));
+                App.ProcessMouseButtonUpEvent(
+                    FPointerEvent(0, Point, Point, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
+                Test->TestTrue(TEXT("Clicked quick-action still waits for fixed step"),
+                               Sim->StationRooms[2].Power == EPowerState::Nominal);
+                Sim->AdvanceSteps(1);
+                Test->TestTrue(TEXT("Quick-action click executes and shares the heat budget"),
+                               Sim->StationRooms[2].Power == EPowerState::Low && Sim->IsUplinkLocked());
+            }
+        }
+        Sim->ResetExperiment();
+        return true;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0;
+    double Started = 0, Ready = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTactileSurveillanceTest, "DirectOrScut.PIE.TactileSurveillance",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FTactileSurveillanceTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FTactileSurveillanceCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

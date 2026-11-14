@@ -164,7 +164,7 @@ void UDirectOrScutSimSubsystem::FinishLayout()
 }
 bool UDirectOrScutSimSubsystem::SetDoorOpen(int32 I, bool Open)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || !Simulation.SetDoorOpen(I, Open))
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked() || !Simulation.SetDoorOpen(I, Open))
     {
         return false;
     }
@@ -189,6 +189,7 @@ void UDirectOrScutSimSubsystem::SynchronizeActors()
         if (auto *Set = RoomSetActors[R].Get())
         {
             Set->ApplyContainmentBarrier(IsRoomSealed(R));
+            Set->ApplyPowerLighting(StationRooms[R].Power);
         }
     }
     for (int32 I = 0; I < 12; ++I)
@@ -427,6 +428,12 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
             continue;
         }
         const FString Op = T[0];
+        if (IsUplinkLocked())
+        {
+            LogEvent(FString::Printf(TEXT("[AI LATENCY] Command rejected // uplink cooldown %.1fs"),
+                                     UplinkLockoutSeconds()));
+            continue;
+        }
         int32 R = T.Num() > 1 ? ResolveRoom(T[1]) : -1;
         if (Op == TEXT("direct") && T.Num() >= 3)
         {
@@ -472,6 +479,10 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
             }
             if (Any)
             {
+                if (Op == TEXT("seal"))
+                {
+                    AddUplinkHeat(30.f);
+                }
                 AudioCue(3);
                 CaptureIncident(TEXT("Bulkhead protocol: ") + Line, R);
             }
@@ -502,6 +513,8 @@ FSimContextSnapshot UDirectOrScutSimSubsystem::MakeContextSnapshot() const
     Writer->WriteValue(TEXT("tick"), double(S.Tick));
     Writer->WriteValue(TEXT("scenario"), Simulation.Scenario.ScenarioId);
     Writer->WriteValue(TEXT("objective"), Simulation.ObjectiveProgress);
+    Writer->WriteValue(TEXT("uplink_heat_pct"), UplinkHeatPct);
+    Writer->WriteValue(TEXT("uplink_lockout_seconds"), UplinkLockoutSeconds());
     Writer->WriteValue(TEXT("suspicion"), Simulation.CollectiveSuspicion());
     Writer->WriteArrayStart(TEXT("crew"));
     for (int32 I = 0; I < 4; ++I)
@@ -763,7 +776,7 @@ void UDirectOrScutSimSubsystem::EvaluateBeatDeck()
 }
 void UDirectOrScutSimSubsystem::ApplyInteraction(const FInteractionChoice &Choice, int32 Crew, int32 Room)
 {
-    if (ExperimentPhase != EExperimentPhase::Active)
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked())
     {
         return;
     }
@@ -857,6 +870,7 @@ void UDirectOrScutSimSubsystem::ApplyInteraction(const FInteractionChoice &Choic
     }
     if (Choice.Action == EDirectorAction::Seal)
     {
+        AddUplinkHeat(30.f);
         for (int32 D = 0; D < 9; ++D)
         {
             const auto &Door = Simulation.Doors[D];
@@ -881,7 +895,7 @@ void UDirectOrScutSimSubsystem::ApplyInteraction(const FInteractionChoice &Choic
 }
 bool UDirectOrScutSimSubsystem::ExecuteDirectorOption(int32 Index)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || !DirectorOptions.IsValidIndex(Index))
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked() || !DirectorOptions.IsValidIndex(Index))
     {
         return false;
     }
@@ -898,7 +912,7 @@ bool UDirectOrScutSimSubsystem::ExecuteDirectorOption(int32 Index)
 }
 bool UDirectOrScutSimSubsystem::ResolveBeat(int32 Index, int32 Choice)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || !BeatDeck.IsValidIndex(Index))
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked() || !BeatDeck.IsValidIndex(Index))
     {
         return false;
     }
@@ -1018,7 +1032,7 @@ const TCHAR *UDirectOrScutSimSubsystem::EndingName(EExperimentEnding E)
 }
 bool UDirectOrScutSimSubsystem::BeginScut(int32 Room)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || Room < 0 || Room >= 8)
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked() || Room < 0 || Room >= 8)
     {
         return false;
     }
@@ -1224,7 +1238,7 @@ void UDirectOrScutSimSubsystem::TamperCamera(int32 Room, ECameraFeedState State)
 }
 bool UDirectOrScutSimSubsystem::RepairCamera(int32 Room)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || Room < 0 || Room >= 8)
+    if (ExperimentPhase != EExperimentPhase::Active || IsUplinkLocked() || Room < 0 || Room >= 8)
     {
         return false;
     }
@@ -1323,6 +1337,8 @@ uint64 UDirectOrScutSimSubsystem::SurveillanceStateHash() const
         Hash ^= V;
         Hash *= 1099511628211ull;
     };
+    Add(uint64(FMath::RoundToInt(UplinkHeatPct * 10000)));
+    Add(UplinkLockoutUntil);
     Add(uint64(ExperimentPhase));
     Add(uint64(ExperimentEnding));
     Add(uint64(InspectedRoom + 1));
@@ -2293,6 +2309,8 @@ void UDirectOrScutSimSubsystem::StepCrewRoutes()
 
 void UDirectOrScutSimSubsystem::ResetCrisis()
 {
+    UplinkHeatPct = 0;
+    UplinkLockoutUntil = 0;
     for (auto &R : StationRooms)
     {
         R = FStationRoomState{};
@@ -2502,10 +2520,18 @@ bool UDirectOrScutSimSubsystem::ExecuteCrisisCommand(const TArray<FString> &T)
         LogEvent(TEXT("[CONTROL] Crisis directives require an active experiment"));
         return true;
     }
+    if (IsUplinkLocked())
+    {
+        LogEvent(
+            FString::Printf(TEXT("[AI LATENCY] Command rejected // uplink cooldown %.1fs"), UplinkLockoutSeconds()));
+        return true;
+    }
     const int32 I = T.Num() > 1 ? CrewId(T[1]) : -1;
     const int32 R = T.Num() > 1 ? ResolveRoom(T[1]) : -1;
     if (Op == TEXT("falsify_bio") && T.Num() == 3 && I >= 0 && (T[2] == TEXT("nominal") || T[2] == TEXT("critical")))
     {
+        ObserveInjection();
+        AddUplinkHeat(22.f);
         MedicalSpoofs[I] = {Simulation.TickIndex + 1800, T[2] == TEXT("critical"), false};
         bUsedSpoof = true;
         if (I < 3 && I != 1)
@@ -2516,6 +2542,8 @@ bool UDirectOrScutSimSubsystem::ExecuteCrisisCommand(const TArray<FString> &T)
     }
     else if (Op == TEXT("spoof_log") && T.Num() == 2 && R >= 0)
     {
+        ObserveInjection();
+        AddUplinkHeat(24.f);
         auto &A = SecretAgendas[2];
         A.Progress = 0;
         A.bCompleted = false;
@@ -2532,6 +2560,7 @@ bool UDirectOrScutSimSubsystem::ExecuteCrisisCommand(const TArray<FString> &T)
     }
     else if (Op == TEXT("intercom_lie") && T.Num() == 3 && I >= 0 && ResolveRoom(T[2]) >= 0)
     {
+        AddUplinkHeat(28.f);
         VoiceSpoof = {I, ResolveRoom(T[2]), Simulation.TickIndex + 900, Simulation.TickIndex + 1350, 0, 0};
         for (int32 J = 0; J < 3; ++J)
         {
@@ -2546,6 +2575,7 @@ bool UDirectOrScutSimSubsystem::ExecuteCrisisCommand(const TArray<FString> &T)
     else if (Op == TEXT("power") && T.Num() == 3 && R >= 0 &&
              (T[2] == TEXT("nominal") || T[2] == TEXT("low") || T[2] == TEXT("off")))
     {
+        AddUplinkHeat(22.f);
         StationRooms[R].Power = T[2] == TEXT("off")   ? EPowerState::Offline
                                 : T[2] == TEXT("low") ? EPowerState::Low
                                                       : EPowerState::Nominal;
@@ -2568,6 +2598,7 @@ bool UDirectOrScutSimSubsystem::ExecuteCrisisCommand(const TArray<FString> &T)
 }
 void UDirectOrScutSimSubsystem::StepCrisis()
 {
+    UplinkHeatPct = FMath::Max(0.f, UplinkHeatPct - 3.5f * float(Simulation.FixedDelta));
     const uint64 Tick = Simulation.TickIndex;
     constexpr float Dt = 1.f / 30;
     for (int32 R = 0; R < 8; ++R)
@@ -3791,4 +3822,129 @@ void UDirectOrScutSimSubsystem::Deinitialize()
     OnBreathCycle.Clear();
     IntentProvider.Reset();
     Super::Deinitialize();
+}
+
+// Tactile surveillance: physical witnesses and the shared ship-AI command budget.
+bool UDirectOrScutSimSubsystem::IsUplinkLocked() const
+{
+    return ExperimentPhase == EExperimentPhase::Active && Simulation.TickIndex < UplinkLockoutUntil;
+}
+
+float UDirectOrScutSimSubsystem::UplinkLockoutSeconds() const
+{
+    return IsUplinkLocked() ? float(double(UplinkLockoutUntil - Simulation.TickIndex) * Simulation.FixedDelta) : 0.f;
+}
+
+void UDirectOrScutSimSubsystem::AddUplinkHeat(float Amount)
+{
+    UplinkHeatPct = FMath::Clamp(UplinkHeatPct + Amount, 0.f, 100.f);
+    if (UplinkHeatPct <= 85.f || IsUplinkLocked())
+    {
+        return;
+    }
+    UplinkLockoutUntil = Simulation.TickIndex + 180;
+    for (int32 Crew = 0; Crew < 3; ++Crew)
+    {
+        if (CanFollowCrew(Crew))
+        {
+            auto &Profile = Simulation.Bodies[Crew].Profile;
+            Profile.Suspicion = FMath::Min(1.f, Profile.Suspicion + .10f);
+        }
+    }
+    RecordCue(2, .75f, TEXT("[AI LATENCY] Uplink diagnostic // suspicion +10% // command cooldown 6.0s"));
+    CaptureIncident(TEXT("Ship AI uplink overheated"), 2);
+    AudioCue(6);
+}
+
+bool UDirectOrScutSimSubsystem::CanWitnessInjection(int32 Crew) const
+{
+    if (Crew < 0 || Crew >= 3 || !CanFollowCrew(Crew))
+    {
+        return false;
+    }
+    const auto &Unit = Simulation.Bodies[Crew];
+    if (Unit.bAndroid || Unit.State != EDirectOrScutUnitState::Working || IsCrewRouteLocked(Crew) ||
+        (Unit.Room != 2 && Unit.Room != 6))
+    {
+        return false;
+    }
+    if (StationRooms[Unit.Room].Power != EPowerState::Nominal || Simulation.Rooms[Unit.Room].AlertSeconds > 0 ||
+        !Simulation.Rooms[Unit.Room].bIsPressurized)
+    {
+        return false;
+    }
+    const auto &Stage = CrewStaging[Crew];
+    const auto *Anchor = SetAnchors.IsValidIndex(Stage.Anchor) ? SetAnchors[Stage.Anchor].Get() : nullptr;
+    return Anchor && int32(Anchor->RoomId) == Unit.Room &&
+           (Anchor->StagingRole == EStagingSlotRole::PrimaryConsole ||
+            Anchor->StagingRole == EStagingSlotRole::SecondaryStation) &&
+           Stage.Position.Equals(Anchor->GetActorLocation(), 80.f);
+}
+
+void UDirectOrScutSimSubsystem::ObserveInjection()
+{
+    for (int32 Crew = 0; Crew < 3; ++Crew)
+    {
+        if (!CanWitnessInjection(Crew))
+        {
+            continue;
+        }
+        auto &Unit = Simulation.Bodies[Crew];
+        Unit.bObservedInjection = true;
+        Unit.Profile.Suspicion = FMath::Min(1.f, Unit.Profile.Suspicion + .18f);
+        RecordCue(
+            Unit.Room, .8f,
+            FString::Printf(TEXT("[WITNESS] %s observed live packet injection"), *FString(CrewNames[Crew]).ToUpper()));
+        CaptureIncident(TEXT("Live packet injection witnessed"), Unit.Room);
+    }
+}
+
+bool UDirectOrScutSimSubsystem::IsRoomBreachActive(int32 Room) const
+{
+    return BreachCrew != 0 && BreachRoom == Room && BreachTicks > 0;
+}
+
+FString UDirectOrScutSimSubsystem::RoomSurveillanceBadges(int32 Room) const
+{
+    if (Room < 0 || Room >= 8)
+    {
+        return FString();
+    }
+    FString Badges;
+    for (int32 Crew = 0; Crew < 4; ++Crew)
+    {
+        if (CanFollowCrew(Crew) && Simulation.Bodies[Crew].Room == Room &&
+            MedicalSpoofs[Crew].Until > Simulation.TickIndex)
+        {
+            Badges += TEXT(" [SPOOFED]");
+            break;
+        }
+    }
+    if (VoiceSpoof.Room == Room && VoiceSpoof.MoveUntil > Simulation.TickIndex)
+    {
+        Badges += TEXT(" [VOICE LURE]");
+    }
+    if (StationRooms[Room].OxygenPct < 65.f)
+    {
+        Badges += TEXT(" [LOW O2]");
+    }
+    bool Alliance = false;
+    for (int32 A = 0; A < 3; ++A)
+    {
+        for (int32 B = A + 1; B < 3; ++B)
+        {
+            Alliance |= CanFollowCrew(A) && CanFollowCrew(B) && Simulation.Bodies[A].Room == Room &&
+                        Simulation.Bodies[B].Room == Room && CrewStaging[A].bHuddle && CrewStaging[B].bHuddle &&
+                        CrewStaging[A].Partner == B && CrewStaging[B].Partner == A && PairTrust[A][B] >= .60f;
+        }
+    }
+    if (Alliance)
+    {
+        Badges += TEXT(" [ALLIANCE]");
+    }
+    if (IsRoomBreachActive(Room))
+    {
+        Badges += FString::Printf(TEXT(" [UPLINK BREACH: %.1fs]"), BreachTicks / 30.f);
+    }
+    return Badges;
 }

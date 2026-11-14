@@ -272,6 +272,15 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     void StepIncidentPlayback();
     void ResetCrisis();
     void StepCrisis();
+    float UplinkHeatPct = 0;
+    uint64 UplinkLockoutUntil = 0;
+    bool IsUplinkLocked() const;
+    float UplinkLockoutSeconds() const;
+    void AddUplinkHeat(float Amount);
+    bool CanWitnessInjection(int32 Crew) const;
+    void ObserveInjection();
+    FString RoomSurveillanceBadges(int32 Room) const;
+    bool IsRoomBreachActive(int32 Room) const;
     bool ExecuteCrisisCommand(const TArray<FString> &Tokens);
     void CaptureIncident(const FString &Caption, int32 Room = -1);
     void ChangePairTrust(int32 A, int32 B, float Delta);

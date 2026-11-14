@@ -3,6 +3,7 @@
 #include "GameFramework/Actor.h"
 #include "RoomSetBase.generated.h"
 class UDynamicMeshComponent;
+enum class EPowerState : uint8;
 UCLASS()
 class EMJ2026_API ARoomSetBase : public AActor
 {
@@ -16,6 +17,7 @@ class EMJ2026_API ARoomSetBase : public AActor
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
     void ApplyContainmentBarrier(bool Sealed);
+    void ApplyPowerLighting(EPowerState Power);
     UPROPERTY(VisibleAnywhere) TObjectPtr<UDynamicMeshComponent> ContainmentBarrier;
 
   private:
@@ -25,6 +27,7 @@ class EMJ2026_API ARoomSetBase : public AActor
         float Yaw;
     };
     TArray<FSolid> Solids;
+    uint8 AppliedLightingPower = 255;
     void BuildReactor();
     void BuildBridge();
     void BuildMedical();

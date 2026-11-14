@@ -52,6 +52,8 @@ void ARoomSetBase::Block(FVector P, FVector S, int32 ID, float Yaw)
 void ARoomSetBase::OnConstruction(const FTransform &T)
 {
     Super::OnConstruction(T);
+    AppliedLightingPower = 255;
+    ApplyPowerLighting(EPowerState::Nominal);
     if (auto *Label = FindComponentByClass<UTextRenderComponent>())
     {
         Label->SetText(FText::FromString(RoomId == 7 ? TEXT("SCUT") : RoomName(RoomId)));
@@ -155,6 +157,13 @@ void ARoomSetBase::BeginPlay()
 void ARoomSetBase::Tick(float D)
 {
     Super::Tick(D);
+    if (auto *Sim = GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>())
+    {
+        if (RoomId >= 0 && RoomId < 8)
+        {
+            ApplyPowerLighting(Sim->StationRooms[RoomId].Power);
+        }
+    }
     if (RoomId != 0)
     {
         return;
@@ -313,4 +322,24 @@ void ARoomSetBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
         }
     }
     Super::EndPlay(EndPlayReason);
+}
+
+void ARoomSetBase::ApplyPowerLighting(EPowerState Power)
+{
+    if (AppliedLightingPower == uint8(Power))
+    {
+        return;
+    }
+    AppliedLightingPower = uint8(Power);
+    TInlineComponentArray<UPointLightComponent *> Lights(this);
+    for (auto *Light : Lights)
+    {
+        // Preserve neutral stage lighting exactly whenever nominal power is restored.
+        Light->SetVisibility(Power != EPowerState::Offline);
+        Light->SetIntensity(Power == EPowerState::Nominal ? 6500.f : Power == EPowerState::Low ? 650.f : 0.f);
+        Light->bUseTemperature = Power == EPowerState::Nominal;
+        Light->SetTemperature(5800.f);
+        Light->SetLightColor(Power == EPowerState::Low ? FLinearColor(1.f, .25f, .025f) : FLinearColor::White);
+        Light->MarkRenderStateDirty();
+    }
 }

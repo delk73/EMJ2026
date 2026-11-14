@@ -108,7 +108,13 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                                       return FReply::Handled().SetUserFocus(AsShared());
                                   })[SNew(STextBlock)
                                          .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-                                         .ColorAndOpacity(FLinearColor(.6f, 1, .65f))
+                                         .ColorAndOpacity_Lambda(
+                                             [this, I]()
+                                             {
+                                                 return Sim->MedicalSpoofs[I].Until > Sim->Simulation.TickIndex
+                                                            ? FLinearColor(1.f, .65f, .12f)
+                                                            : FLinearColor(.6f, 1, .65f);
+                                             })
                                          .Text_Lambda(
                                              [this, I]()
                                              {
@@ -116,9 +122,13 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                                                  const TCHAR *N[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"),
                                                                      TEXT("ASH")};
                                                  return FText::FromString(FString::Printf(
-                                                     TEXT("[%s%s] %s | %.0f BPM %.0f RPM %.1fmm"), N[I],
+                                                     TEXT("[%s%s] %s%s | %.0f BPM %.0f RPM %.1fmm"), N[I],
                                                      Sim->FollowedCrew == I ? TEXT(" // FOLLOW") : TEXT(""),
-                                                     (*Sim->MedicalReadout(I)), Sim->TerminalBiometrics(I).HeartRateBPM,
+                                                     (*Sim->MedicalReadout(I)),
+                                                     Sim->MedicalSpoofs[I].Until > Sim->Simulation.TickIndex
+                                                         ? TEXT(" [SPOOFED]")
+                                                         : TEXT(""),
+                                                     Sim->TerminalBiometrics(I).HeartRateBPM,
                                                      Sim->TerminalBiometrics(I).RespirationRateRPM,
                                                      U.Profile.PupilDilationMM));
                                              })]];
@@ -157,61 +167,120 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                                                    })[SNew(STextBlock)
                                                           .Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
                                                           .Text(FText::FromString(TEXT("[INSPECT]")))]];
-    return SNew(SScutCameraTile)
-        .Owner(SharedThis(this))
-        .Feed(F)
-            [SNew(SBorder)
-                 .Padding(0)
-                 .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                 .BorderBackgroundColor(FLinearColor(.005f, .012f, .008f))
-                     [SNew(SVerticalBox) + SVerticalBox::Slot().AutoHeight()[Header] +
-                      SVerticalBox::Slot().FillHeight(1)
-                          [SNew(SBorder)
-                               .Padding(0)
-                               .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                               .BorderBackgroundColor(FLinearColor::Black)
-                                   [SNew(SOverlay) +
-                                    SOverlay::Slot()[SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
-                                                         [SNew(SImage)
-                                                              .Tag(FName(*FString::Printf(TEXT("ScutFeedImage%d"), F)))
-                                                              .Image(&Brushes[F])
-                                                              .Visibility_Lambda(
-                                                                  [this, R]()
-                                                                  {
-                                                                      return Sim->CameraFeedState(R) ==
-                                                                                     ECameraFeedState::Online
-                                                                                 ? EVisibility::Visible
-                                                                                 : EVisibility::Hidden;
-                                                                  })]] +
-                                    SOverlay::Slot()
-                                        [SNew(SBorder)
-                                             .Tag(FName(*FString::Printf(TEXT("ScutFeedInterrupted%d"), F)))
-                                             .Padding(8)
-                                             .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                                             .BorderBackgroundColor(FLinearColor(.012f, .024f, .014f))
-                                             .HAlign(HAlign_Center)
-                                             .VAlign(VAlign_Center)
-                                             .Visibility_Lambda(
-                                                 [this, R]()
-                                                 {
-                                                     return Sim->CameraFeedState(R) != ECameraFeedState::Online
-                                                                ? EVisibility::Visible
-                                                                : EVisibility::Collapsed;
-                                                 })[SNew(STextBlock)
-                                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-                                                        .ColorAndOpacity(FLinearColor(.5f, 1, .6f))
-                                                        .AutoWrapText(true)
-                                                        .Justification(ETextJustify::Center)
-                                                        .Text_Lambda(
-                                                            [this, R]()
-                                                            {
-                                                                return FText::FromString(FString::Printf(
-                                                                    TEXT("CAMERA FEED INTERRUPTED\n%s\nPOWER / CAMERA "
-                                                                         "DIAGNOSTICS %s"),
-                                                                    Sim->CameraStateName(Sim->CameraFeedState(R)),
-                                                                    DirectOrScut::RoomName(R)));
-                                                            })]]]] +
-                      SVerticalBox::Slot().AutoHeight()[CrewBadges]]];
+    auto Tile =
+        SNew(SScutCameraTile)
+            .Owner(SharedThis(this))
+            .Feed(F)
+                [SNew(SBorder)
+                     .Padding(2)
+                     .Tag(FName(*FString::Printf(TEXT("ScutBreachBorder%d"), F)))
+                     .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                     .BorderBackgroundColor_Lambda(
+                         [this, R]()
+                         {
+                             return Sim->IsRoomBreachActive(R) ? FLinearColor(.85f, .015f, .035f)
+                                                               : FLinearColor(.005f, .012f, .008f);
+                         })
+                         [SNew(SBorder)
+                              .Padding(0)
+                              .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                              .BorderBackgroundColor(FLinearColor(.005f, .012f, .008f))
+                                  [SNew(SVerticalBox) + SVerticalBox::Slot().AutoHeight()[Header] +
+                                   SVerticalBox::Slot().AutoHeight()
+                                       [SNew(STextBlock)
+                                            .Tag(FName(*FString::Printf(TEXT("ScutSurveillanceBadges%d"), F)))
+                                            .Font(FCoreStyle::GetDefaultFontStyle("Bold", 9))
+                                            .AutoWrapText(true)
+                                            .Visibility_Lambda(
+                                                [this, R]()
+                                                {
+                                                    return Sim->RoomSurveillanceBadges(R).IsEmpty()
+                                                               ? EVisibility::Collapsed
+                                                               : EVisibility::Visible;
+                                                })
+                                            .Text_Lambda([this, R]()
+                                                         { return FText::FromString(Sim->RoomSurveillanceBadges(R)); })
+                                            .ColorAndOpacity_Lambda(
+                                                [this, R]()
+                                                {
+                                                    const float Pulse =
+                                                        .65f +
+                                                        .35f * FMath::Sin(float(
+                                                                   FSlateApplication::Get().GetCurrentTime() * 6.));
+                                                    return Sim->IsRoomBreachActive(R)
+                                                               ? FLinearColor(1.f, .1f, .15f, Pulse)
+                                                               : FLinearColor(1.f, .65f, .12f, Pulse);
+                                                })] +
+                                   SVerticalBox::Slot().FillHeight(1)
+                                       [SNew(SBorder)
+                                            .Padding(0)
+                                            .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                                            .BorderBackgroundColor(FLinearColor::Black)
+                                                [SNew(SOverlay) +
+                                                 SOverlay::Slot()
+                                                     [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+                                                          [SNew(SImage)
+                                                               .Tag(FName(*FString::Printf(TEXT("ScutFeedImage%d"), F)))
+                                                               .Image(&Brushes[F])
+                                                               .Visibility_Lambda(
+                                                                   [this, R]()
+                                                                   {
+                                                                       return Sim->CameraFeedState(R) ==
+                                                                                      ECameraFeedState::Online
+                                                                                  ? EVisibility::Visible
+                                                                                  : EVisibility::Hidden;
+                                                                   })]] +
+                                                 SOverlay::Slot()
+                                                     [SNew(SBorder)
+                                                          .Tag(FName(
+                                                              *FString::Printf(TEXT("ScutFeedInterrupted%d"), F)))
+                                                          .Padding(8)
+                                                          .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                                                          .BorderBackgroundColor(FLinearColor(.012f, .024f, .014f))
+                                                          .HAlign(HAlign_Center)
+                                                          .VAlign(VAlign_Center)
+                                                          .Visibility_Lambda(
+                                                              [this, R]()
+                                                              {
+                                                                  return Sim->CameraFeedState(R) !=
+                                                                                 ECameraFeedState::Online
+                                                                             ? EVisibility::Visible
+                                                                             : EVisibility::Collapsed;
+                                                              })[SNew(STextBlock)
+                                                                     .Font(
+                                                                         FCoreStyle::GetDefaultFontStyle("Regular", 10))
+                                                                     .ColorAndOpacity(FLinearColor(.5f, 1, .6f))
+                                                                     .AutoWrapText(true)
+                                                                     .Justification(ETextJustify::Center)
+                                                                     .Text_Lambda(
+                                                                         [this, R]()
+                                                                         {
+                                                                             if (Sim->StationRooms[R].Power ==
+                                                                                 EPowerState::Offline)
+                                                                             {
+                                                                                 return FText::FromString(
+                                                                                     TEXT("NO POWER // FEED DARK"));
+                                                                             }
+                                                                             return FText::FromString(FString::Printf(
+                                                                                 TEXT("CAMERA FEED "
+                                                                                      "INTERRUPTED\n%s\nPOWER / CAMERA "
+                                                                                      "DIAGNOSTICS %s"),
+                                                                                 Sim->CameraStateName(
+                                                                                     Sim->CameraFeedState(R)),
+                                                                                 DirectOrScut::RoomName(R)));
+                                                                         })]]]] +
+                                   SVerticalBox::Slot().AutoHeight()[CrewBadges]]]];
+    // Breach urgency overrides the normal green selection frame on the affected monitor.
+    Tile->SetBorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda(
+        [this, F, R]() -> FSlateColor
+        {
+            if (Sim->IsRoomBreachActive(R))
+            {
+                return FLinearColor(.85f, .015f, .035f);
+            }
+            return SelectedCameraIndex == F - 1 ? FLinearColor(.25f, 1.f, .08f) : FLinearColor(.025f, .045f, .03f);
+        }));
+    return Tile;
 }
 
 void SDirectOrScutWorkstationWidget::SelectFeed(int32 F, bool AllowDoubleTap)
@@ -426,6 +495,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTerminal(const FText &D
                               .Text(FText::FromString(Labels[I]))]];
     }
     Left->AddSlot().AutoHeight()[Tabs];
+    Left->AddSlot().AutoHeight()[BuildRoomQuickActions()];
     Left->AddSlot().AutoHeight().Padding(
         2, 3)[SNew(STextBlock)
                   .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
@@ -704,6 +774,12 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
     {
         bConsoleOpen = true;
         bMenuFocused = false;
+    }
+    if (!IsPromptFocused() && !E.IsRepeat() && !E.IsControlDown() && !E.IsAltDown() &&
+        (Key == EKeys::Q || Key == EKeys::E || Key == EKeys::B || Key == EKeys::X))
+    {
+        ExecuteRoomQuickAction(Key);
+        return FReply::Handled().SetUserFocus(AsShared());
     }
     if (Key == EKeys::Tab && !bConsoleOpen)
     {
@@ -1111,4 +1187,88 @@ FString SDirectOrScutWorkstationWidget::EvaluationHighlights() const
                                   DirectOrScut::RoomName(int32(Cue.RoomId)), Cue.Weight, *Cue.Subtitle);
     }
     return Result;
+}
+
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildRoomQuickActions()
+{
+    auto Actions = SNew(SHorizontalBox);
+    const FKey Keys[] = {EKeys::Q, EKeys::E, EKeys::B, EKeys::X};
+    const TCHAR *Labels[] = {TEXT("[Q] LURE HERE"), TEXT("[E] PWR CYCLE"), TEXT("[B] SEAL/UNSEAL"),
+                             TEXT("[X] SPOOF LOG")};
+    for (int32 Index = 0; Index < 4; ++Index)
+    {
+        const FKey Key = Keys[Index];
+        Actions->AddSlot().AutoWidth().Padding(
+            2)[SNew(SButton)
+                   .Tag(FName(*FString::Printf(TEXT("ScutQuickAction%d"), Index)))
+                   .IsFocusable(false)
+                   .IsEnabled_Lambda(
+                       [this]() { return Sim->ExperimentPhase == EExperimentPhase::Active && !Sim->IsUplinkLocked(); })
+                   .OnClicked_Lambda(
+                       [this, Key]()
+                       {
+                           ExecuteRoomQuickAction(Key);
+                           return FReply::Handled().SetUserFocus(AsShared());
+                       })[SNew(STextBlock)
+                              .Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+                              .Text(FText::FromString(Labels[Index]))]];
+    }
+    return SNew(SVerticalBox) +
+           SVerticalBox::Slot()
+               .AutoHeight()[SNew(STextBlock)
+                                 .Tag(TEXT("ScutQuickActionContext"))
+                                 .Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+                                 .ColorAndOpacity_Lambda(
+                                     [this]()
+                                     {
+                                         return Sim->IsUplinkLocked() ? FLinearColor(1.f, .15f, .1f)
+                                                                      : FLinearColor(1.f, .7f, .2f);
+                                     })
+                                 .Text_Lambda(
+                                     [this]()
+                                     {
+                                         return FText::FromString(FString::Printf(
+                                             TEXT("[%d] %s // UPLINK %.0f%% // %s"), ActiveFeed,
+                                             DirectOrScut::RoomName(ACompartmentCameraRig::RoomForFeed(ActiveFeed)),
+                                             Sim->UplinkHeatPct,
+                                             *(Sim->IsUplinkLocked() ? FString::Printf(TEXT("AI LATENCY %.1fs"),
+                                                                                       Sim->UplinkLockoutSeconds())
+                                                                     : FString(TEXT("READY")))));
+                                     })] +
+           SVerticalBox::Slot().AutoHeight()[Actions];
+}
+
+void SDirectOrScutWorkstationWidget::ExecuteRoomQuickAction(FKey Key)
+{
+    if (Sim->ExperimentPhase != EExperimentPhase::Active || !Sim->bWorkstationVisible)
+    {
+        return;
+    }
+    const int32 Room = ACompartmentCameraRig::RoomForFeed(ActiveFeed);
+    const FString Name = DirectOrScut::RoomName(Room);
+    FString Command;
+    if (Key == EKeys::Q)
+    {
+        Command = TEXT("intercom_lie ash ") + Name;
+    }
+    else if (Key == EKeys::E)
+    {
+        const EPowerState Power = Sim->StationRooms[Room].Power;
+        Command = TEXT("power ") + Name +
+                  (Power == EPowerState::Nominal ? TEXT(" low")
+                   : Power == EPowerState::Low   ? TEXT(" off")
+                                                 : TEXT(" nominal"));
+    }
+    else if (Key == EKeys::B)
+    {
+        Command = (Sim->IsRoomSealed(Room) ? TEXT("unseal ") : TEXT("seal ")) + Name;
+    }
+    else if (Key == EKeys::X)
+    {
+        Command = TEXT("spoof_log ") + Name;
+    }
+    if (!Command.IsEmpty())
+    {
+        Sim->QueueConsoleCommand(Command);
+    }
 }

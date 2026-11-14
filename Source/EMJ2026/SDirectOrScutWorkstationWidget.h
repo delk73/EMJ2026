@@ -67,6 +67,8 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void RefreshLog();
     FReply CopyLog();
     TSharedRef<SWidget> BuildTerminal(const FText &Draft);
+    TSharedRef<SWidget> BuildRoomQuickActions();
+    void ExecuteRoomQuickAction(FKey Key);
     FSlateBrush Brushes[9];
     int32 LastFeed = -1;
     int32 LastFollowedCrew = -1, LastFollowRoom = -1;

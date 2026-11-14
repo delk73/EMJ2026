@@ -954,6 +954,7 @@ uint64 FDirectOrScutSimulation::StateHash() const
         Bytes(&U.State, sizeof(U.State));
         Bytes(&U.Integrity, sizeof(U.Integrity));
         Bytes(&U.Stress, sizeof(U.Stress));
+        Bytes(&U.bObservedInjection, sizeof(U.bObservedInjection));
         Bytes(&U.SuctionVelocity, sizeof(U.SuctionVelocity));
     }
     return Hash;

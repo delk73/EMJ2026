@@ -71,6 +71,7 @@ struct FDirectOrScutUnitState
     int32 PanicRoom = 0, CrossFromRoom = -1, CrossToRoom = -1;
     bool bCrossing = false;
     bool bStagingManaged = false, bRoomRouteLocked = false;
+    bool bObservedInjection = false;
     FVector2D WanderTarget = FVector2D::ZeroVector;
 };
 struct FDirectOrScutObstacle
