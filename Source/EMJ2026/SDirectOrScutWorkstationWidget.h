@@ -22,7 +22,27 @@ enum class ETerminalInstrument : uint8
     Reticle,
     StationMap
 };
-struct FTerminalStreamBlock;
+enum class EInlineAttachmentKind : uint8
+{
+    OpticFeed,
+    PulseStrip,
+    CompartmentSchematic
+};
+// History contains identifiers and request-time metadata only, never textures, brushes or MIDs.
+struct FInlineAttachmentRef
+{
+    EInlineAttachmentKind Kind = EInlineAttachmentKind::OpticFeed;
+    int32 Subject = 0;
+    uint64 ObservationTick = 0;
+};
+struct FTerminalStreamEntry
+{
+    uint64 Id = 0;
+    FString Text;
+    float Characters = 0;
+    TOptional<FInlineAttachmentRef> Attachment;
+};
+struct FInlineOpticSlot;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
 {
   public:
@@ -58,6 +78,16 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     float GetInlineWipeProgress() const;
     UMaterialInstanceDynamic *GetInlineOpticMaterial() const;
     int32 GetInlineInstrumentCount() const;
+    int32 GetLiveInlineOpticCount() const
+    {
+        return LiveInlineOptics.Num();
+    }
+    int32 GetCollapsedOpticReferenceCount() const;
+    int32 GetInlineOpticMaterialCount() const;
+    const TArray<FTerminalStreamEntry> &GetTerminalStreamEntries() const
+    {
+        return TerminalStream;
+    }
     FLinearColor TerminalTint(int32 Room) const;
     int32 PaintTerminalInstrument(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
                                   ETerminalInstrument Kind, int32 Subject) const;
@@ -94,20 +124,24 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     float ScrubTrackingNoise = 0, VoiceBleedIntensity = 0;
     float PresentationSeconds = 0;
     int32 UnifiedEventCursor = 0;
-    TArray<TSharedPtr<FTerminalStreamBlock>> TerminalStream;
-    TSharedPtr<FTerminalStreamBlock> ActiveOptic, ActiveInjection;
+    TArray<FTerminalStreamEntry> TerminalStream;
+    TArray<TSharedPtr<FInlineOpticSlot>> LiveInlineOptics, InlineOpticPool;
+    uint64 NextTerminalEntryId = 1, ActiveOpticEntryId = 0;
     int32 ReportedCrewRooms[4] = {-1, -1, -1, -1};
     bool bCrewReportOverride[4]{};
-    TSharedPtr<SBox> MediationColumn, PrimaryOpticSlot, InjectionSlot;
-    TSharedRef<SWidget> BuildOpticFrame(TSharedRef<FTerminalStreamBlock> Block, bool Primary);
+    TSharedPtr<SBox> MediationColumn;
+    TSharedRef<SWidget> BuildOpticFrame(const FInlineAttachmentRef &Ref, TSharedRef<FInlineOpticSlot> Slot);
     TSharedRef<SWidget> BuildTelemetryDeck();
-    void RebuildTerminalEvidence();
-    float PrimaryOpticHeight() const;
+    const FTerminalStreamEntry *FindTerminalEntry(uint64 Id) const;
+    TSharedPtr<FInlineOpticSlot> FindInlineOpticSlot(uint64 Id) const;
+    void ReleaseInlineOptic(TSharedRef<FInlineOpticSlot> Slot);
+    void AppendTerminalEntry(FTerminalStreamEntry Entry);
+    bool AppendOpticReference(int32 Room, bool Focus);
+    float InlineOpticWidth() const;
     TStrongObjectPtr<UMaterialInstanceDynamic> TerminalSurfaceMaterial;
     TSharedRef<SWidget> BuildUnifiedTerminal(const FText &Draft);
     void RebuildUnifiedStream();
     void AppendTerminalProse(const FString &Text);
-    void AppendTerminalBlock(TSharedRef<FTerminalStreamBlock> Block);
     void Inquiry(int32 Index);
     void ResetTerminalPresentation();
     void UpdateTerminalPresentation(float Delta, const FGeometry &Geometry);

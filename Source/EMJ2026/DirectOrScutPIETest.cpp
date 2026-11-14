@@ -2992,10 +2992,10 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
         };
         auto CheckPanels = [&]()
         {
-            const TCHAR *Required[] = {
-                TEXT("ScutMediationColumn"), TEXT("ScutReadoutColumn"),    TEXT("ScutPrimaryOpticSlot"),
-                TEXT("ScutInjectionSlot"),   TEXT("ScutTeletypePanel"),    TEXT("ScutOverheadStationMap"),
-                TEXT("ScutVitalsPanel"),     TEXT("ScutEnvironmentPanel"), TEXT("ScutStatusCarrierBar")};
+            const TCHAR *Required[] = {TEXT("ScutMediationColumn"),    TEXT("ScutReadoutColumn"),
+                                       TEXT("ScutTerminalStream"),     TEXT("ScutTeletypePanel"),
+                                       TEXT("ScutOverheadStationMap"), TEXT("ScutVitalsPanel"),
+                                       TEXT("ScutEnvironmentPanel"),   TEXT("ScutStatusCarrierBar")};
             for (const TCHAR *Tag : Required)
             {
                 auto Widget = Find(Tag);
@@ -3011,20 +3011,44 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             const auto Right = Find(TEXT("ScutReadoutColumn"))->GetCachedGeometry().GetLayoutBoundingRect();
             const auto Header = Find(TEXT("ScutStatusCarrierBar"))->GetCachedGeometry().GetLayoutBoundingRect();
             const auto Transcript = Find(TEXT("ScutTerminalStream"))->GetCachedGeometry().GetLayoutBoundingRect();
-            const auto Image = Find(TEXT("ScutPrimaryOpticImage"))->GetCachedGeometry().GetRenderBoundingRect();
             Test->TestTrue(TEXT("Mediation/readout columns do not overlap"),
                            Left.Right <= Right.Left && Header.Bottom <= Left.Top + 1);
             Test->TestTrue(
                 TEXT("Asymmetric 56/44 workstation split"),
                 FMath::Abs((Left.Right - Left.Left) / ((Left.Right - Left.Left) + (Right.Right - Right.Left)) - .56f) <
                     .02f);
-            Test->TestTrue(TEXT("Primary camera fills column at 16:9"),
-                           FMath::Abs((Image.Right - Image.Left) / (Image.Bottom - Image.Top) - 16.f / 9) < .02f &&
-                               Image.Right - Image.Left > (Left.Right - Left.Left) * .95f);
-            Test->TestTrue(TEXT("Transcript is separated from header and primary optic"),
-                           Transcript.Top >= Header.Bottom && Transcript.Top >= Image.Bottom);
+            Test->TestFalse(TEXT("Pinned primary optic has been removed"),
+                            Find(TEXT("ScutPrimaryOpticSlot")).IsValid());
+            Test->TestFalse(TEXT("Pinned injection has been removed"), Find(TEXT("ScutInjectionSlot")).IsValid());
+            Test->TestTrue(TEXT("Transcript spans full left column above controls"),
+                           Transcript.Top >= Header.Bottom && Transcript.Top - Left.Top < 60 &&
+                               (Transcript.Bottom - Transcript.Top) > (Left.Bottom - Left.Top) * .78f);
+            const auto Inquiry = Find(TEXT("ScutInquiryBar"))->GetCachedGeometry().GetLayoutBoundingRect();
+            Test->TestTrue(TEXT("Transcript never overlaps inquiry bar or prompt"),
+                           Transcript.Bottom <= Inquiry.Top &&
+                               Inquiry.Bottom <=
+                                   Find(TEXT("ScutPrompt"))->GetCachedGeometry().GetLayoutBoundingRect().Top + 1);
             Test->TestTrue(TEXT("Teletype enforces clipping"),
                            Find(TEXT("ScutTerminalStream"))->GetClipping() == EWidgetClipping::ClipToBoundsAlways);
+            uint64 OpticId = 0;
+            for (const auto &Entry : Workstation->GetTerminalStreamEntries())
+            {
+                if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
+                {
+                    OpticId = Entry.Id;
+                    break;
+                }
+            }
+            const FName ImageTag(*FString::Printf(TEXT("ScutInlineOpticImage%llu"), OpticId));
+            auto InlineImage =
+                FBriefingSurveillanceCheck::Find(Find(TEXT("ScutTerminalStream")).ToSharedRef(), ImageTag);
+            Test->TestTrue(TEXT("Camera is an attachment inside the scroll hierarchy"), InlineImage.IsValid());
+            if (InlineImage)
+            {
+                const auto Image = InlineImage->GetCachedGeometry().GetRenderBoundingRect();
+                Test->TestTrue(TEXT("Inline optic stays 16:9"),
+                               FMath::Abs((Image.Right - Image.Left) / (Image.Bottom - Image.Top) - 16.f / 9) < .02f);
+            }
             auto HeaderText = StaticCastSharedPtr<STextBlock>(Find(TEXT("ScutCarrier")));
             Test->TestTrue(TEXT("Carrier line fits without truncation"),
                            HeaderText->GetDesiredSize().X <= HeaderText->GetCachedGeometry().GetLocalSize().X + 1);
@@ -3072,6 +3096,27 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                 }
             };
             CheckText(Find(TEXT("ScutReadoutColumn")).ToSharedRef());
+        };
+        auto Click = [&](TSharedRef<SWidget> Button)
+        {
+            auto &App = FSlateApplication::Get();
+            const auto &G = Button->GetCachedGeometry();
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto Window = App.FindWidgetWindow(Button);
+            Test->TestTrue(TEXT("Inline routing control has clickable geometry"),
+                           G.GetLocalSize().X > 1 && G.GetLocalSize().Y > 1);
+            if (!Window)
+            {
+                Test->AddError(TEXT("Inline control has no Slate window"));
+                return;
+            }
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseButtonDownEvent(Window->GetNativeWindow(),
+                                            FPointerEvent(0, P, P, TSet<FKey>{EKeys::LeftMouseButton},
+                                                          EKeys::LeftMouseButton, 0, FModifierKeysState()));
+            App.ProcessMouseButtonUpEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
         };
         auto Key = [&](FKey K)
         {
@@ -3218,7 +3263,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Test->TestTrue(TEXT("Secondary PiP director request"),
                            Workstation->HandlePresentationCommand(TEXT("show_widget pip med_bay")));
             Test->TestEqual(TEXT("PiP does not replace primary optic"), Workstation->ActiveFeed, Primary);
-            Test->TestTrue(TEXT("PiP injection slot exists"), Find(TEXT("ScutInlinePiP")).IsValid());
+            Test->TestTrue(TEXT("PiP injection slot exists"), Workstation->GetLiveInlineOpticCount() == 2);
             Test->TestFalse(TEXT("Invalid PiP room rejected"), Workstation->PresentSecondaryOptic(8));
             Test->TestFalse(TEXT("Invalid report rejected"), Workstation->SetReportedCrewRoom(4, 0));
             Test->TestFalse(TEXT("Invalid subject rejected"),
@@ -3239,6 +3284,150 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                             Workstation->GetInlineInstrumentCount(), 2);
             Test->TestEqual(TEXT("Reset clears report overrides"), Workstation->GetReportedCrewRoom(0),
                             Sim->Simulation.Bodies[0].Room);
+            Hash = Sim->SurveillanceStateHash();
+            for (const auto &Entry : Workstation->GetTerminalStreamEntries())
+            {
+                if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
+                {
+                    OriginalOpticId = Entry.Id;
+                    OriginalObservationTick = Entry.Attachment->ObservationTick;
+                    break;
+                }
+            }
+            for (const TCHAR *Room : {TEXT("bridge"), TEXT("med_bay"), TEXT("observation_deck")})
+            {
+                Workstation->HandlePresentationCommand(FString(TEXT("show_cam ")) + Room);
+                Test->TestTrue(TEXT("Every emission respects two live optic slots"),
+                               Workstation->GetLiveInlineOpticCount() <= 2);
+                SeenInlineMaterials.Add(Workstation->GetInlineOpticMaterial());
+            }
+            Test->TestEqual(TEXT("Only newest two optics remain live"), Workstation->GetLiveInlineOpticCount(), 2);
+            Test->TestEqual(TEXT("Two earlier optic records collapsed"), Workstation->GetCollapsedOpticReferenceCount(),
+                            2);
+            Test->TestEqual(TEXT("History records keep every emission"), Workstation->GetTerminalStreamEntries().Num(),
+                            7);
+            Test->TestTrue(TEXT("Old optic row now holds a compact reference"),
+                           Find(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), OriginalOpticId))).IsValid());
+            Test->TestFalse(TEXT("Demoted row no longer holds an image"),
+                            Find(FName(*FString::Printf(TEXT("ScutInlineOpticImage%llu"), OriginalOpticId))).IsValid());
+            Workstation->HandlePresentationCommand(TEXT("show_widget ecg chen"));
+            Workstation->HandlePresentationCommand(TEXT("show_widget schematic med_bay"));
+            Test->TestEqual(TEXT("Vectors do not add optic materials"), Workstation->GetInlineOpticMaterialCount(), 2);
+            Ready = Now + .3;
+            break;
+        case 7:
+        {
+            const int32 Before = Workstation->GetTerminalStreamEntries().Num();
+            auto Button = Find(TEXT("ScutStationRoom6"));
+            Test->TestTrue(TEXT("Overhead room row is clickable"), Button.IsValid());
+            if (Button)
+            {
+                Click(Button.ToSharedRef());
+            }
+            Test->TestEqual(TEXT("Overhead click appends a fresh entry"), Workstation->GetTerminalStreamEntries().Num(),
+                            Before + 1);
+            Test->TestTrue(TEXT("Overhead row mounts SERVER_ARCHIVE"),
+                           Workstation->GetTerminalStreamEntries().Last().Attachment->Subject == 6);
+            SeenInlineMaterials.Add(Workstation->GetInlineOpticMaterial());
+            Test->TestEqual(TEXT("Overhead click is pure presentation"), Sim->SurveillanceStateHash(), Hash);
+            Ready = Now + .3;
+            break;
+        }
+        case 8:
+        {
+            auto Scroll = StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")));
+            const auto &G = Scroll->GetCachedGeometry();
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto &App = FSlateApplication::Get();
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseWheelOrGestureEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::Invalid, 1000, FModifierKeysState()), nullptr);
+            Scroll->SetScrollOffset(0);
+            Ready = Now + .5;
+            break;
+        }
+        case 9:
+        {
+            auto Ref = Find(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), OriginalOpticId)));
+            const int32 Before = Workstation->GetTerminalStreamEntries().Num();
+            if (Ref)
+            {
+                Click(Ref.ToSharedRef());
+            }
+            else
+            {
+                Test->AddError(TEXT("Collapsed optic reference disappeared"));
+            }
+            Test->TestEqual(TEXT("Collapsed reference appends a fresh live entry"),
+                            Workstation->GetTerminalStreamEntries().Num(), Before + 1);
+            const auto &Latest = Workstation->GetTerminalStreamEntries().Last();
+            Test->TestTrue(TEXT("Reopened reference has a new identity and current request time"),
+                           Latest.Id > OriginalOpticId && Latest.Attachment.IsSet() &&
+                               Latest.Attachment->Subject == 0 &&
+                               Latest.Attachment->ObservationTick == Sim->Simulation.TickIndex);
+            const auto *Original = Workstation->GetTerminalStreamEntries().FindByPredicate(
+                [this](const FTerminalStreamEntry &Entry) { return Entry.Id == OriginalOpticId; });
+            Test->TestTrue(TEXT("Original reference metadata remains unchanged"),
+                           Original && Original->Attachment->ObservationTick == OriginalObservationTick);
+            Test->TestTrue(TEXT("Original row stays collapsed after reopening"),
+                           Find(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), OriginalOpticId))).IsValid());
+            SeenInlineMaterials.Add(Workstation->GetInlineOpticMaterial());
+            for (int32 I = 0; I < 12; ++I)
+            {
+                Workstation->PresentOptic(I % 8);
+                SeenInlineMaterials.Add(Workstation->GetInlineOpticMaterial());
+                Test->TestTrue(TEXT("Repeated optical emissions reuse two slots"),
+                               Workstation->GetLiveInlineOpticCount() <= 2 &&
+                                   Workstation->GetInlineOpticMaterialCount() <= 2);
+            }
+            Test->TestTrue(TEXT("Optic MIDs are reused rather than allocated per history entry"),
+                           SeenInlineMaterials.Num() <= 2);
+            for (int32 I = 0; I < 132; ++I)
+            {
+                Workstation->PresentInstrument(ETerminalInstrument::ECG, I % 4);
+            }
+            Test->TestEqual(TEXT("Terminal history is bounded at 128 lightweight records"),
+                            Workstation->GetTerminalStreamEntries().Num(), 128);
+            Test->TestEqual(TEXT("Evicting all optic references clears their live bindings"),
+                            Workstation->GetLiveInlineOpticCount(), 0);
+            for (auto *Material : SeenInlineMaterials)
+            {
+                if (Material)
+                {
+                    Test->TestNull(
+                        TEXT("Unused pooled optic materials release render targets"),
+                        Cast<UTextureRenderTarget2D>(Material->K2_GetTextureParameterValue(TEXT("OpticRenderTarget"))));
+                }
+            }
+            Test->TestTrue(TEXT("Vector attachments allocate no extra materials"),
+                           Workstation->GetInlineOpticMaterialCount() <= 2);
+            Test->TestEqual(TEXT("Scrollback interaction and eviction never mutate simulation"),
+                            Sim->SurveillanceStateHash(), Hash);
+            Sim->ResetExperiment();
+            Ready = Now + .3;
+            break;
+        }
+        case 10:
+        {
+            Test->TestEqual(TEXT("Reset restores four initial records"), Workstation->GetTerminalStreamEntries().Num(),
+                            4);
+            Test->TestEqual(TEXT("Reset restores one live optical binding"), Workstation->GetLiveInlineOpticCount(), 1);
+            auto Scroll = StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")));
+            const auto &G = Scroll->GetCachedGeometry();
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto &App = FSlateApplication::Get();
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseWheelOrGestureEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::Invalid, 1000, FModifierKeysState()), nullptr);
+            Scroll->SetScrollOffset(0);
+            Ready = Now + 3;
+            break;
+        }
+        case 11:
+            CheckPanels();
+            Capture(TEXT("UnifiedTerminalPIE.png"));
             return true;
         }
         return false;
@@ -3247,7 +3436,8 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
   private:
     FAutomationTestBase *Test;
     int32 Stage = 0, ActualReportedCrewRoom = -1;
-    uint64 Hash = 0, Tick = 0;
+    uint64 Hash = 0, Tick = 0, OriginalOpticId = 0, OriginalObservationTick = 0;
+    TSet<UMaterialInstanceDynamic *> SeenInlineMaterials;
     double Started = 0, Ready = 0;
 };
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUnifiedPhosphorTerminalTest, "DirectOrScut.PIE.UnifiedPhosphorTerminal",

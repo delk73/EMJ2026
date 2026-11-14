@@ -30,23 +30,14 @@
 #include "Materials/Material.h"
 #include "Widgets/SLeafWidget.h"
 
-// Stable heap-owned blocks keep Slate brush addresses valid across bounded stream eviction.
-struct FTerminalStreamBlock
+// A fixed two-slot presentation pool owns live resources; history entries never do.
+struct FInlineOpticSlot
 {
-    enum class EKind
-    {
-        Prose,
-        Optic,
-        Instrument
-    } Kind = EKind::Prose;
-    FString Text;
-    int32 Subject = 0;
-    ETerminalInstrument Instrument = ETerminalInstrument::ECG;
-    float Characters = 0, Wipe = 0;
-    bool bClosed = false;
+    uint64 EntryId = 0;
+    float Wipe = 0;
     TStrongObjectPtr<UMaterialInstanceDynamic> Material;
     FSlateBrush Brush;
-    TSharedPtr<SImage> Image;
+    TWeakPtr<SImage> Image;
 };
 class SDirectOrScutInstrument : public SLeafWidget
 {
@@ -553,8 +544,6 @@ void SDirectOrScutWorkstationWidget::Rebuild()
     }
     // Drop detached pane trees when entering diagnostics; only the bounded presentation blocks survive.
     MediationColumn.Reset();
-    PrimaryOpticSlot.Reset();
-    InjectionSlot.Reset();
     Root->AddSlot().AutoHeight().Padding(
         6, 4)[SNew(STextBlock)
                   .Tag(TEXT("ScutTelemetry"))
@@ -1748,32 +1737,132 @@ void SDirectOrScutWorkstationWidget::SetPresentationNoise(float Scrub, float Voi
     ScrubTrackingNoise = FMath::IsFinite(Scrub) ? FMath::Clamp(Scrub, 0.f, 1.f) : 0;
     VoiceBleedIntensity = FMath::IsFinite(Voice) ? FMath::Clamp(Voice, 0.f, 1.f) : 0;
 }
+const FTerminalStreamEntry *SDirectOrScutWorkstationWidget::FindTerminalEntry(uint64 Id) const
+{
+    return TerminalStream.FindByPredicate([Id](const FTerminalStreamEntry &Entry) { return Entry.Id == Id; });
+}
+TSharedPtr<FInlineOpticSlot> SDirectOrScutWorkstationWidget::FindInlineOpticSlot(uint64 Id) const
+{
+    for (const auto &Slot : LiveInlineOptics)
+    {
+        if (Slot->EntryId == Id)
+        {
+            return Slot;
+        }
+    }
+    return nullptr;
+}
 float SDirectOrScutWorkstationWidget::GetInlineWipeProgress() const
 {
-    const auto Block = ActiveOptic;
-    return Block ? Block->Wipe : 0;
+    const auto Slot = FindInlineOpticSlot(ActiveOpticEntryId);
+    return Slot ? Slot->Wipe : 0;
 }
 UMaterialInstanceDynamic *SDirectOrScutWorkstationWidget::GetInlineOpticMaterial() const
 {
-    const auto Block = ActiveOptic;
-    return Block ? Block->Material.Get() : nullptr;
+    const auto Slot = FindInlineOpticSlot(ActiveOpticEntryId);
+    return Slot ? Slot->Material.Get() : nullptr;
 }
 int32 SDirectOrScutWorkstationWidget::GetInlineInstrumentCount() const
 {
     int32 Count = 0;
-    for (const auto &Block : TerminalStream)
+    for (const auto &Entry : TerminalStream)
     {
-        Count += Block->Kind == FTerminalStreamBlock::EKind::Instrument;
+        Count += Entry.Attachment.IsSet() && Entry.Attachment->Kind != EInlineAttachmentKind::OpticFeed;
     }
     return Count;
 }
-void SDirectOrScutWorkstationWidget::AppendTerminalBlock(TSharedRef<FTerminalStreamBlock> Block)
+int32 SDirectOrScutWorkstationWidget::GetCollapsedOpticReferenceCount() const
 {
-    if (TerminalStream.Num() >= 48)
+    int32 Count = 0;
+    for (const auto &Entry : TerminalStream)
     {
+        Count += Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed &&
+                 !FindInlineOpticSlot(Entry.Id);
+    }
+    return Count;
+}
+int32 SDirectOrScutWorkstationWidget::GetInlineOpticMaterialCount() const
+{
+    int32 Count = 0;
+    for (const auto &Slot : InlineOpticPool)
+    {
+        Count += Slot->Material.IsValid();
+    }
+    return Count;
+}
+void SDirectOrScutWorkstationWidget::ReleaseInlineOptic(TSharedRef<FInlineOpticSlot> Slot)
+{
+    // UE ignores null texture setters; explicitly replace the render target with the owned neutral pixel.
+    if (Slot->Material.IsValid())
+    {
+        Slot->Material->SetTextureParameterValue(TEXT("OpticRenderTarget"), NeutralOptic.Get());
+    }
+    Slot->Brush.SetResourceObject(nullptr);
+    Slot->Image.Reset();
+    Slot->EntryId = 0;
+    Slot->Wipe = 0;
+}
+void SDirectOrScutWorkstationWidget::AppendTerminalEntry(FTerminalStreamEntry Entry)
+{
+    if (TerminalStream.Num() >= 128)
+    {
+        const uint64 Evicted = TerminalStream[0].Id;
+        for (int32 I = LiveInlineOptics.Num() - 1; I >= 0; --I)
+        {
+            if (LiveInlineOptics[I]->EntryId == Evicted)
+            {
+                ReleaseInlineOptic(LiveInlineOptics[I].ToSharedRef());
+                LiveInlineOptics.RemoveAt(I);
+            }
+        }
         TerminalStream.RemoveAt(0);
     }
-    TerminalStream.Add(Block);
+    Entry.Id = NextTerminalEntryId++;
+    Entry.Text = Entry.Text.Left(2048);
+    if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
+    {
+        while (LiveInlineOptics.Num() >= 2)
+        {
+            ReleaseInlineOptic(LiveInlineOptics[0].ToSharedRef());
+            LiveInlineOptics.RemoveAt(0);
+        }
+        const int32 Feed = ACompartmentCameraRig::FeedForRoom(Entry.Attachment->Subject);
+        TSharedPtr<FInlineOpticSlot> Slot;
+        for (const auto &Candidate : InlineOpticPool)
+        {
+            if (Candidate->EntryId == 0)
+            {
+                Slot = Candidate;
+                break;
+            }
+        }
+        if (!Slot)
+        {
+            check(InlineOpticPool.Num() < 2);
+            Slot = MakeShared<FInlineOpticSlot>();
+            InlineOpticPool.Add(Slot);
+        }
+        Slot->EntryId = Entry.Id;
+        if (TerminalMaterials[Feed].IsValid())
+        {
+            if (!Slot->Material.IsValid())
+            {
+                Slot->Material.Reset(
+                    UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
+            }
+            ApplyTerminalMaterialParameters(*Slot->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(900, 506),
+                                            PresentationSeconds, 0, 0);
+            Slot->Brush.SetResourceObject(Slot->Material.Get());
+        }
+        else
+        {
+            Slot->Brush.SetResourceObject(Rig->Targets[Feed].Get());
+        }
+        Slot->Brush.ImageSize = FVector2D(1024, 576);
+        Slot->Brush.DrawAs = ESlateBrushDrawType::Image;
+        LiveInlineOptics.Add(Slot);
+    }
+    TerminalStream.Add(MoveTemp(Entry));
     if (!bDebugEightCamGrid && Log.IsValid())
     {
         RebuildUnifiedStream();
@@ -1781,15 +1870,20 @@ void SDirectOrScutWorkstationWidget::AppendTerminalBlock(TSharedRef<FTerminalStr
 }
 void SDirectOrScutWorkstationWidget::AppendTerminalProse(const FString &Text)
 {
-    auto Block = MakeShared<FTerminalStreamBlock>();
-    Block->Text = Text.Left(2048);
-    AppendTerminalBlock(Block);
+    FTerminalStreamEntry Entry;
+    Entry.Text = Text;
+    AppendTerminalEntry(MoveTemp(Entry));
 }
 void SDirectOrScutWorkstationWidget::ResetTerminalPresentation()
 {
-    TerminalStream.Reset();
-    ActiveOptic.Reset();
-    ActiveInjection.Reset();
+    for (const auto &Slot : LiveInlineOptics)
+    {
+        ReleaseInlineOptic(Slot.ToSharedRef());
+    }
+    LiveInlineOptics.Reset();
+    TerminalStream.Empty(128);
+    NextTerminalEntryId = 1;
+    ActiveOpticEntryId = 0;
     for (int32 I = 0; I < 4; ++I)
     {
         ReportedCrewRooms[I] = Sim->Simulation.Bodies[I].Room;
@@ -1804,39 +1898,28 @@ void SDirectOrScutWorkstationWidget::ResetTerminalPresentation()
     PresentInstrument(ETerminalInstrument::Schematic, 0);
     PresentInstrument(ETerminalInstrument::ECG, 0);
 }
-bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room)
+bool SDirectOrScutWorkstationWidget::AppendOpticReference(int32 Room, bool Focus)
 {
     if (!Sim.IsValid() || !Rig.IsValid() || Room < 0 || Room >= 8)
     {
         return false;
     }
-    const int32 Feed = ACompartmentCameraRig::FeedForRoom(Room);
-    if (const auto Previous = ActiveOptic)
+    FTerminalStreamEntry Entry;
+    Entry.Text = FString::Printf(TEXT("DIRECTOR> %s optical carrier: %s."), Focus ? TEXT("Present") : TEXT("Secondary"),
+                                 DirectOrScut::RoomName(Room));
+    Entry.Attachment = FInlineAttachmentRef{EInlineAttachmentKind::OpticFeed, Room, Sim->Simulation.TickIndex};
+    if (Focus)
     {
-        Previous->bClosed = true;
+        ActiveFeed = ACompartmentCameraRig::FeedForRoom(Room);
+        SelectedCameraIndex = ActiveFeed - 1;
+        ActiveOpticEntryId = NextTerminalEntryId;
     }
-    auto Block = MakeShared<FTerminalStreamBlock>();
-    Block->Kind = FTerminalStreamBlock::EKind::Optic;
-    Block->Subject = Room;
-    Block->Text = FString::Printf(TEXT("[OPTIC BUFFER] %s"), DirectOrScut::RoomName(Room));
-    if (TerminalMaterials[Feed].IsValid())
-    {
-        Block->Material.Reset(UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
-        ApplyTerminalMaterialParameters(*Block->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(480, 270),
-                                        PresentationSeconds, 0, 0);
-        Block->Brush.SetResourceObject(Block->Material.Get());
-    }
-    else
-    {
-        Block->Brush.SetResourceObject(Rig->Targets[Feed].Get());
-    }
-    Block->Brush.ImageSize = FVector2D(1024, 576);
-    Block->Brush.DrawAs = ESlateBrushDrawType::Image;
-    ActiveFeed = Feed;
-    SelectedCameraIndex = Feed - 1;
-    ActiveOptic = Block;
-    AppendTerminalBlock(Block);
+    AppendTerminalEntry(MoveTemp(Entry));
     return true;
+}
+bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room)
+{
+    return AppendOpticReference(Room, true);
 }
 bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind, int32 Subject)
 {
@@ -1845,21 +1928,16 @@ bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind,
     {
         return false;
     }
-    auto Block = MakeShared<FTerminalStreamBlock>();
-    Block->Kind = FTerminalStreamBlock::EKind::Instrument;
-    Block->Instrument = Kind;
-    Block->Subject = Subject;
     const TCHAR *Crew[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"), TEXT("ASH")};
-    Block->Text = Kind == ETerminalInstrument::ECG
-                      ? FString::Printf(TEXT("[PULSE STRIP] %s // LIVE TELEMETRY"), Crew[Subject])
-                      : FString::Printf(TEXT("[COMPARTMENT SCHEMATIC] %s // BULKHEAD INDICATION"),
-                                        DirectOrScut::RoomName(Subject));
-    if (ActiveInjection && ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
-    {
-        ActiveInjection->bClosed = true;
-    }
-    ActiveInjection = Block;
-    AppendTerminalBlock(Block);
+    FTerminalStreamEntry Entry;
+    Entry.Text = Kind == ETerminalInstrument::ECG
+                     ? FString::Printf(TEXT("MOTHER-7> Subject pulse strip: %s."), Crew[Subject])
+                     : FString::Printf(TEXT("MOTHER-7> Compartment geometry: %s."), DirectOrScut::RoomName(Subject));
+    Entry.Attachment =
+        FInlineAttachmentRef{Kind == ETerminalInstrument::ECG ? EInlineAttachmentKind::PulseStrip
+                                                              : EInlineAttachmentKind::CompartmentSchematic,
+                             Subject, Sim->Simulation.TickIndex};
+    AppendTerminalEntry(MoveTemp(Entry));
     return true;
 }
 void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
@@ -1994,40 +2072,41 @@ void SDirectOrScutWorkstationWidget::UpdateTerminalPresentation(float Delta, con
         }
     }
     bool bTyping = false;
-    for (const auto &Block : TerminalStream)
+    for (auto &Entry : TerminalStream)
     {
-        if (Block->Kind == FTerminalStreamBlock::EKind::Prose && Block->Characters < Block->Text.Len() && !bTyping)
+        if (!bTyping && Entry.Characters < Entry.Text.Len())
         {
-            Block->Characters = FMath::Min(float(Block->Text.Len()), Block->Characters + Step * 100);
+            Entry.Characters = FMath::Min(float(Entry.Text.Len()), Entry.Characters + Step * 100);
             bTyping = true;
         }
     }
-    const TSharedPtr<FTerminalStreamBlock> OpticalBlocks[] = {ActiveOptic, ActiveInjection};
-    for (const auto &Block : OpticalBlocks)
+    for (const auto &Slot : LiveInlineOptics)
     {
-        if (!Block || Block->Kind != FTerminalStreamBlock::EKind::Optic || Block->bClosed)
+        const auto *Entry = FindTerminalEntry(Slot->EntryId);
+        if (!Entry || !Entry->Attachment.IsSet())
         {
             continue;
         }
-        Block->Wipe = FMath::Min(1.f, Block->Wipe + Step / .65f);
-        if (!Block->Material.IsValid())
+        const int32 Room = Entry->Attachment->Subject;
+        Slot->Wipe = FMath::Min(1.f, Slot->Wipe + Step / .65f);
+        if (!Slot->Material.IsValid())
         {
             continue;
         }
-        FVector2f Pixels(480, 270);
-        if (Block->Image.IsValid())
+        FVector2f Pixels(900, 506);
+        if (const auto Image = Slot->Image.Pin())
         {
-            const auto &G = Block->Image->GetCachedGeometry();
+            const auto &G = Image->GetCachedGeometry();
             Pixels = FVector2f(G.GetLocalSize() * G.Scale);
         }
-        ApplyTerminalMaterialParameters(*Block->Material.Get(),
-                                        Rig->Targets[ACompartmentCameraRig::FeedForRoom(Block->Subject)].Get(), Pixels,
-                                        PresentationSeconds, Block->Wipe, 0);
-        Block->Material->SetVectorParameterValue(TEXT("PhosphorTint"), TerminalTint(Block->Subject));
-        Block->Material->SetScalarParameterValue(
-            TEXT("SignalOfflineNoise"), Sim->StationRooms[Block->Subject].Power == EPowerState::Offline ? 1.f : 0.f);
-        Block->Material->SetScalarParameterValue(TEXT("ScrubTrackingNoise"), ScrubTrackingNoise);
-        Block->Material->SetScalarParameterValue(TEXT("VoiceBleedIntensity"), VoiceBleedIntensity);
+        ApplyTerminalMaterialParameters(*Slot->Material.Get(),
+                                        Rig->Targets[ACompartmentCameraRig::FeedForRoom(Room)].Get(), Pixels,
+                                        PresentationSeconds, Slot->Wipe, 0);
+        Slot->Material->SetVectorParameterValue(TEXT("PhosphorTint"), TerminalTint(Room));
+        Slot->Material->SetScalarParameterValue(TEXT("SignalOfflineNoise"),
+                                                Sim->StationRooms[Room].Power == EPowerState::Offline ? 1.f : 0.f);
+        Slot->Material->SetScalarParameterValue(TEXT("ScrubTrackingNoise"), ScrubTrackingNoise);
+        Slot->Material->SetScalarParameterValue(TEXT("VoiceBleedIntensity"), VoiceBleedIntensity);
     }
 }
 int32 SDirectOrScutWorkstationWidget::PaintTerminalInstrument(FSlateWindowElementList &Elements, int32 Layer,
@@ -2197,116 +2276,55 @@ int32 SDirectOrScutWorkstationWidget::GetReportedCrewRoom(int32 Crew) const
 }
 bool SDirectOrScutWorkstationWidget::PresentSecondaryOptic(int32 Room)
 {
-    if (!Rig.IsValid() || Room < 0 || Room >= 8)
-    {
-        return false;
-    }
-    if (ActiveInjection && ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
-    {
-        ActiveInjection->bClosed = true;
-    }
-    const int32 Feed = ACompartmentCameraRig::FeedForRoom(Room);
-    auto Block = MakeShared<FTerminalStreamBlock>();
-    Block->Kind = FTerminalStreamBlock::EKind::Optic;
-    Block->Subject = Room;
-    Block->Text = FString::Printf(TEXT("[SECONDARY OPTIC] %s"), DirectOrScut::RoomName(Room));
-    if (TerminalMaterials[Feed].IsValid())
-    {
-        Block->Material.Reset(UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
-        ApplyTerminalMaterialParameters(*Block->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(320, 180),
-                                        PresentationSeconds, 0, 0);
-        Block->Brush.SetResourceObject(Block->Material.Get());
-    }
-    else
-    {
-        Block->Brush.SetResourceObject(Rig->Targets[Feed].Get());
-    }
-    Block->Brush.ImageSize = FVector2D(1024, 576);
-    Block->Brush.DrawAs = ESlateBrushDrawType::Image;
-    ActiveInjection = Block;
-    AppendTerminalBlock(Block);
-    return true;
+    return AppendOpticReference(Room, false);
 }
-float SDirectOrScutWorkstationWidget::PrimaryOpticHeight() const
+float SDirectOrScutWorkstationWidget::InlineOpticWidth() const
 {
-    const float Width = MediationColumn.IsValid() ? float(MediationColumn->GetCachedGeometry().GetLocalSize().X) : 640;
-    return FMath::Max(1.f, Width - 14.f) * .5625f;
+    const float Width = MediationColumn.IsValid() ? float(MediationColumn->GetCachedGeometry().GetLocalSize().X) : 900;
+    return FMath::Clamp(Width - 38.f, 160.f, 900.f);
 }
-TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildOpticFrame(TSharedRef<FTerminalStreamBlock> Block,
-                                                                    bool Primary)
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildOpticFrame(const FInlineAttachmentRef &Ref,
+                                                                    TSharedRef<FInlineOpticSlot> Slot)
 {
-    auto View = SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds) +
-                SOverlay::Slot()[SAssignNew(Block->Image, SImage)
-                                     .Image(&Block->Brush)
-                                     .Tag(Primary ? TEXT("ScutPrimaryOpticImage") : TEXT("ScutSecondaryOpticImage"))] +
+    // The image retains the small slot while painted; the slot holds only a weak image pointer (no cycle).
+    auto Image = SNew(SImage)
+                     .Image_Lambda([Slot]() { return &Slot->Brush; })
+                     .Tag(FName(*FString::Printf(TEXT("ScutInlineOpticImage%llu"), Slot->EntryId)));
+    Slot->Image = Image;
+    auto View = SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds) + SOverlay::Slot()[Image] +
                 SOverlay::Slot()[SNew(SDirectOrScutInstrument)
                                      .Owner(SharedThis(this))
                                      .Kind(ETerminalInstrument::Reticle)
-                                     .Subject(Block->Subject)
+                                     .Subject(Ref.Subject)
                                      .Visibility(EVisibility::HitTestInvisible)];
-    TSharedRef<SWidget> Image = View;
-    if (!Primary)
-    {
-        Image = SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SBox).WidthOverride(480).HeightOverride(270)[View]];
-    }
+    auto Contents = SNew(SVerticalBox);
+    Contents->AddSlot().AutoHeight().Padding(
+        0, 0, 0, 5)[SNew(STextBlock)
+                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                        .ColorAndOpacity(EvaluatePhosphorColor(.95f))
+                        .Text_Lambda(
+                            [this, Ref]()
+                            {
+                                return FText::FromString(
+                                    FString::Printf(TEXT("[OPTIC BUFFER] CAM-%02d %s // %s"),
+                                                    ACompartmentCameraRig::FeedForRoom(Ref.Subject),
+                                                    DirectOrScut::RoomName(Ref.Subject),
+                                                    Sim->StationRooms[Ref.Subject].Power == EPowerState::Offline
+                                                        ? TEXT("OFFLINE; NO LIVE CARRIER")
+                                                        : TEXT("LIVE")));
+                            })];
+    Contents->AddSlot()
+        .AutoHeight()[SNew(SBox)
+                          .WidthOverride_Lambda([this]() { return InlineOpticWidth(); })
+                          .HeightOverride_Lambda([this]() { return InlineOpticWidth() * .5625f; })[View]];
     return SNew(SBorder)
-        .Tag(Primary ? TEXT("ScutInlineOptic") : TEXT("ScutInlinePiP"))
+        .Tag(TEXT("ScutInlineOptic"))
         .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
         .BorderBackgroundColor(FLinearColor(.08f, .3f, .14f))
         .Padding(1)[SNew(SBorder)
                         .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
                         .BorderBackgroundColor(FLinearColor(.004f, .012f, .007f))
-                        .Padding(6)[SNew(SVerticalBox) +
-                                    SVerticalBox::Slot().AutoHeight().Padding(
-                                        0, 0, 0, 5)[SNew(STextBlock)
-                                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-                                                        .ColorAndOpacity(EvaluatePhosphorColor(.95f))
-                                                        .Text_Lambda(
-                                                            [this, Block]()
-                                                            {
-                                                                return FText::FromString(
-                                                                    Block->Text +
-                                                                    (Sim->StationRooms[Block->Subject].Power ==
-                                                                             EPowerState::Offline
-                                                                         ? TEXT(" // OFFLINE; NO LIVE CARRIER")
-                                                                         : TEXT(" // LIVE")));
-                                                            })] +
-                                    SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride_Lambda(
-                                        [this, Primary]() { return Primary ? PrimaryOpticHeight() : 100.f; })[Image]]]];
-}
-void SDirectOrScutWorkstationWidget::RebuildTerminalEvidence()
-{
-    if (bDebugEightCamGrid || !PrimaryOpticSlot || !InjectionSlot)
-    {
-        return;
-    }
-    if (ActiveOptic)
-    {
-        PrimaryOpticSlot->SetContent(BuildOpticFrame(ActiveOptic.ToSharedRef(), true));
-    }
-    if (!ActiveInjection)
-    {
-        InjectionSlot->SetContent(SNullWidget::NullWidget);
-        return;
-    }
-    if (ActiveInjection->Kind == FTerminalStreamBlock::EKind::Optic)
-    {
-        InjectionSlot->SetContent(BuildOpticFrame(ActiveInjection.ToSharedRef(), false));
-    }
-    else
-    {
-        const auto Block = ActiveInjection;
-        InjectionSlot->SetContent(TerminalDeckPanel(
-            TEXT("ScutActiveInjection"), *Block->Text,
-            SNew(SBox).HeightOverride(
-                86)[SNew(SDirectOrScutInstrument)
-                        .Owner(SharedThis(this))
-                        .Kind(Block->Instrument)
-                        .Subject(Block->Subject)
-                        .Clipping(EWidgetClipping::ClipToBounds)
-                        .Tag(Block->Instrument == ETerminalInstrument::ECG ? TEXT("ScutInlineECG")
-                                                                           : TEXT("ScutZoomedRoomSchematic"))]));
-    }
+                        .Padding(6)[Contents]];
 }
 TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
 {
@@ -2323,18 +2341,29 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
     for (int32 Room = 0; Room < 8; ++Room)
     {
         Legend->AddSlot().FillHeight(
-            1)[SNew(STextBlock)
-                   .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-                   .Clipping(EWidgetClipping::ClipToBounds)
-                   .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
-                   .Text_Lambda(
+            1)[SNew(SButton)
+                   .IsFocusable(false)
+                   .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                   .Tag(FName(*FString::Printf(TEXT("ScutStationRoom%d"), Room)))
+                   .OnClicked_Lambda(
                        [this, Room]()
                        {
-                           return FText::FromString(FString::Printf(
-                               TEXT("%s%d  %s"),
-                               ACompartmentCameraRig::RoomForFeed(ActiveFeed) == Room ? TEXT(">") : TEXT(" "), Room,
-                               DirectOrScut::RoomName(Room)));
-                       })];
+                           bLogAutoScroll = true;
+                           PresentOptic(Room);
+                           return FReply::Handled();
+                       })[SNew(STextBlock)
+                              .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                              .Clipping(EWidgetClipping::ClipToBounds)
+                              .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
+                              .Text_Lambda(
+                                  [this, Room]()
+                                  {
+                                      return FText::FromString(FString::Printf(
+                                          TEXT("%s%d  %s"),
+                                          ACompartmentCameraRig::RoomForFeed(ActiveFeed) == Room ? TEXT(">")
+                                                                                                 : TEXT(" "),
+                                          Room, DirectOrScut::RoomName(Room)));
+                                  })]];
     }
     Map->AddSlot().FillWidth(.36f).Padding(4, 4, 0, 0)[Legend];
     Deck->AddSlot().FillHeight(.43f).Padding(
@@ -2469,11 +2498,8 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                                               Sim->bAILink ? TEXT("LINKED") : TEXT("LOCAL")));
                                       })]];
     auto Left = SNew(SVerticalBox);
-    Left->AddSlot().AutoHeight().Padding(0, 0, 0,
-                                         8)[SAssignNew(PrimaryOpticSlot, SBox).Tag(TEXT("ScutPrimaryOpticSlot"))];
-    Left->AddSlot().AutoHeight().Padding(0, 0, 0, 8)[SAssignNew(InjectionSlot, SBox).Tag(TEXT("ScutInjectionSlot"))];
     Left->AddSlot().FillHeight(1)[TerminalDeckPanel(
-        TEXT("ScutTeletypePanel"), TEXT("MOTHER-7> // MEDIATION TRANSCRIPT"),
+        TEXT("ScutTeletypePanel"), TEXT("MOTHER-7> // LIVE TELETYPED CARRIER"),
         SAssignNew(LogScroll, SScrollBox)
                 .Tag(TEXT("ScutTerminalStream"))
                 .Clipping(EWidgetClipping::ClipToBoundsAlways)
@@ -2500,7 +2526,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                                                                  Sim->QueueConsoleCommand(TEXT("start_experiment"));
                                                                  return FReply::Handled();
                                                              })];
-    auto Bar = SNew(SHorizontalBox);
+    auto Bar = SNew(SHorizontalBox).Tag(TEXT("ScutInquiryBar"));
     const TCHAR *Labels[] = {TEXT("[1] FINDINGS"),      TEXT("[2] SUBJECTS"), TEXT("[3] BLINDSPOTS"),
                              TEXT("[4] CROSS-EXAMINE"), TEXT("[5] OVERRIDE"), TEXT("[R] SCRUB 15S")};
     for (int32 I = 0; I < 6; ++I)
@@ -2567,31 +2593,74 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
     {
         return;
     }
-    RebuildTerminalEvidence();
     const float Offset = LogScroll->GetScrollOffset();
     Log->ClearChildren();
-    for (const auto &Block : TerminalStream)
+    for (const auto &Entry : TerminalStream)
     {
-        // Evidence lives in the two dedicated panes; keep the transcript for mediator/system prose.
-        if (Block->Kind != FTerminalStreamBlock::EKind::Prose)
-        {
-            continue;
-        }
-        Log->AddSlot().AutoHeight().Padding(
-            0, 2, 0, 4)[SNew(STextBlock)
+        auto Row = SNew(SVerticalBox).Tag(FName(*FString::Printf(TEXT("ScutStreamEntry%llu"), Entry.Id)));
+        const uint64 Id = Entry.Id;
+        Row->AddSlot().AutoHeight().Padding(
+            0, 2, 0, 5)[SNew(STextBlock)
                             .Tag(TEXT("ScutTeletypeLine"))
                             .Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
                             .AutoWrapText(true)
                             .ColorAndOpacity(EvaluatePhosphorColor(.9f))
                             .Text_Lambda(
-                                [Block]()
+                                [this, Id]()
                                 {
-                                    return FText::FromString(
-                                        Block->Kind == FTerminalStreamBlock::EKind::Prose
-                                            ? Block->Text.Left(int32(Block->Characters))
-                                            : TEXT("SYSTEM> DISPLAY ") + Block->Text +
-                                                  (Block->bClosed ? TEXT(" // CLOSED; NO RECORDED FRAME") : TEXT("")));
+                                    const auto *Record = FindTerminalEntry(Id);
+                                    return Record ? FText::FromString(Record->Text.Left(int32(Record->Characters)))
+                                                  : FText::GetEmpty();
                                 })];
+        if (Entry.Attachment.IsSet())
+        {
+            const auto Ref = Entry.Attachment.GetValue();
+            if (Ref.Kind == EInlineAttachmentKind::OpticFeed)
+            {
+                if (const auto Slot = FindInlineOpticSlot(Entry.Id))
+                {
+                    Row->AddSlot().AutoHeight().HAlign(HAlign_Left)[BuildOpticFrame(Ref, Slot.ToSharedRef())];
+                }
+                else
+                {
+                    const uint64 Seconds = Ref.ObservationTick / 30;
+                    Row->AddSlot().AutoHeight().HAlign(HAlign_Left)
+                        [SNew(SButton)
+                             .IsFocusable(false)
+                             .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                             .Tag(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), Entry.Id)))
+                             .OnClicked_Lambda(
+                                 [this, Ref]()
+                                 {
+                                     bLogAutoScroll = true;
+                                     PresentOptic(Ref.Subject);
+                                     return FReply::Handled();
+                                 })[SNew(STextBlock)
+                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                        .ColorAndOpacity(EvaluatePhosphorColor(.8f))
+                                        .Text(FText::FromString(FString::Printf(
+                                            TEXT("[OPTIC REF // CAM-%02d %s @ %02llu:%02llu]"),
+                                            ACompartmentCameraRig::FeedForRoom(Ref.Subject),
+                                            DirectOrScut::RoomName(Ref.Subject), Seconds / 60, Seconds % 60)))]];
+                }
+            }
+            else
+            {
+                const bool Pulse = Ref.Kind == EInlineAttachmentKind::PulseStrip;
+                Row->AddSlot().AutoHeight()[TerminalDeckPanel(
+                    Pulse ? TEXT("ScutPulseAttachment") : TEXT("ScutSchematicAttachment"),
+                    Pulse ? TEXT("[PULSE STRIP] // LIVE SUBJECT TELEMETRY")
+                          : TEXT("[COMPARTMENT SCHEMATIC] // ROOM GEOMETRY"),
+                    SNew(SBox).HeightOverride(
+                        Pulse ? 86 : 130)[SNew(SDirectOrScutInstrument)
+                                              .Owner(SharedThis(this))
+                                              .Kind(Pulse ? ETerminalInstrument::ECG : ETerminalInstrument::Schematic)
+                                              .Subject(Ref.Subject)
+                                              .Clipping(EWidgetClipping::ClipToBounds)
+                                              .Tag(Pulse ? TEXT("ScutInlineECG") : TEXT("ScutZoomedRoomSchematic"))])];
+            }
+        }
+        Log->AddSlot().AutoHeight().Padding(0, 2, 0, 10)[Row];
     }
     if (bLogAutoScroll)
     {
