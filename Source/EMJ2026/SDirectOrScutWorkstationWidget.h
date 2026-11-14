@@ -2,6 +2,10 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Styling/SlateTypes.h"
+#include "UObject/StrongObjectPtr.h"
+#include "Curves/CurveLinearColor.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/Texture2D.h"
 class UDirectOrScutSimSubsystem;
 class ACompartmentCameraRig;
 class SEditableTextBox;
@@ -45,7 +49,30 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     TSharedRef<SWidget> GetContentRoot() const;
     FString EvaluationHighlights() const;
 
+    // Presentation-only primitives: no simulation access or mutation.
+    void BuildCompartmentOutline(int32 RoomId, const FVector2f &LocalSize, TArray<FVector2f> &OutPoints) const;
+    void BuildReticlePoints(const FVector2f &Center, float Radius, int32 SegmentCount, float GapRadians,
+                            TArray<TArray<FVector2f>> &OutArcs) const;
+    void BuildPulseTrace(const FVector2f &Size, float Phase, float BPM, TArray<FVector2f> &OutPoints) const;
+    void DrawTerminalLines(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
+                           const TArray<FVector2f> &Points, FLinearColor Color) const;
+    void BuildSealIndicator(const FVector2f &Center, float Radius, bool bSealed, TArray<FVector2f> &OutPoints) const;
+    void BuildRasterOverlay(const FVector2f &Size, float Progress, TArray<TArray<FVector2f>> &OutLines) const;
+    FLinearColor EvaluatePhosphorColor(float Intensity, float Amber = 0, float Hypoxia = 0, float Offline = 0,
+                                       float Deception = 0) const;
+    void ApplyTerminalMaterialParameters(UMaterialInstanceDynamic &Material, UTexture *OpticTexture,
+                                         const FVector2f &PixelSize, float Time, float Wipe, float Deception) const;
+
   private:
+    void InitializePhosphorCurve();
+    TStrongObjectPtr<UCurveLinearColor> PhosphorCurve;
+    TStrongObjectPtr<UMaterialInstanceDynamic> TerminalMaterials[9];
+    TStrongObjectPtr<UTexture2D> NeutralOptic;
+    mutable TMap<int32, TPair<FVector2f, TArray<FVector2f>>> OutlineCache;
+    mutable FVector2f ReticleCenter = FVector2f::ZeroVector;
+    mutable float ReticleRadius = -1, ReticleGap = -1;
+    mutable int32 ReticleSegments = 0;
+    mutable TArray<TArray<FVector2f>> ReticleCache;
     TWeakObjectPtr<UDirectOrScutSimSubsystem> Sim;
     TWeakObjectPtr<ACompartmentCameraRig> Rig;
     TSharedPtr<SEditableTextBox> Prompt;
@@ -70,6 +97,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     TSharedRef<SWidget> BuildRoomQuickActions();
     void ExecuteRoomQuickAction(FKey Key);
     FSlateBrush Brushes[9];
+    TSharedPtr<class SImage> OpticImages[9];
     int32 LastFeed = -1;
     int32 LastFollowedCrew = -1, LastFollowRoom = -1;
     uint64 SeenFollowRevision = MAX_uint64;

@@ -26,6 +26,8 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateNoResource.h"
+#include "Rendering/DrawElementTypes.h"
+#include "Materials/Material.h"
 
 // Claim developer view keys before PIE editor command processing,
 // only while this workstation owns focus, before editor command processing.
@@ -39,11 +41,38 @@ SDirectOrScutWorkstationWidget::~SDirectOrScutWorkstationWidget()
 // Keep tiles alive on single selection so Slate can route the second click to the same widget.
 void SDirectOrScutWorkstationWidget::Construct(const FArguments &Args)
 {
+    InitializePhosphorCurve();
+    NeutralOptic.Reset(UTexture2D::CreateTransient(1, 1, PF_B8G8R8A8));
+    if (NeutralOptic.IsValid())
+    {
+        auto &Mip = NeutralOptic->GetPlatformData()->Mips[0];
+        void *Pixels = Mip.BulkData.Lock(LOCK_READ_WRITE);
+        FMemory::Memzero(Pixels, 4);
+        Mip.BulkData.Unlock();
+        NeutralOptic->UpdateResource();
+    }
+    if (UMaterial *Base = LoadObject<UMaterial>(
+            nullptr, TEXT("/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal.M_DirectOrScut_Terminal")))
+    {
+        for (int32 Feed = 1; Feed <= 8; ++Feed)
+        {
+            TerminalMaterials[Feed].Reset(UMaterialInstanceDynamic::Create(Base, GetTransientPackage()));
+        }
+    }
     Sim = Args._Sim;
     Rig = Args._Rig;
     for (int32 F = 1; F <= 8; ++F)
     {
-        Brushes[F].SetResourceObject(static_cast<UObject *>(Rig->Targets[F].Get()));
+        if (TerminalMaterials[F].IsValid())
+        {
+            ApplyTerminalMaterialParameters(*TerminalMaterials[F].Get(), Rig->Targets[F].Get(), FVector2f(1024, 576), 0,
+                                            1, 0);
+            Brushes[F].SetResourceObject(TerminalMaterials[F].Get());
+        }
+        else
+        {
+            Brushes[F].SetResourceObject(static_cast<UObject *>(Rig->Targets[F].Get()));
+        }
         Brushes[F].ImageSize = FVector2D(1024, 576);
         Brushes[F].DrawAs = ESlateBrushDrawType::Image;
     }
@@ -219,7 +248,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                                                 [SNew(SOverlay) +
                                                  SOverlay::Slot()
                                                      [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
-                                                          [SNew(SImage)
+                                                          [SAssignNew(OpticImages[F], SImage)
                                                                .Tag(FName(*FString::Printf(TEXT("ScutFeedImage%d"), F)))
                                                                .Image(&Brushes[F])
                                                                .Visibility_Lambda(
@@ -945,6 +974,16 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
     {
         return;
     }
+    for (int32 Feed = 1; Feed <= 8; ++Feed)
+    {
+        if (TerminalMaterials[Feed].IsValid() && OpticImages[Feed].IsValid())
+        {
+            const FGeometry &OpticGeometry = OpticImages[Feed]->GetCachedGeometry();
+            const FVector2f Pixels(OpticGeometry.GetLocalSize() * OpticGeometry.Scale);
+            ApplyTerminalMaterialParameters(*TerminalMaterials[Feed].Get(), Rig->Targets[Feed].Get(), Pixels,
+                                            static_cast<float>(FMath::Fmod(Now, 1024.0)), 1, 0);
+        }
+    }
     const bool Resolved = Sim->ExperimentPhase == EExperimentPhase::Resolved;
     if (Resolved != bShowingEvaluation)
     {
@@ -1270,5 +1309,231 @@ void SDirectOrScutWorkstationWidget::ExecuteRoomQuickAction(FKey Key)
     if (!Command.IsEmpty())
     {
         Sim->QueueConsoleCommand(Command);
+    }
+}
+
+namespace
+{
+float TerminalUnit(float Value)
+{
+    return FMath::IsFinite(Value) ? FMath::Clamp(Value, 0.f, 1.f) : 0.f;
+}
+bool TerminalSize(const FVector2f &Size)
+{
+    return FMath::IsFinite(Size.X) && FMath::IsFinite(Size.Y) && Size.X > 0 && Size.Y > 0 && Size.X <= 32768 &&
+           Size.Y <= 32768;
+}
+} // namespace
+void SDirectOrScutWorkstationWidget::InitializePhosphorCurve()
+{
+    PhosphorCurve.Reset(NewObject<UCurveLinearColor>(GetTransientPackage()));
+    const float Times[] = {0, .25f, .65f, 1};
+    const FLinearColor Colors[] = {
+        {.002f, .006f, .002f, 1}, {.008f, .06f, .012f, 1}, {.08f, .45f, .12f, 1}, {.65f, 1, .72f, 1}};
+    for (int32 Channel = 0; Channel < 4; ++Channel)
+    {
+        FRichCurve &Curve = PhosphorCurve->FloatCurves[Channel];
+        Curve.PreInfinityExtrap = RCCE_Constant;
+        Curve.PostInfinityExtrap = RCCE_Constant;
+        for (int32 Key = 0; Key < 4; ++Key)
+        {
+            Curve.SetKeyInterpMode(Curve.AddKey(Times[Key], Colors[Key].Component(Channel)), RCIM_Linear);
+        }
+    }
+}
+FLinearColor SDirectOrScutWorkstationWidget::EvaluatePhosphorColor(float Intensity, float Amber, float Hypoxia,
+                                                                   float Offline, float Deception) const
+{
+    const float I = TerminalUnit(Intensity);
+    FLinearColor Color = PhosphorCurve.IsValid() ? PhosphorCurve->GetLinearColorValue(I) : FLinearColor::Black;
+    Color = FMath::Lerp(Color, FLinearColor(I, .52f * I, .025f * I, 1), TerminalUnit(Amber));
+    Color = FMath::Lerp(Color, FLinearColor(.32f * I, .18f * I, .05f * I, 1), TerminalUnit(Hypoxia) * .65f);
+    Color = FMath::Lerp(Color, FLinearColor(.12f * I, .16f * I, .13f * I, 1), TerminalUnit(Offline));
+    Color = FMath::Lerp(Color, FLinearColor(.6f * I, .7f * I, .25f * I, 1), TerminalUnit(Deception) * .06f);
+    Color.A = 1;
+    return Color;
+}
+void SDirectOrScutWorkstationWidget::BuildCompartmentOutline(int32 Room, const FVector2f &Size,
+                                                             TArray<FVector2f> &Out) const
+{
+    Out.Reset();
+    if (Room < 0 || Room > 7 || !TerminalSize(Size))
+    {
+        return;
+    }
+    if (const auto *Cached = OutlineCache.Find(Room); Cached && Cached->Key == Size)
+    {
+        Out = Cached->Value;
+        return;
+    }
+    // Octagonal core/ring boundaries and chamfered pods from canonical station dimensions.
+    const float Scale = FMath::Min(Size.X, Size.Y) / 5200.f;
+    const auto Project = [&](FVector2D P) { return FVector2f(Size.X * .5f + P.X * Scale, Size.Y * .5f - P.Y * Scale); };
+    if (Room < 2)
+    {
+        const float Radius = Room == 0 ? 500.f : DirectOrScut::OuterRadius;
+        for (int32 I = 0; I < 8; ++I)
+        {
+            Out.Add(Project(FVector2D(DirectOrScut::Radial(22.5f + I * 45.f, Radius))));
+            // Core access spurs share the canonical +/-140cm lateral bounds.
+            if (Room == 0 && (I == 2 || I == 6))
+            {
+                const float Angle = 45.f + I * 45.f;
+                const FVector2D Normal(DirectOrScut::Radial(Angle, 1));
+                const FVector2D Tangent(DirectOrScut::Radial(Angle + 90, 1));
+                const float Start = Radius * FMath::Cos(PI / 8);
+                const float End = DirectOrScut::InnerRadius * FMath::Cos(PI / 8);
+                Out.Add(Project(Normal * Start - Tangent * 140));
+                Out.Add(Project(Normal * End - Tangent * 140));
+                Out.Add(Project(Normal * End + Tangent * 140));
+                Out.Add(Project(Normal * Start + Tangent * 140));
+            }
+        }
+    }
+    else
+    {
+        const float Angle = DirectOrScut::Stations()[Room - 2].Face * 45.f;
+        const FVector2D X(DirectOrScut::Radial(Angle, 1)), Y(DirectOrScut::Radial(Angle + 90, 1));
+        const FVector2D Center = X * DirectOrScut::PodCenterRadius();
+        for (const FVector2D &P : DirectOrScut::Octagon(DirectOrScut::PodLength, DirectOrScut::PodWidth, 90))
+        {
+            Out.Add(Project(Center + X * P.X + Y * P.Y));
+        }
+    }
+    if (!Out.IsEmpty())
+    {
+        Out.Add(FVector2f(Out[0]));
+    }
+    OutlineCache.Add(Room, TPair<FVector2f, TArray<FVector2f>>(Size, Out));
+}
+void SDirectOrScutWorkstationWidget::BuildReticlePoints(const FVector2f &Center, float Radius, int32 Count, float Gap,
+                                                        TArray<TArray<FVector2f>> &Out) const
+{
+    Out.Reset();
+    if (!FMath::IsFinite(Center.X) || !FMath::IsFinite(Center.Y) || !FMath::IsFinite(Radius) || !FMath::IsFinite(Gap))
+    {
+        return;
+    }
+    Radius = FMath::Clamp(Radius, 0.f, 32768.f);
+    Count = FMath::Clamp(Count, 1, 64);
+    const float Sector = 2 * PI / Count;
+    Gap = FMath::Clamp(Gap, 0.f, Sector * .95f);
+    if (ReticleCenter == Center && ReticleRadius == Radius && ReticleSegments == Count && ReticleGap == Gap)
+    {
+        Out = ReticleCache;
+        return;
+    }
+    for (int32 Arc = 0; Arc < Count && Radius > 0; ++Arc)
+    {
+        TArray<FVector2f> Points;
+        for (int32 I = 0; I < 32; ++I)
+        {
+            const float A = Arc * Sector + Gap * .5f + (Sector - Gap) * I / 31.f;
+            Points.Add(Center + FVector2f(FMath::Cos(A), FMath::Sin(A)) * Radius);
+        }
+        Out.Add(MoveTemp(Points));
+    }
+    ReticleCenter = Center;
+    ReticleRadius = Radius;
+    ReticleSegments = Count;
+    ReticleGap = Gap;
+    ReticleCache = Out;
+}
+void SDirectOrScutWorkstationWidget::BuildPulseTrace(const FVector2f &Size, float Phase, float BPM,
+                                                     TArray<FVector2f> &Out) const
+{
+    Out.Reset();
+    if (!TerminalSize(Size) || !FMath::IsFinite(Phase) || !FMath::IsFinite(BPM))
+    {
+        return;
+    }
+    BPM = FMath::Clamp(BPM, 0.f, 240.f);
+    Phase = FMath::Fmod(Phase, 1024.f);
+    for (int32 I = 0; I < 256; ++I)
+    {
+        const float X = I / 255.f;
+        const float T = FMath::Frac(X * 4 + Phase * BPM / 60.f + 1024.f);
+        const auto Peak = [T](float Center, float Width)
+        { return FMath::Max(0.f, 1 - FMath::Abs(T - Center) / Width); };
+        const float Pulse = BPM == 0 ? 0
+                                     : .12f * Peak(.18f, .06f) - .18f * Peak(.37f, .025f) + Peak(.4f, .025f) -
+                                           .3f * Peak(.44f, .03f) + .22f * Peak(.65f, .1f);
+        Out.Add(FVector2f(X * Size.X, Size.Y * (.55f - .4f * Pulse)));
+    }
+}
+void SDirectOrScutWorkstationWidget::DrawTerminalLines(FSlateWindowElementList &Elements, int32 Layer,
+                                                       const FGeometry &Geometry, const TArray<FVector2f> &Points,
+                                                       FLinearColor Color) const
+{
+    if (Points.Num() < 2 || Points.Num() > 2048)
+    {
+        return;
+    }
+    TArray<FVector2f> Path;
+    for (const auto &P : Points)
+    {
+        if (!FMath::IsFinite(P.X) || !FMath::IsFinite(P.Y))
+        {
+            return;
+        }
+        if (Path.IsEmpty() || !Path.Last().Equals(P, .001f))
+        {
+            Path.Add(P);
+        }
+    }
+    if (Path.Num() > 1)
+    {
+        FSlateDrawElement::MakeLines(Elements, Layer, Geometry.ToPaintGeometry(), Path, ESlateDrawEffect::None, Color,
+                                     true, 1.f);
+    }
+}
+void SDirectOrScutWorkstationWidget::BuildSealIndicator(const FVector2f &Center, float Radius, bool Sealed,
+                                                        TArray<FVector2f> &Out) const
+{
+    Out.Reset();
+    if (!FMath::IsFinite(Center.X) || !FMath::IsFinite(Center.Y) || !FMath::IsFinite(Radius) || Radius <= 0)
+    {
+        return;
+    }
+    Radius = FMath::Min(Radius, 128.f);
+    Out = {Center + FVector2f(-Radius, -Radius), Center + FVector2f(Radius, Radius)};
+    if (Sealed)
+    {
+        Out.Add(Center);
+        Out.Add(Center + FVector2f(-Radius, Radius));
+        Out.Add(Center + FVector2f(Radius, -Radius));
+    }
+}
+void SDirectOrScutWorkstationWidget::BuildRasterOverlay(const FVector2f &Size, float Progress,
+                                                        TArray<TArray<FVector2f>> &Out) const
+{
+    Out.Reset();
+    if (!TerminalSize(Size))
+    {
+        return;
+    }
+    const float Bottom = TerminalUnit(Progress) * Size.Y;
+    const float Pitch = FMath::Max(2.f, Size.Y / 512.f);
+    for (float Y = 0; Y < Bottom; Y += Pitch)
+    {
+        Out.Add({FVector2f(0, Y), FVector2f(Size.X, Y)});
+    }
+}
+void SDirectOrScutWorkstationWidget::ApplyTerminalMaterialParameters(UMaterialInstanceDynamic &Material,
+                                                                     UTexture *Texture, const FVector2f &Size,
+                                                                     float Time, float Wipe, float Deception) const
+{
+    Material.SetTextureParameterValue(TEXT("OpticRenderTarget"), Texture ? Texture : NeutralOptic.Get());
+    Material.SetVectorParameterValue(
+        TEXT("ViewportSize"), FLinearColor(TerminalSize(Size) ? Size.X : 1, TerminalSize(Size) ? Size.Y : 1, 0, 0));
+    Material.SetVectorParameterValue(TEXT("PhosphorTint"), EvaluatePhosphorColor(1));
+    Material.SetScalarParameterValue(TEXT("PresentationTimeSeconds"),
+                                     FMath::IsFinite(Time) ? FMath::Fmod(FMath::Max(0.f, Time), 1024.f) : 0);
+    Material.SetScalarParameterValue(TEXT("WipeProgress"), TerminalUnit(Wipe));
+    Material.SetScalarParameterValue(TEXT("DeceptionAmount"), TerminalUnit(Deception));
+    Material.SetScalarParameterValue(TEXT("DeceptionSyncTear"), TerminalUnit(Deception) * .01f);
+    for (const TCHAR *Name : {TEXT("ScrubTrackingNoise"), TEXT("SignalOfflineNoise"), TEXT("VoiceBleedIntensity")})
+    {
+        Material.SetScalarParameterValue(Name, 0);
     }
 }

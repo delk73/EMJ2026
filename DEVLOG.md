@@ -1,3 +1,17 @@
+# P2-00 foundation implementation ? 2026-11-14
+
+**P2-00 Complete.** Implemented bounded native phosphor/geometry helpers in the existing workstation header/implementation, authored the single owned UI terminal material under `/Game/DirectOrScut/Materials`, bound isolated strongly owned MIDs with DPI-aware dimensions, and removed all 421 temporary Loom packages from disk (the tree was Git-ignored and untracked). No new `.cpp` files.
+
+Pre-purge UE graph inspection and 437-package Asset Registry audit passed; post-purge 16-asset registry audit and source/binary path scans found zero Loom dependencies. Rendering-enabled material compilation returned no errors. Post-purge preflight passed build plus NullRHI boot, and fresh D3D12 PIE automation passed 9 / failed 0 / not run 0 / warnings 0. Fresh screenshot inspection confirms sampled optics, scanlines and readable surrounding Slate text. The initial PIE contour-array alias assertion was fixed; its log is preserved. Engine Fab/ToolsetRegistry and non-Windows SDK warnings remain. Historical legacy registration failures below retain their original scope.
+
+The final explicit terminal-package Windows cook passed (277 packages, 0 errors, one filesystem-DDC deprecation warning); both cooked registries contain the terminal and no Loom paths. This verifies the owned material and hard dependencies, not a full game package. The broader directory cook failed on eight Landmass references to engine editor resources excluded by its flags; the logs and exact final isolated-cook scope are preserved in the specification. A broad global-shader run was stopped, and an empty directory-only single-package request was discarded before the successful explicit package request.
+
+Final source architecture and Git whitespace checks passed. The working tree contains the owned material/generator, canonical widget and consolidated-test edits, packaging include rule, and updated contracts/log; no new `.cpp` files. All 421 removed reference files were already Git-ignored.
+
+Detailed scope and evidence are in [P2-00 implementation](DIRECT_OR_SCUT.md#p2-00-implementation--2026-11-14). P2-01 unified terminal/director composition is not claimed by this foundation milestone.
+
+---
+
 # Active architectural pivot — 2026-11-14
 
 **Unified Shader-Driven Terminal & Unreliable AI Mediation** is the active design contract. See [AGENTS.md](AGENTS.md) for canonical agent rules and [Architectural Pivot & Phase II Specification](DIRECT_OR_SCUT.md#architectural-pivot--phase-ii-specification) for the complete system specification, roadmap and file responsibility matrix.

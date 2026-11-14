@@ -198,6 +198,38 @@ class FBriefingSurveillanceCheck : public IAutomationLatentCommand
             return false;
         }
         auto UI = H->GetWorkstation();
+        if (Last == 0)
+        {
+            TArray<FVector2f> Outline;
+            UI->BuildCompartmentOutline(-1, FVector2f(640, 480), Outline);
+            Test->TestTrue(TEXT("Terminal rejects invalid compartment"), Outline.IsEmpty());
+            for (int32 Room = 0; Room < 8; ++Room)
+            {
+                UI->BuildCompartmentOutline(Room, FVector2f(640, 480), Outline);
+                Test->TestTrue(TEXT("Terminal compartment contour bounded and closed"),
+                               Outline.Num() >= 4 && Outline.Num() <= 128 && Outline[0] == Outline.Last());
+            }
+            TArray<TArray<FVector2f>> Arcs;
+            UI->BuildReticlePoints(FVector2f(100, 100), 90, 999, 1, Arcs);
+            Test->TestEqual(TEXT("Reticle segment cap"), Arcs.Num(), 64);
+            for (const auto &Arc : Arcs)
+            {
+                Test->TestTrue(TEXT("Reticle arc point cap"), Arc.Num() <= 32);
+            }
+            UI->BuildReticlePoints(FVector2f(100, 100), -1, 4, 0, Arcs);
+            Test->TestTrue(TEXT("Degenerate reticle empty"), Arcs.IsEmpty());
+            UI->BuildPulseTrace(FVector2f(640, 100), 1, 0, Outline);
+            Test->TestEqual(TEXT("ECG fixed sample budget"), Outline.Num(), 256);
+            for (const auto &P : Outline)
+            {
+                Test->TestEqual(TEXT("Zero BPM flatline"), P.Y, 55.f);
+            }
+            Test->TestTrue(TEXT("Native phosphor lower clamp"),
+                           UI->EvaluatePhosphorColor(-1).Equals(UI->EvaluatePhosphorColor(0)));
+            Test->TestTrue(TEXT("Native phosphor upper clamp"),
+                           UI->EvaluatePhosphorColor(2).Equals(FLinearColor(.65f, 1, .72f, 1)));
+        }
+
         if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now - Last < .6)
         {
             return false;
