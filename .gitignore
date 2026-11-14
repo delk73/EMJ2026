@@ -14,3 +14,7 @@
 *.sln.docstates
 *.VC.db
 *.VC.opendb
+
+# Temporary local diff captures
+/diff.txt
+/diff-*.txt

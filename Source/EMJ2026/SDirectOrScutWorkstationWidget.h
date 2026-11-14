@@ -26,7 +26,14 @@ enum class EInlineAttachmentKind : uint8
 {
     OpticFeed,
     PulseStrip,
-    CompartmentSchematic
+    CompartmentSchematic,
+    OcularScan
+};
+// Intent describes delivery, not its source: future director tools use the same presentation API.
+enum class EInlinePresentationIntent : uint8
+{
+    Intentional,
+    Passive
 };
 // History contains identifiers and request-time metadata only, never textures, brushes or MIDs.
 struct FInlineAttachmentRef
@@ -34,12 +41,16 @@ struct FInlineAttachmentRef
     EInlineAttachmentKind Kind = EInlineAttachmentKind::OpticFeed;
     int32 Subject = 0;
     uint64 ObservationTick = 0;
+    int32 Subjects[2] = {0, 0};
+    int32 SubjectCount = 1;
+    bool bSideBySide = false;
 };
 struct FTerminalStreamEntry
 {
     uint64 Id = 0;
     FString Text;
     float Characters = 0;
+    float PresentedAt = 0;
     TOptional<FInlineAttachmentRef> Attachment;
 };
 struct FInlineOpticSlot;
@@ -60,6 +71,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
         return true;
     }
     virtual FReply OnPreviewKeyDown(const FGeometry &, const FKeyEvent &) override;
+    virtual FReply OnKeyChar(const FGeometry &, const FCharacterEvent &) override;
     virtual FReply OnKeyDown(const FGeometry &, const FKeyEvent &) override;
     virtual FReply OnMouseButtonDown(const FGeometry &, const FPointerEvent &) override;
     virtual void Tick(const FGeometry &, double, float) override;
@@ -69,11 +81,12 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     }
     void SetDebugEightCamGrid(bool Enabled);
     bool HandlePresentationCommand(const FString &Input);
-    bool PresentOptic(int32 Room);
+    bool PresentOptic(int32 Room, EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
     bool PresentSecondaryOptic(int32 Room);
     bool SetReportedCrewRoom(int32 Crew, int32 Room);
     int32 GetReportedCrewRoom(int32 Crew) const;
-    bool PresentInstrument(ETerminalInstrument Kind, int32 Subject);
+    bool PresentInstrument(ETerminalInstrument Kind, int32 Subject,
+                           EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
     void SetPresentationNoise(float ScrubTracking, float VoiceBleed);
     float GetInlineWipeProgress() const;
     UMaterialInstanceDynamic *GetInlineOpticMaterial() const;
@@ -88,6 +101,20 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     {
         return TerminalStream;
     }
+    bool PresentAttachment(EInlineAttachmentKind Kind, int32 First, int32 Second = -1,
+                           EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
+    bool CompareInlineAttachment(uint64 Id);
+    bool IsBlockCursorVisible() const
+    {
+        return (int32(PresentationSeconds * 4) % 2) == 0;
+    }
+    float OcularDiameter(uint64 Id) const;
+    const FEditableTextBoxStyle &GetPhosphorPromptStyle() const
+    {
+        return PhosphorPromptStyle;
+    }
+    int32 PaintInlineAttachment(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
+                                uint64 Id) const;
     FLinearColor TerminalTint(int32 Room) const;
     int32 PaintTerminalInstrument(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
                                   ETerminalInstrument Kind, int32 Subject) const;
@@ -123,6 +150,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     bool bDebugEightCamGrid = false;
     float ScrubTrackingNoise = 0, VoiceBleedIntensity = 0;
     float PresentationSeconds = 0;
+    float LastPassiveAttachmentAt = -1;
     int32 UnifiedEventCursor = 0;
     TArray<FTerminalStreamEntry> TerminalStream;
     TArray<TSharedPtr<FInlineOpticSlot>> LiveInlineOptics, InlineOpticPool;
@@ -133,10 +161,14 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     TSharedRef<SWidget> BuildOpticFrame(const FInlineAttachmentRef &Ref, TSharedRef<FInlineOpticSlot> Slot);
     TSharedRef<SWidget> BuildTelemetryDeck();
     const FTerminalStreamEntry *FindTerminalEntry(uint64 Id) const;
-    TSharedPtr<FInlineOpticSlot> FindInlineOpticSlot(uint64 Id) const;
+    TSharedPtr<FInlineOpticSlot> FindInlineOpticSlot(uint64 Id, int32 SubjectIndex = 0) const;
+    void BindInlineOptics(const FTerminalStreamEntry &Entry);
     void ReleaseInlineOptic(TSharedRef<FInlineOpticSlot> Slot);
-    void AppendTerminalEntry(FTerminalStreamEntry Entry);
-    bool AppendOpticReference(int32 Room, bool Focus);
+    bool AppendTerminalEntry(FTerminalStreamEntry Entry,
+                             EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
+    bool CanEmitPassiveAttachment(const FInlineAttachmentRef &Ref) const;
+    bool AppendOpticReference(int32 Room, bool Focus,
+                              EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
     float InlineOpticWidth() const;
     TStrongObjectPtr<UMaterialInstanceDynamic> TerminalSurfaceMaterial;
     TSharedRef<SWidget> BuildUnifiedTerminal(const FText &Draft);
@@ -164,6 +196,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void RebuildCameraWall();
     TSharedPtr<SRetainerWidget> Retainer;
     TSharedPtr<SScrollBox> LogScroll, MenuScroll;
+    FEditableTextBoxStyle PhosphorPromptStyle;
     FScrollBarStyle SlimScrollStyle;
     FProgressBarStyle OxygenBarStyle;
     TArray<TSharedPtr<SWidget>> MenuEntries;

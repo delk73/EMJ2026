@@ -14,6 +14,9 @@
 #include "SDirectOrScutWorkstationWidget.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Images/SImage.h"
+#include "Fonts/FontMeasure.h"
+#include "Rendering/SlateRenderer.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SWindow.h"
 #include "ImageUtils.h"
@@ -2970,10 +2973,22 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             return false;
         }
         auto Workstation = HUD->GetWorkstation();
+        if (Stage == 22)
+        {
+            // Emulate repeated emissions from any passive presenter on every actual PIE frame.
+            Test->TestFalse(
+                TEXT("Repeated passive ECG stays suppressed"),
+                Workstation->PresentInstrument(ETerminalInstrument::ECG, 3, EInlinePresentationIntent::Passive));
+            Test->TestFalse(
+                TEXT("Repeated passive schematic stays suppressed"),
+                Workstation->PresentInstrument(ETerminalInstrument::Schematic, 7, EInlinePresentationIntent::Passive));
+        }
         if (Workstation->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
         {
             return false;
         }
+        SawCursorOn |= Workstation->IsBlockCursorVisible();
+        SawCursorOff |= !Workstation->IsBlockCursorVisible();
         auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(Workstation->GetContentRoot(), Tag); };
         auto Capture = [&](const TCHAR *Name)
         {
@@ -2988,6 +3003,31 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                 Test->TestTrue(
                     TEXT("CRT screenshot saved"),
                     FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut") / Name)));
+            }
+        };
+        auto CheckMOTD = [&]()
+        {
+            const auto &Entries = Workstation->GetTerminalStreamEntries();
+            Test->TestEqual(TEXT("Boot/reset seeds exactly one prose MOTD record"), Entries.Num(), 1);
+            for (const auto &Entry : Entries)
+            {
+                Test->TestFalse(TEXT("MOTD has no inline attachment metadata"), Entry.Attachment.IsSet());
+                Test->TestTrue(TEXT("MOTD carries node, operational notice and initialization instruction"),
+                               Entry.Text.StartsWith(TEXT("+---")) &&
+                                   Entry.Text.Contains(TEXT("|CARRIER: THETA-9 // MOTHER-7")) &&
+                                   Entry.Text.Contains(TEXT("NOTICE:")) && Entry.Text.Contains(TEXT("[ENTER]")) &&
+                                   Entry.Text.Contains(TEXT("start_experiment")));
+                for (TCHAR Character : Entry.Text)
+                {
+                    Test->TestTrue(TEXT("MOTD is ASCII only"), Character <= 127);
+                }
+            }
+            Test->TestEqual(TEXT("MOTD boot has zero live optics"), Workstation->GetLiveInlineOpticCount(), 0);
+            Test->TestEqual(TEXT("MOTD boot has zero inline instruments"), Workstation->GetInlineInstrumentCount(), 0);
+            for (const TCHAR *Tag : {TEXT("ScutInlineOptic"), TEXT("ScutInlineECG"), TEXT("ScutZoomedRoomSchematic"),
+                                     TEXT("ScutInlineOcular")})
+            {
+                Test->TestFalse(TEXT("No graphical stream attachment is mounted until requested"), Find(Tag).IsValid());
             }
         };
         auto CheckPanels = [&]()
@@ -3042,7 +3082,8 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             const FName ImageTag(*FString::Printf(TEXT("ScutInlineOpticImage%llu"), OpticId));
             auto InlineImage =
                 FBriefingSurveillanceCheck::Find(Find(TEXT("ScutTerminalStream")).ToSharedRef(), ImageTag);
-            Test->TestTrue(TEXT("Camera is an attachment inside the scroll hierarchy"), InlineImage.IsValid());
+            Test->TestEqual(TEXT("Only requested cameras mount inside the scroll hierarchy"), InlineImage.IsValid(),
+                            OpticId != 0);
             if (InlineImage)
             {
                 const auto Image = InlineImage->GetCachedGeometry().GetRenderBoundingRect();
@@ -3097,11 +3138,11 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             };
             CheckText(Find(TEXT("ScutReadoutColumn")).ToSharedRef());
         };
-        auto Click = [&](TSharedRef<SWidget> Button)
+        auto Click = [&](TSharedRef<SWidget> Button, FVector2D Fraction = FVector2D(.5, .5))
         {
             auto &App = FSlateApplication::Get();
             const auto &G = Button->GetCachedGeometry();
-            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * Fraction);
             auto Window = App.FindWidgetWindow(Button);
             Test->TestTrue(TEXT("Inline routing control has clickable geometry"),
                            G.GetLocalSize().X > 1 && G.GetLocalSize().Y > 1);
@@ -3133,20 +3174,20 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Test->TestFalse(TEXT("Startup is not grid navigation"), Workstation->bGrid);
             Test->TestTrue(TEXT("Unified stream exists"), Find(TEXT("ScutUnifiedTerminal")).IsValid());
             Test->TestFalse(TEXT("Legacy camera wall absent by default"), Find(TEXT("ScutCameraWall")).IsValid());
-            Test->TestTrue(TEXT("Inline ECG and schematic inserted"),
-                           Find(TEXT("ScutInlineECG")).IsValid() && Find(TEXT("ScutInlineSchematic")).IsValid());
-            Test->TestEqual(TEXT("Startup two instrument blocks"), Workstation->GetInlineInstrumentCount(), 2);
+            CheckMOTD();
+            Test->TestEqual(TEXT("Boot lazily allocates no inline optic MIDs"),
+                            Workstation->GetInlineOpticMaterialCount(), 0);
             Hash = Sim->SurveillanceStateHash();
             Tick = Sim->Simulation.TickIndex;
-            Ready = Now + 1.5;
+            Ready = Now + 5;
             break;
         case 1:
         {
             CheckPanels();
             const auto Prose = Find(TEXT("ScutTeletypeLine"));
-            Test->TestTrue(TEXT("Clinical mediator prose remains visible above inquiry bar"),
-                           Prose.IsValid() && StaticCastSharedPtr<STextBlock>(Prose)->GetText().ToString().StartsWith(
-                                                  TEXT("MOTHER-7>")));
+            Test->TestTrue(TEXT("ASCII MOTD remains visible above inquiry bar"),
+                           Prose.IsValid() &&
+                               StaticCastSharedPtr<STextBlock>(Prose)->GetText().ToString().StartsWith(TEXT("+---")));
             Capture(TEXT("UnifiedTerminalPIE.png"));
             ActualReportedCrewRoom = Sim->Simulation.Bodies[0].Room;
             Test->TestTrue(TEXT("AI report accepts a contradictory location"),
@@ -3238,7 +3279,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Capture(TEXT("UnifiedOfflineOpticPIE.png"));
             Workstation->HandlePresentationCommand(TEXT("show_widget ecg chen"));
             Workstation->HandlePresentationCommand(TEXT("show_widget schematic med_bay"));
-            Test->TestEqual(TEXT("Director inserts inline instruments"), Workstation->GetInlineInstrumentCount(), 4);
+            Test->TestEqual(TEXT("Director inserts inline instruments"), Workstation->GetInlineInstrumentCount(), 2);
             Workstation->PresentOptic(2);
             if (MID)
             {
@@ -3280,11 +3321,11 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
         }
         case 6:
             Test->TestFalse(TEXT("Reset retains default unified mode"), Workstation->IsDebugEightCamGrid());
-            Test->TestEqual(TEXT("Reset clears stream history to startup instruments"),
-                            Workstation->GetInlineInstrumentCount(), 2);
+            CheckMOTD();
             Test->TestEqual(TEXT("Reset clears report overrides"), Workstation->GetReportedCrewRoom(0),
                             Sim->Simulation.Bodies[0].Room);
             Hash = Sim->SurveillanceStateHash();
+            Workstation->HandlePresentationCommand(TEXT("show_cam 0"));
             for (const auto &Entry : Workstation->GetTerminalStreamEntries())
             {
                 if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
@@ -3305,7 +3346,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Test->TestEqual(TEXT("Two earlier optic records collapsed"), Workstation->GetCollapsedOpticReferenceCount(),
                             2);
             Test->TestEqual(TEXT("History records keep every emission"), Workstation->GetTerminalStreamEntries().Num(),
-                            7);
+                            5);
             Test->TestTrue(TEXT("Old optic row now holds a compact reference"),
                            Find(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), OriginalOpticId))).IsValid());
             Test->TestFalse(TEXT("Demoted row no longer holds an image"),
@@ -3410,9 +3451,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
         }
         case 10:
         {
-            Test->TestEqual(TEXT("Reset restores four initial records"), Workstation->GetTerminalStreamEntries().Num(),
-                            4);
-            Test->TestEqual(TEXT("Reset restores one live optical binding"), Workstation->GetLiveInlineOpticCount(), 1);
+            CheckMOTD();
             auto Scroll = StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")));
             const auto &G = Scroll->GetCachedGeometry();
             const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
@@ -3422,12 +3461,300 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             App.ProcessMouseWheelOrGestureEvent(
                 FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::Invalid, 1000, FModifierKeysState()), nullptr);
             Scroll->SetScrollOffset(0);
-            Ready = Now + 3;
+            Ready = Now + 5;
             break;
         }
         case 11:
+        {
             CheckPanels();
             Capture(TEXT("UnifiedTerminalPIE.png"));
+            const auto &Style = Workstation->GetPhosphorPromptStyle();
+            Test->TestTrue(TEXT("Prompt has no normal/hover/focus/read-only chrome"),
+                           Style.BackgroundImageNormal.DrawAs == ESlateBrushDrawType::NoDrawType &&
+                               Style.BackgroundImageHovered.DrawAs == ESlateBrushDrawType::NoDrawType &&
+                               Style.BackgroundImageFocused.DrawAs == ESlateBrushDrawType::NoDrawType &&
+                               Style.BackgroundImageReadOnly.DrawAs == ESlateBrushDrawType::NoDrawType &&
+                               Style.Padding == FMargin(0));
+            const FLinearColor PromptGreen = Workstation->EvaluatePhosphorColor(1);
+            Test->TestTrue(TEXT("Prompt normal and focused ink match prefix/cursor phosphor"),
+                           Style.ForegroundColor.GetSpecifiedColor().Equals(PromptGreen) &&
+                               Style.FocusedForegroundColor.GetSpecifiedColor().Equals(PromptGreen));
+            Test->TestTrue(TEXT("Read-only prompt matches prefix/cursor phosphor"),
+                           Style.ReadOnlyForegroundColor.GetSpecifiedColor().Equals(PromptGreen));
+            Test->TestTrue(TEXT("Block cursor painted both blink phases"),
+                           SawCursorOn && SawCursorOff && Find(TEXT("ScutBlockCursor")).IsValid());
+            TFunction<void(TSharedRef<SWidget>)> CheckChrome;
+            CheckChrome = [&](TSharedRef<SWidget> W)
+            {
+                if (W->GetTypeAsString() == TEXT("SButton"))
+                {
+                    const auto Border = StaticCastSharedRef<SBorder>(W);
+                    Test->TestTrue(TEXT("Unified actions have no default gray button chrome"),
+                                   Border->GetBorderImage()->DrawAs == ESlateBrushDrawType::NoDrawType);
+                }
+                auto *Children = W->GetChildren();
+                for (int32 I = 0; I < Children->Num(); ++I)
+                {
+                    CheckChrome(Children->GetChildAt(I));
+                }
+            };
+            CheckChrome(Find(TEXT("ScutUnifiedTerminal")).ToSharedRef());
+            Hash = Sim->SurveillanceStateHash();
+            Workstation->PresentInstrument(ETerminalInstrument::ECG, 0);
+            ComparisonId = Workstation->GetTerminalStreamEntries().Last().Id;
+            StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))->ScrollToEnd();
+            Ready = Now + .4;
+            break;
+        }
+        case 12:
+        case 14:
+        case 16:
+        {
+            const auto Button = Find(FName(*FString::Printf(TEXT("ScutInlineCompare%llu"), ComparisonId)));
+            Test->TestTrue(TEXT("Inline comparison header has a softkey"), Button.IsValid());
+            if (Button)
+            {
+                Click(Button.ToSharedRef());
+            }
+            const auto &Ref = Workstation->GetTerminalStreamEntries().Last().Attachment.GetValue();
+            Test->TestEqual(TEXT("Real header click adds second subject to same entry"), Ref.SubjectCount, 2);
+            Test->TestEqual(TEXT("Comparison preserves entry identity"),
+                            Workstation->GetTerminalStreamEntries().Last().Id, ComparisonId);
+            Test->TestEqual(TEXT("Header click cannot change authoritative state"), Sim->SurveillanceStateHash(), Hash);
+            Ready = Now + .4;
+            break;
+        }
+        case 13:
+            Test->TestTrue(TEXT("ECG comparison overlays instead of dividing strip"),
+                           !Workstation->GetTerminalStreamEntries().Last().Attachment->bSideBySide &&
+                               Find(TEXT("ScutInlineECG")).IsValid());
+            Capture(TEXT("ComparativeECGPIE.png"));
+            Workstation->PresentInstrument(ETerminalInstrument::Schematic, 0);
+            ComparisonId = Workstation->GetTerminalStreamEntries().Last().Id;
+            StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))->ScrollToEnd();
+            Ready = Now + .4;
+            break;
+        case 15:
+            Test->TestTrue(TEXT("Schematic comparison is side by side"),
+                           Workstation->GetTerminalStreamEntries().Last().Attachment->bSideBySide);
+            Capture(TEXT("ComparativeSchematicPIE.png"));
+            Workstation->PresentOptic(0);
+            ComparisonId = Workstation->GetTerminalStreamEntries().Last().Id;
+            StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))->ScrollToEnd();
+            Ready = Now + .4;
+            break;
+        case 17:
+        {
+            Test->TestTrue(TEXT("Paired optics mount in same stream row"), Find(TEXT("ScutOpticComparison")).IsValid());
+            Test->TestEqual(TEXT("Paired optics use exactly two live bindings"), Workstation->GetLiveInlineOpticCount(),
+                            2);
+            Test->TestTrue(TEXT("Paired optics retain hard two MID limit"),
+                           Workstation->GetInlineOpticMaterialCount() <= 2);
+            TArray<FSlateRect> OpticRects;
+            TSet<UMaterialInstanceDynamic *> PairMaterials;
+            for (int32 I = 0; I < 2; ++I)
+            {
+                const auto Image = StaticCastSharedPtr<SImage>(Find(FName(*FString::Printf(
+                    TEXT("ScutInlineOpticImage%llu%s"), ComparisonId, I ? TEXT("Secondary") : TEXT("")))));
+                Test->TestTrue(TEXT("Both paired images are mounted"), Image.IsValid());
+                if (Image)
+                {
+                    OpticRects.Add(Image->GetCachedGeometry().GetLayoutBoundingRect());
+                    auto *Material = Cast<UMaterialInstanceDynamic>(Image->GetImage()->GetResourceObject());
+                    PairMaterials.Add(Material);
+                    ACompartmentCameraRig *CameraRig = nullptr;
+                    for (TActorIterator<ACompartmentCameraRig> It(World); It; ++It)
+                    {
+                        CameraRig = *It;
+                        break;
+                    }
+                    Test->TestTrue(TEXT("Each comparison MID binds its own subject render target"),
+                                   Material && CameraRig &&
+                                       Material->K2_GetTextureParameterValue(TEXT("OpticRenderTarget")) ==
+                                           CameraRig->Targets[ACompartmentCameraRig::FeedForRoom(I)].Get());
+                }
+            }
+            Test->TestEqual(TEXT("Comparison images use two distinct pooled MIDs"), PairMaterials.Num(), 2);
+            if (OpticRects.Num() == 2)
+            {
+                Test->TestTrue(TEXT("Paired optics have positive non-overlapping geometry"),
+                               OpticRects[0].Right <= OpticRects[1].Left + 1 && OpticRects[0].GetSize().Y > 20 &&
+                                   OpticRects[1].GetSize().Y > 20);
+            }
+            Capture(TEXT("ComparativeOpticPIE.png"));
+            for (const TCHAR *Command : {TEXT("show_widget ecg vale chen"), TEXT("compare ecg"),
+                                         TEXT("compare schematic 2 3"), TEXT("compare cam 4 5")})
+            {
+                Workstation->HandlePresentationCommand(Command);
+                Test->TestEqual(TEXT("Comparison command stores two subjects"),
+                                Workstation->GetTerminalStreamEntries().Last().Attachment->SubjectCount, 2);
+            }
+            const int32 Before = Workstation->GetLiveInlineOpticCount();
+            Workstation->HandlePresentationCommand(TEXT("compare cam 0 invalid"));
+            Test->TestEqual(TEXT("Invalid pair cannot bind optics"), Workstation->GetLiveInlineOpticCount(), Before);
+            Workstation->HandlePresentationCommand(TEXT("show_widget ocular chen"));
+            ComparisonId = Workstation->GetTerminalStreamEntries().Last().Id;
+            Test->TestTrue(TEXT("Ocular attachment is explicit kind"),
+                           Workstation->GetTerminalStreamEntries().Last().Attachment->Kind ==
+                               EInlineAttachmentKind::OcularScan);
+            OcularStart = Workstation->OcularDiameter(ComparisonId);
+            Ready = Now + .8;
+            break;
+        }
+        case 18:
+            Test->TestTrue(TEXT("Ocular aperture dilates once with presentation age"),
+                           Workstation->OcularDiameter(ComparisonId) > OcularStart + .3f);
+            Test->TestTrue(TEXT("Stateless ocular vector widget is mounted"), Find(TEXT("ScutInlineOcular")).IsValid());
+            Capture(TEXT("OcularScanPIE.png"));
+            Ready = Now + 2.5;
+            break;
+        case 19:
+            Test->TestTrue(TEXT("One-shot ocular returns to baseline and does not loop"),
+                           FMath::IsNearlyEqual(Workstation->OcularDiameter(ComparisonId), OcularStart, .02f));
+            Test->TestTrue(TEXT("All comparative vectors retain bounded MID pool"),
+                           Workstation->GetInlineOpticMaterialCount() <= 2);
+            Test->TestEqual(TEXT("All comparison commands and ocular scan are presentation only"),
+                            Sim->SurveillanceStateHash(), Hash);
+            {
+                auto CommandPrompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+                auto &App = FSlateApplication::Get();
+                CommandPrompt->SetText(FText::GetEmpty());
+                const auto PromptSize = CommandPrompt->GetCachedGeometry().GetLocalSize();
+                const auto ColumnSize = Find(TEXT("ScutMediationColumn"))->GetCachedGeometry().GetLocalSize();
+                Test->TestTrue(TEXT("Empty prompt retains full-column hit target"), PromptSize.X > ColumnSize.X * .9f);
+                App.SetKeyboardFocus(Workstation);
+                Click(CommandPrompt.ToSharedRef(), FVector2D(.95, .5));
+                Test->TestTrue(TEXT("Clicking empty prompt line routes focus directly to edit box"),
+                               Workstation->IsPromptFocused());
+                const auto Type = [&](const FString &Text)
+                {
+                    for (TCHAR Character : Text)
+                    {
+                        App.ProcessKeyCharEvent(FCharacterEvent(Character, FModifierKeysState(), 0, false));
+                    }
+                };
+                Type(TEXT("sta"));
+                Test->TestEqual(TEXT("Real Slate characters reach clicked prompt"), CommandPrompt->GetText().ToString(),
+                                FString(TEXT("sta")));
+                App.SetKeyboardFocus(Workstation);
+                // The terminal's outer glass padding is intentionally outside every interactive child.
+                Click(Find(TEXT("ScutUnifiedTerminal")).ToSharedRef(), FVector2D(.003, .5));
+                Test->TestTrue(TEXT("Empty glass click focuses prompt rather than workstation"),
+                               Workstation->IsPromptFocused());
+                Type(TEXT("tu"));
+                Test->TestEqual(TEXT("Typing after glass click preserves draft"), CommandPrompt->GetText().ToString(),
+                                FString(TEXT("statu")));
+                App.SetKeyboardFocus(Workstation);
+                Type(TEXT("s"));
+                Test->TestTrue(TEXT("First printable character transfers workstation focus to prompt"),
+                               Workstation->IsPromptFocused());
+                Test->TestEqual(TEXT("Forwarded first character is inserted exactly once"),
+                                CommandPrompt->GetText().ToString(), FString(TEXT("status")));
+                Test->TestEqual(TEXT("Uncommitted typing and focus cannot mutate authoritative state"),
+                                Sim->SurveillanceStateHash(), Hash);
+                Ready = Now + .3;
+                break;
+            }
+        case 20:
+        {
+            auto CommandPrompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            const float TextWidth =
+                FSlateApplication::Get()
+                    .GetRenderer()
+                    ->GetFontMeasureService()
+                    ->Measure(CommandPrompt->GetText(), FCoreStyle::GetDefaultFontStyle("Regular", 14))
+                    .X;
+            const auto PromptBounds = CommandPrompt->GetCachedGeometry().GetLayoutBoundingRect();
+            const auto CursorBounds = Find(TEXT("ScutBlockCursor"))->GetCachedGeometry().GetLayoutBoundingRect();
+            const float Scale = CommandPrompt->GetCachedGeometry().Scale;
+            Test->TestTrue(TEXT("Block cursor stays flush after text inside full-width prompt"),
+                           FMath::Abs(CursorBounds.Left - PromptBounds.Left - TextWidth * Scale) < 2);
+            Test->TestEqual(TEXT("Draft remains uncommitted across frames"), Sim->SurveillanceStateHash(), Hash);
+            Capture(TEXT("PromptInputFocusPIE.png"));
+            CommandPrompt->SetText(FText::GetEmpty());
+            Test->TestTrue(TEXT("Idle fixture starts explicit crew follow"), Sim->SetFollowedCrew(0));
+            Ready = Now + .3;
+            break;
+        }
+        case 21:
+            IdleRoom = Sim->Simulation.Bodies[0].Room;
+            // Intentional evidence first; passive room observation of that same content must deduplicate.
+            Workstation->PresentOptic((IdleRoom + 1) % 8);
+            Workstation->PresentInstrument(ETerminalInstrument::ECG, 3);
+            Workstation->PresentInstrument(ETerminalInstrument::Schematic, 7);
+            IdleAttachmentIds.Reset();
+            for (const auto &Entry : Workstation->GetTerminalStreamEntries())
+            {
+                if (Entry.Attachment.IsSet())
+                {
+                    IdleAttachmentIds.Add(Entry.Id);
+                }
+            }
+            IdleEntryCount = Workstation->GetTerminalStreamEntries().Num();
+            Sim->Simulation.Bodies[0].Room = (IdleRoom + 1) % 8;
+            for (int32 I = 0; I < 3; ++I)
+            {
+                Sim->LogEvent(TEXT("MOTHER-7> Subject telemetry attached. Ambient status remains text only."));
+            }
+            Hash = Sim->SurveillanceStateHash();
+            Ready = Now + 2.2;
+            break;
+        case 22:
+        {
+            TArray<uint64> CurrentAttachmentIds;
+            for (const auto &Entry : Workstation->GetTerminalStreamEntries())
+            {
+                if (Entry.Attachment.IsSet())
+                {
+                    CurrentAttachmentIds.Add(Entry.Id);
+                }
+            }
+            Test->TestTrue(TEXT("Idle frames, ambient prose and passive follow movement never append attachments"),
+                           CurrentAttachmentIds == IdleAttachmentIds);
+            Test->TestTrue(TEXT("Ambient events still append plain terminal prose"),
+                           Workstation->GetTerminalStreamEntries().Num() >= IdleEntryCount + 3);
+            Test->TestEqual(TEXT("Passive presentation cannot mutate the observed simulation fixture"),
+                            Sim->SurveillanceStateHash(), Hash);
+            Sim->Simulation.Bodies[0].Room = IdleRoom;
+            Sim->SetFollowedCrew(-1);
+            Hash = Sim->SurveillanceStateHash();
+            Test->TestTrue(TEXT("Novel passive content is permitted without source allowlists"),
+                           Workstation->PresentAttachment(EInlineAttachmentKind::OcularScan, 3, -1,
+                                                          EInlinePresentationIntent::Passive));
+            Test->TestFalse(TEXT("Duplicate passive content does not append"),
+                            Workstation->PresentAttachment(EInlineAttachmentKind::OcularScan, 3, -1,
+                                                           EInlinePresentationIntent::Passive));
+            Test->TestFalse(
+                TEXT("Different passive content is paced too"),
+                Workstation->PresentInstrument(ETerminalInstrument::Schematic, 6, EInlinePresentationIntent::Passive));
+            const int32 Before = Workstation->GetTerminalStreamEntries().Num();
+            Test->TestTrue(TEXT("Intentional duplicate bypasses passive pacing immediately"),
+                           Workstation->PresentAttachment(EInlineAttachmentKind::OcularScan, 3));
+            Workstation->PresentInstrument(ETerminalInstrument::ECG, 0);
+            Workstation->PresentInstrument(ETerminalInstrument::ECG, 0);
+            Test->TestEqual(TEXT("All intentional repeated requests append immediately"),
+                            Workstation->GetTerminalStreamEntries().Num(), Before + 3);
+            Workstation->PresentOptic(7);
+            Ready = Now + 2.2;
+            break;
+        }
+        case 23:
+            Test->TestTrue(
+                TEXT("New passive content is permitted after pacing interval"),
+                Workstation->PresentInstrument(ETerminalInstrument::Schematic, 6, EInlinePresentationIntent::Passive));
+            Test->TestFalse(
+                TEXT("Recent intentional content also deduplicates passive requests"),
+                Workstation->PresentInstrument(ETerminalInstrument::ECG, 0, EInlinePresentationIntent::Passive));
+            Ready = Now + 8.2;
+            break;
+        case 24:
+            Test->TestFalse(TEXT("Active optics remain deduplicated beyond recent interval"),
+                            Workstation->PresentOptic(7, EInlinePresentationIntent::Passive));
+            Test->TestTrue(TEXT("Expired vector content can emit again through passive API"),
+                           Workstation->PresentAttachment(EInlineAttachmentKind::OcularScan, 3, -1,
+                                                          EInlinePresentationIntent::Passive));
+            Test->TestEqual(TEXT("Pacing and intentional bypass are presentation only"), Sim->SurveillanceStateHash(),
+                            Hash);
             return true;
         }
         return false;
@@ -3437,6 +3764,11 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
     FAutomationTestBase *Test;
     int32 Stage = 0, ActualReportedCrewRoom = -1;
     uint64 Hash = 0, Tick = 0, OriginalOpticId = 0, OriginalObservationTick = 0;
+    bool SawCursorOn = false, SawCursorOff = false;
+    uint64 ComparisonId = 0;
+    float OcularStart = 0;
+    TArray<uint64> IdleAttachmentIds;
+    int32 IdleEntryCount = 0, IdleRoom = 0;
     TSet<UMaterialInstanceDynamic *> SeenInlineMaterials;
     double Started = 0, Ready = 0;
 };

@@ -21,6 +21,8 @@
 #include "Slate/SRetainerWidget.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Fonts/FontMeasure.h"
+#include "Rendering/SlateRenderer.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Styling/CoreStyle.h"
 #include "HAL/PlatformApplicationMisc.h"
@@ -34,6 +36,7 @@
 struct FInlineOpticSlot
 {
     uint64 EntryId = 0;
+    int32 SubjectIndex = 0;
     float Wipe = 0;
     TStrongObjectPtr<UMaterialInstanceDynamic> Material;
     FSlateBrush Brush;
@@ -71,6 +74,83 @@ class SDirectOrScutInstrument : public SLeafWidget
     ETerminalInstrument Kind = ETerminalInstrument::ECG;
     int32 Subject = 0;
 };
+
+// Stateless vector splice: resolves a stable history identity at paint time.
+class SScutInlineVector : public SLeafWidget
+{
+  public:
+    SLATE_BEGIN_ARGS(SScutInlineVector)
+    {
+    }
+    SLATE_ARGUMENT(TWeakPtr<SDirectOrScutWorkstationWidget>, Owner)
+    SLATE_ARGUMENT(uint64, EntryId)
+    SLATE_END_ARGS()
+    void Construct(const FArguments &Args)
+    {
+        Owner = Args._Owner;
+        EntryId = Args._EntryId;
+    }
+    FVector2D ComputeDesiredSize(float) const override
+    {
+        return FVector2D(300, 86);
+    }
+    int32 OnPaint(const FPaintArgs &, const FGeometry &G, const FSlateRect &, FSlateWindowElementList &E, int32 L,
+                  const FWidgetStyle &, bool) const override
+    {
+        const auto W = Owner.Pin();
+        return W ? W->PaintInlineAttachment(E, L, G, EntryId) : L;
+    }
+
+  private:
+    TWeakPtr<SDirectOrScutWorkstationWidget> Owner;
+    uint64 EntryId = 0;
+};
+namespace
+{
+// No OS chrome: only phosphor ink and an inverted hover/pressed field.
+TSharedRef<SWidget> PhosphorSoftkey(FName Tag, const FText &Text, FSimpleDelegate Action)
+{
+    auto Button = SNew(SButton)
+                      .Tag(Tag)
+                      .IsFocusable(false)
+                      .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                      .ContentPadding(FMargin(2))
+                      .OnClicked_Lambda(
+                          [Action]()
+                          {
+                              Action.ExecuteIfBound();
+                              return FReply::Handled();
+                          });
+    TWeakPtr<SButton> Weak = Button;
+    const auto Hot = [Weak]()
+    {
+        auto B = Weak.Pin();
+        return B && (B->IsHovered() || B->IsPressed());
+    };
+    Button->SetContent(
+        SNew(SBorder)
+            .Padding(FMargin(2, 0))
+            .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+            .BorderBackgroundColor_Lambda(
+                [Hot]()
+                {
+                    return Hot() ? FLinearColor(.48f, .87f, .58f) : FLinearColor::Transparent;
+                })[SNew(STextBlock)
+                       .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
+                       .Text(Text)
+                       .ColorAndOpacity_Lambda(
+                           [Hot]()
+                           { return Hot() ? FLinearColor(.003f, .009f, .005f) : FLinearColor(.48f, .87f, .58f); })]);
+    return Button;
+}
+TSharedRef<SWidget> PhosphorHairline()
+{
+    return SNew(SBox).HeightOverride(1)[SNew(SBorder)
+                                            .Padding(0)
+                                            .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                                            .BorderBackgroundColor(FLinearColor(.08f, .3f, .14f))];
+}
+} // namespace
 
 // Claim developer view keys before PIE editor command processing,
 // only while this workstation owns focus, before editor command processing.
@@ -120,6 +200,15 @@ void SDirectOrScutWorkstationWidget::Construct(const FArguments &Args)
         Brushes[F].ImageSize = FVector2D(1024, 576);
         Brushes[F].DrawAs = ESlateBrushDrawType::Image;
     }
+    PhosphorPromptStyle = FCoreStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>("NormalEditableTextBox");
+    PhosphorPromptStyle.SetBackgroundImageNormal(FSlateNoResource())
+        .SetBackgroundImageHovered(FSlateNoResource())
+        .SetBackgroundImageFocused(FSlateNoResource())
+        .SetBackgroundImageReadOnly(FSlateNoResource())
+        .SetPadding(FMargin(0))
+        .SetForegroundColor(EvaluatePhosphorColor(1))
+        .SetFocusedForegroundColor(EvaluatePhosphorColor(1))
+        .SetReadOnlyForegroundColor(EvaluatePhosphorColor(1));
     OxygenBarStyle = FCoreStyle::Get().GetWidgetStyle<FProgressBarStyle>("ProgressBar");
     OxygenBarStyle.SetFillImage(FSlateColorBrush(FLinearColor::White))
         .SetBackgroundImage(FSlateColorBrush(FLinearColor(.01f, .04f, .02f)));
@@ -856,6 +945,12 @@ void SDirectOrScutWorkstationWidget::Commit(const FText &Text, ETextCommit::Type
 }
 FReply SDirectOrScutWorkstationWidget::OnMouseButtonDown(const FGeometry &, const FPointerEvent &E)
 {
+    if (!bDebugEightCamGrid && Prompt.IsValid() && E.GetEffectingButton() == EKeys::LeftMouseButton)
+    {
+        bConsoleOpen = true;
+        bMenuFocused = false;
+        return FReply::Handled().SetUserFocus(Prompt.ToSharedRef(), EFocusCause::Mouse);
+    }
     return E.GetEffectingButton() == EKeys::LeftMouseButton
                ? FReply::Handled().SetUserFocus(
                      bConsoleOpen && !bMenuFocused ? StaticCastSharedRef<SWidget>(Prompt.ToSharedRef()) : AsShared(),
@@ -1042,6 +1137,21 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
     }
     return FReply::Unhandled();
 }
+FReply SDirectOrScutWorkstationWidget::OnKeyChar(const FGeometry &Geometry, const FCharacterEvent &E)
+{
+    if (!bDebugEightCamGrid && HasKeyboardFocus() && Prompt.IsValid() && E.GetCharacter() >= 32 &&
+        E.GetCharacter() != 127 && !E.IsControlDown() && !E.IsAltDown())
+    {
+        SetConsoleOpen(true);
+        if (IsPromptFocused())
+        {
+            // Redispatch after focus transfer so Slate's editable child handles the first character too.
+            FSlateApplication::Get().ProcessKeyCharEvent(E);
+            return FReply::Handled();
+        }
+    }
+    return SCompoundWidget::OnKeyChar(Geometry, E);
+}
 FReply SDirectOrScutWorkstationWidget::OnKeyDown(const FGeometry &Geometry, const FKeyEvent &E)
 {
     if (!bDebugEightCamGrid || bConsoleOpen || !Sim->bWorkstationVisible)
@@ -1197,7 +1307,18 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
         const int32 Crew = Sim->FollowedCrew, Room = Sim->Simulation.Bodies[Crew].Room;
         if (Crew != LastFollowedCrew || Room != LastFollowRoom || SeenFollowRevision != Sim->FollowRevision)
         {
-            SelectFeed(ACompartmentCameraRig::FeedForRoom(Room), false);
+            const int32 Feed = ACompartmentCameraRig::FeedForRoom(Room);
+            if (bDebugEightCamGrid || Crew != LastFollowedCrew || SeenFollowRevision != Sim->FollowRevision)
+            {
+                SelectFeed(Feed, false);
+            }
+            else
+            {
+                // Passive observations share the same source-independent pacing gate as future directors.
+                PresentOptic(Room, EInlinePresentationIntent::Passive);
+                ActiveFeed = Feed;
+                SelectedCameraIndex = Feed - 1;
+            }
         }
         LastFollowedCrew = Crew;
         LastFollowRoom = Room;
@@ -1741,11 +1862,11 @@ const FTerminalStreamEntry *SDirectOrScutWorkstationWidget::FindTerminalEntry(ui
 {
     return TerminalStream.FindByPredicate([Id](const FTerminalStreamEntry &Entry) { return Entry.Id == Id; });
 }
-TSharedPtr<FInlineOpticSlot> SDirectOrScutWorkstationWidget::FindInlineOpticSlot(uint64 Id) const
+TSharedPtr<FInlineOpticSlot> SDirectOrScutWorkstationWidget::FindInlineOpticSlot(uint64 Id, int32 SubjectIndex) const
 {
     for (const auto &Slot : LiveInlineOptics)
     {
-        if (Slot->EntryId == Id)
+        if (Slot->EntryId == Id && Slot->SubjectIndex == SubjectIndex)
         {
             return Slot;
         }
@@ -1802,8 +1923,43 @@ void SDirectOrScutWorkstationWidget::ReleaseInlineOptic(TSharedRef<FInlineOpticS
     Slot->EntryId = 0;
     Slot->Wipe = 0;
 }
-void SDirectOrScutWorkstationWidget::AppendTerminalEntry(FTerminalStreamEntry Entry)
+bool SDirectOrScutWorkstationWidget::CanEmitPassiveAttachment(const FInlineAttachmentRef &Ref) const
 {
+    const auto Age = [this](float Time) { return FMath::Fmod(PresentationSeconds - Time + 1024.f, 1024.f); };
+    // Bound all passive traffic, then deduplicate content regardless of who requested it.
+    if (LastPassiveAttachmentAt >= 0 && Age(LastPassiveAttachmentAt) < 2.f)
+    {
+        return false;
+    }
+    for (const auto &Entry : TerminalStream)
+    {
+        if (!Entry.Attachment.IsSet())
+        {
+            continue;
+        }
+        const auto &Old = Entry.Attachment.GetValue();
+        if (Old.Kind != Ref.Kind || Old.SubjectCount != Ref.SubjectCount || Old.bSideBySide != Ref.bSideBySide ||
+            Old.Subject != Ref.Subject || (Ref.SubjectCount == 2 && Old.Subjects[1] != Ref.Subjects[1]))
+        {
+            continue;
+        }
+        if (Age(Entry.PresentedAt) < 8.f || FindInlineOpticSlot(Entry.Id))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+bool SDirectOrScutWorkstationWidget::AppendTerminalEntry(FTerminalStreamEntry Entry, EInlinePresentationIntent Intent)
+{
+    if (Entry.Attachment.IsSet() && Intent == EInlinePresentationIntent::Passive)
+    {
+        if (!CanEmitPassiveAttachment(Entry.Attachment.GetValue()))
+        {
+            return false;
+        }
+        LastPassiveAttachmentAt = PresentationSeconds;
+    }
     if (TerminalStream.Num() >= 128)
     {
         const uint64 Evicted = TerminalStream[0].Id;
@@ -1819,53 +1975,82 @@ void SDirectOrScutWorkstationWidget::AppendTerminalEntry(FTerminalStreamEntry En
     }
     Entry.Id = NextTerminalEntryId++;
     Entry.Text = Entry.Text.Left(2048);
-    if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
+    Entry.PresentedAt = PresentationSeconds;
+    if (Entry.Attachment.IsSet())
     {
-        while (LiveInlineOptics.Num() >= 2)
-        {
-            ReleaseInlineOptic(LiveInlineOptics[0].ToSharedRef());
-            LiveInlineOptics.RemoveAt(0);
-        }
-        const int32 Feed = ACompartmentCameraRig::FeedForRoom(Entry.Attachment->Subject);
-        TSharedPtr<FInlineOpticSlot> Slot;
-        for (const auto &Candidate : InlineOpticPool)
-        {
-            if (Candidate->EntryId == 0)
-            {
-                Slot = Candidate;
-                break;
-            }
-        }
-        if (!Slot)
-        {
-            check(InlineOpticPool.Num() < 2);
-            Slot = MakeShared<FInlineOpticSlot>();
-            InlineOpticPool.Add(Slot);
-        }
-        Slot->EntryId = Entry.Id;
-        if (TerminalMaterials[Feed].IsValid())
-        {
-            if (!Slot->Material.IsValid())
-            {
-                Slot->Material.Reset(
-                    UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
-            }
-            ApplyTerminalMaterialParameters(*Slot->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(900, 506),
-                                            PresentationSeconds, 0, 0);
-            Slot->Brush.SetResourceObject(Slot->Material.Get());
-        }
-        else
-        {
-            Slot->Brush.SetResourceObject(Rig->Targets[Feed].Get());
-        }
-        Slot->Brush.ImageSize = FVector2D(1024, 576);
-        Slot->Brush.DrawAs = ESlateBrushDrawType::Image;
-        LiveInlineOptics.Add(Slot);
+        Entry.Attachment->Subjects[0] = Entry.Attachment->Subject;
     }
+    BindInlineOptics(Entry);
     TerminalStream.Add(MoveTemp(Entry));
     if (!bDebugEightCamGrid && Log.IsValid())
     {
         RebuildUnifiedStream();
+    }
+    return true;
+}
+void SDirectOrScutWorkstationWidget::BindInlineOptics(const FTerminalStreamEntry &Entry)
+{
+    if (Entry.Attachment.IsSet() && Entry.Attachment->Kind == EInlineAttachmentKind::OpticFeed)
+    {
+        for (int32 Index = LiveInlineOptics.Num() - 1; Index >= 0; --Index)
+        {
+            if (LiveInlineOptics[Index]->EntryId == Entry.Id)
+            {
+                ReleaseInlineOptic(LiveInlineOptics[Index].ToSharedRef());
+                LiveInlineOptics.RemoveAt(Index);
+            }
+        }
+        while (LiveInlineOptics.Num() + Entry.Attachment->SubjectCount > 2)
+        {
+            const uint64 OldId = LiveInlineOptics[0]->EntryId;
+            for (int32 Index = LiveInlineOptics.Num() - 1; Index >= 0; --Index)
+            {
+                if (LiveInlineOptics[Index]->EntryId == OldId)
+                {
+                    ReleaseInlineOptic(LiveInlineOptics[Index].ToSharedRef());
+                    LiveInlineOptics.RemoveAt(Index);
+                }
+            }
+        }
+        for (int32 SubjectIndex = 0; SubjectIndex < Entry.Attachment->SubjectCount; ++SubjectIndex)
+        {
+            const int32 Feed = ACompartmentCameraRig::FeedForRoom(Entry.Attachment->Subjects[SubjectIndex]);
+            TSharedPtr<FInlineOpticSlot> Slot;
+            for (const auto &Candidate : InlineOpticPool)
+            {
+                if (Candidate->EntryId == 0)
+                {
+                    Slot = Candidate;
+                    break;
+                }
+            }
+            if (!Slot)
+            {
+                check(InlineOpticPool.Num() < 2);
+                Slot = MakeShared<FInlineOpticSlot>();
+                InlineOpticPool.Add(Slot);
+            }
+            Slot->EntryId = Entry.Id;
+            Slot->SubjectIndex = SubjectIndex;
+            if (TerminalMaterials[Feed].IsValid())
+            {
+                if (!Slot->Material.IsValid())
+                {
+                    Slot->Material.Reset(
+                        UMaterialInstanceDynamic::Create(TerminalMaterials[Feed]->Parent, GetTransientPackage()));
+                }
+                ApplyTerminalMaterialParameters(*Slot->Material.Get(), Rig->Targets[Feed].Get(), FVector2f(900, 506),
+                                                PresentationSeconds, 0, 0);
+                Slot->Brush.SetResourceObject(Slot->Material.Get());
+            }
+            else
+            {
+                Slot->Brush.SetResourceObject(Rig->Targets[Feed].Get());
+            }
+            Slot->Brush.ImageSize = FVector2D(1024, 576);
+            Slot->Brush.DrawAs = ESlateBrushDrawType::Image;
+            LiveInlineOptics.Add(Slot);
+        }
     }
 }
 void SDirectOrScutWorkstationWidget::AppendTerminalProse(const FString &Text)
@@ -1890,15 +2075,21 @@ void SDirectOrScutWorkstationWidget::ResetTerminalPresentation()
         bCrewReportOverride[I] = false;
     }
     PresentationSeconds = 0;
+    LastPassiveAttachmentAt = -1;
     SetPresentationNoise(0, 0);
     UnifiedEventCursor = Sim->Events.Num();
-    AppendTerminalProse(
-        TEXT("MOTHER-7> Carrier established. Eight compartments answer. Their silence is not evidence of safety."));
-    PresentOptic(0);
-    PresentInstrument(ETerminalInstrument::Schematic, 0);
-    PresentInstrument(ETerminalInstrument::ECG, 0);
+    ActiveFeed = ACompartmentCameraRig::FeedForRoom(0);
+    SelectedCameraIndex = ActiveFeed - 1;
+    AppendTerminalProse(TEXT("+----------------------------------------------+\n")
+                            TEXT("|CARRIER: THETA-9 // MOTHER-7                  |\n")
+                                TEXT("|STATION OPERATIONS / PRIVATE TTY              |\n")
+                                    TEXT("|                                              |\n")
+                                        TEXT("|NOTICE: VERIFY SHIP AI CLAIMS BEFORE ACTING.  |\n")
+                                            TEXT("|OPTICS / TELEMETRY: AVAILABLE ON REQUEST.     |\n")
+                                                TEXT("|[ENTER] OR start_experiment TO INITIALIZE.    |\n")
+                                                    TEXT("+----------------------------------------------+"));
 }
-bool SDirectOrScutWorkstationWidget::AppendOpticReference(int32 Room, bool Focus)
+bool SDirectOrScutWorkstationWidget::AppendOpticReference(int32 Room, bool Focus, EInlinePresentationIntent Intent)
 {
     if (!Sim.IsValid() || !Rig.IsValid() || Room < 0 || Room >= 8)
     {
@@ -1908,20 +2099,25 @@ bool SDirectOrScutWorkstationWidget::AppendOpticReference(int32 Room, bool Focus
     Entry.Text = FString::Printf(TEXT("DIRECTOR> %s optical carrier: %s."), Focus ? TEXT("Present") : TEXT("Secondary"),
                                  DirectOrScut::RoomName(Room));
     Entry.Attachment = FInlineAttachmentRef{EInlineAttachmentKind::OpticFeed, Room, Sim->Simulation.TickIndex};
+    const uint64 EntryId = NextTerminalEntryId;
+    if (!AppendTerminalEntry(MoveTemp(Entry), Intent))
+    {
+        return false;
+    }
     if (Focus)
     {
         ActiveFeed = ACompartmentCameraRig::FeedForRoom(Room);
         SelectedCameraIndex = ActiveFeed - 1;
-        ActiveOpticEntryId = NextTerminalEntryId;
+        ActiveOpticEntryId = EntryId;
     }
-    AppendTerminalEntry(MoveTemp(Entry));
     return true;
 }
-bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room)
+bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room, EInlinePresentationIntent Intent)
 {
-    return AppendOpticReference(Room, true);
+    return AppendOpticReference(Room, true, Intent);
 }
-bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind, int32 Subject)
+bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind, int32 Subject,
+                                                       EInlinePresentationIntent Intent)
 {
     if ((Kind != ETerminalInstrument::ECG && Kind != ETerminalInstrument::Schematic) || Subject < 0 ||
         Subject >= (Kind == ETerminalInstrument::ECG ? 4 : 8))
@@ -1937,8 +2133,117 @@ bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind,
         FInlineAttachmentRef{Kind == ETerminalInstrument::ECG ? EInlineAttachmentKind::PulseStrip
                                                               : EInlineAttachmentKind::CompartmentSchematic,
                              Subject, Sim->Simulation.TickIndex};
-    AppendTerminalEntry(MoveTemp(Entry));
+    return AppendTerminalEntry(MoveTemp(Entry), Intent);
+}
+bool SDirectOrScutWorkstationWidget::PresentAttachment(EInlineAttachmentKind Kind, int32 First, int32 Second,
+                                                       EInlinePresentationIntent Intent)
+{
+    if (Kind != EInlineAttachmentKind::OpticFeed && Kind != EInlineAttachmentKind::PulseStrip &&
+        Kind != EInlineAttachmentKind::CompartmentSchematic && Kind != EInlineAttachmentKind::OcularScan)
+    {
+        return false;
+    }
+    const bool Crew = Kind == EInlineAttachmentKind::PulseStrip || Kind == EInlineAttachmentKind::OcularScan;
+    const int32 Limit = Crew ? 4 : 8;
+    if (!Sim.IsValid() || !Rig.IsValid() || First < 0 || First >= Limit || Second < -1 || Second >= Limit ||
+        Second == First || (Kind == EInlineAttachmentKind::OcularScan && Second != -1))
+    {
+        return false;
+    }
+    FTerminalStreamEntry Entry;
+    Entry.Text = TEXT("DIRECTOR> Requested comparative telemetry // PRESENTATION ONLY.");
+    FInlineAttachmentRef Ref{Kind, First, Sim->Simulation.TickIndex};
+    Ref.Subjects[0] = First;
+    Ref.Subjects[1] = Second < 0 ? First : Second;
+    Ref.SubjectCount = Second < 0 ? 1 : 2;
+    Ref.bSideBySide = Ref.SubjectCount == 2 && !Crew;
+    Entry.Attachment = Ref;
+    return AppendTerminalEntry(MoveTemp(Entry), Intent);
+}
+bool SDirectOrScutWorkstationWidget::CompareInlineAttachment(uint64 Id)
+{
+    auto *Entry = TerminalStream.FindByPredicate([Id](const FTerminalStreamEntry &E) { return E.Id == Id; });
+    if (!Entry || !Entry->Attachment.IsSet() || Entry->Attachment->Kind == EInlineAttachmentKind::OcularScan)
+    {
+        return false;
+    }
+    auto &Ref = Entry->Attachment.GetValue();
+    const int32 Limit = Ref.Kind == EInlineAttachmentKind::PulseStrip ? 4 : 8;
+    Ref.Subjects[1] = Ref.SubjectCount == 1 ? (Ref.Subject + 1) % Limit : (Ref.Subjects[1] + 1) % Limit;
+    if (Ref.Subjects[1] == Ref.Subject)
+    {
+        Ref.Subjects[1] = (Ref.Subjects[1] + 1) % Limit;
+    }
+    Ref.SubjectCount = 2;
+    Ref.bSideBySide = Ref.Kind != EInlineAttachmentKind::PulseStrip;
+    BindInlineOptics(*Entry);
+    bLogAutoScroll = true;
+    RebuildUnifiedStream();
     return true;
+}
+float SDirectOrScutWorkstationWidget::OcularDiameter(uint64 Id) const
+{
+    const auto *Entry = FindTerminalEntry(Id);
+    const float Age = Entry ? FMath::Max(0.f, PresentationSeconds - Entry->PresentedAt) : 0;
+    // One dilation and recovery, then a settled aperture. Never loops with the carrier clock.
+    return 3.2f + 1.6f * FMath::Sin(PI * FMath::Clamp(Age / 1.8f, 0.f, 1.f));
+}
+int32 SDirectOrScutWorkstationWidget::PaintInlineAttachment(FSlateWindowElementList &Elements, int32 Layer,
+                                                            const FGeometry &Geometry, uint64 Id) const
+{
+    const auto *Entry = FindTerminalEntry(Id);
+    if (!Entry || !Entry->Attachment.IsSet() || !Sim.IsValid())
+    {
+        return Layer;
+    }
+    const auto &Ref = Entry->Attachment.GetValue();
+    const FVector2f Size(Geometry.GetLocalSize());
+    TArray<FVector2f> Points = {{0, 0}, {Size.X, 0}, Size, {0, Size.Y}, {0, 0}};
+    DrawTerminalLines(Elements, Layer, Geometry, Points, FLinearColor(.08f, .3f, .14f));
+    if (Ref.Kind == EInlineAttachmentKind::OcularScan)
+    {
+        const FVector2f Center = Size * .5f;
+        const float Iris = FMath::Min(Size.X, Size.Y) * .4f;
+        for (float Radius : {Iris, Iris * OcularDiameter(Id) / 7.f})
+        {
+            Points.Reset();
+            for (int32 I = 0; I <= 64; ++I)
+            {
+                const float A = 2 * PI * I / 64;
+                Points.Add(Center + FVector2f(FMath::Cos(A), FMath::Sin(A)) * Radius);
+            }
+            DrawTerminalLines(Elements, Layer + 1, Geometry, Points, EvaluatePhosphorColor(.9f));
+        }
+        TArray<TArray<FVector2f>> Arcs;
+        BuildReticlePoints(Center, Iris * 1.15f, 4, .18f, Arcs);
+        for (const auto &Arc : Arcs)
+        {
+            DrawTerminalLines(Elements, Layer + 1, Geometry, Arc, EvaluatePhosphorColor(.6f));
+        }
+        return Layer + 2;
+    }
+    for (int32 I = 0; I < Ref.SubjectCount; ++I)
+    {
+        if (Ref.Kind == EInlineAttachmentKind::PulseStrip)
+        {
+            BuildPulseTrace(Size - FVector2f(12, 12), PresentationSeconds + I * .12f,
+                            Sim->TerminalBiometrics(Ref.Subjects[I]).HeartRateBPM, Points);
+            for (auto &P : Points)
+            {
+                P += FVector2f(6, 6);
+            }
+            DrawTerminalLines(Elements, Layer + I + 1, Geometry, Points,
+                              I == 0 ? EvaluatePhosphorColor(.95f) : FLinearColor(.95f, .58f, .16f));
+        }
+        else
+        {
+            const float Width = Size.X / Ref.SubjectCount;
+            const auto Child =
+                Geometry.MakeChild(FVector2f(Width, Size.Y), FSlateLayoutTransform(FVector2f(I * Width, 0)));
+            PaintTerminalInstrument(Elements, Layer + 1, Child, ETerminalInstrument::Schematic, Ref.Subjects[I]);
+        }
+    }
+    return Layer + 5;
 }
 void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
 {
@@ -2002,6 +2307,53 @@ bool SDirectOrScutWorkstationWidget::HandlePresentationCommand(const FString &In
         }
         return -1;
     };
+    const auto CrewId = [](const FString &Name)
+    {
+        const TCHAR *Names[] = {TEXT("vale"), TEXT("chen"), TEXT("ortiz"), TEXT("ash")};
+        for (int32 I = 0; I < 4; ++I)
+        {
+            if (Name == Names[I])
+            {
+                return I;
+            }
+        }
+        return -1;
+    };
+    if (Words[0] == TEXT("compare") || (Words[0] == TEXT("show_widget") && Words.Num() >= 2 &&
+                                        (Words[1] == TEXT("ocular") || (Words[1] == TEXT("ecg") && Words.Num() == 4))))
+    {
+        bool Accepted = false;
+        if (Words.Num() >= 2)
+        {
+            const bool ECG = Words[1] == TEXT("ecg"), Ocular = Words[1] == TEXT("ocular");
+            const auto Kind = ECG                             ? EInlineAttachmentKind::PulseStrip
+                              : Ocular                        ? EInlineAttachmentKind::OcularScan
+                              : Words[1] == TEXT("schematic") ? EInlineAttachmentKind::CompartmentSchematic
+                                                              : EInlineAttachmentKind::OpticFeed;
+            if (ECG && Words.Num() == 2 && Words[0] == TEXT("compare"))
+            {
+                Accepted = PresentAttachment(Kind, 0, 1);
+            }
+            else if ((Words.Num() == 4 && !Ocular &&
+                      (ECG || Words[1] == TEXT("schematic") || Words[1] == TEXT("cam"))) ||
+                     (Words.Num() == 3 && Ocular && Words[0] == TEXT("show_widget")))
+            {
+                const int32 First = ECG || Ocular ? CrewId(Words[2]) : RoomId(Words[2]);
+                const int32 Second = Ocular ? -1 : ECG ? CrewId(Words[3]) : RoomId(Words[3]);
+                // Missing/invalid second subjects must never become a single-subject success.
+                if (Ocular || Second >= 0)
+                {
+                    Accepted = PresentAttachment(Kind, First, Second);
+                }
+            }
+        }
+        if (!Accepted)
+        {
+            AppendTerminalProse(TEXT("SYSTEM> Usage: compare ecg [subjectA subjectB] | compare schematic|cam roomA "
+                                     "roomB | show_widget ocular subject."));
+        }
+        return true;
+    }
     if (Words[0] == TEXT("show_cam"))
     {
         if (Words.Num() != 2 || !PresentOptic(RoomId(Words[1])))
@@ -2087,7 +2439,7 @@ void SDirectOrScutWorkstationWidget::UpdateTerminalPresentation(float Delta, con
         {
             continue;
         }
-        const int32 Room = Entry->Attachment->Subject;
+        const int32 Room = Entry->Attachment->Subjects[Slot->SubjectIndex];
         Slot->Wipe = FMath::Min(1.f, Slot->Wipe + Step / .65f);
         if (!Slot->Material.IsValid())
         {
@@ -2289,7 +2641,8 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildOpticFrame(const FInlin
     // The image retains the small slot while painted; the slot holds only a weak image pointer (no cycle).
     auto Image = SNew(SImage)
                      .Image_Lambda([Slot]() { return &Slot->Brush; })
-                     .Tag(FName(*FString::Printf(TEXT("ScutInlineOpticImage%llu"), Slot->EntryId)));
+                     .Tag(FName(*FString::Printf(TEXT("ScutInlineOpticImage%llu%s"), Slot->EntryId,
+                                                 Slot->SubjectIndex ? TEXT("Secondary") : TEXT(""))));
     Slot->Image = Image;
     auto View = SNew(SOverlay).Clipping(EWidgetClipping::ClipToBounds) + SOverlay::Slot()[Image] +
                 SOverlay::Slot()[SNew(SDirectOrScutInstrument)
@@ -2313,18 +2666,14 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildOpticFrame(const FInlin
                                                         ? TEXT("OFFLINE; NO LIVE CARRIER")
                                                         : TEXT("LIVE")));
                             })];
-    Contents->AddSlot()
-        .AutoHeight()[SNew(SBox)
-                          .WidthOverride_Lambda([this]() { return InlineOpticWidth(); })
-                          .HeightOverride_Lambda([this]() { return InlineOpticWidth() * .5625f; })[View]];
-    return SNew(SBorder)
-        .Tag(TEXT("ScutInlineOptic"))
-        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-        .BorderBackgroundColor(FLinearColor(.08f, .3f, .14f))
-        .Padding(1)[SNew(SBorder)
-                        .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                        .BorderBackgroundColor(FLinearColor(.004f, .012f, .007f))
-                        .Padding(6)[Contents]];
+    Contents->AddSlot().AutoHeight()
+        [SNew(SBox)
+             .WidthOverride_Lambda([this, Ref]() { return InlineOpticWidth() / (Ref.bSideBySide ? 2.f : 1.f); })
+             .HeightOverride_Lambda([this, Ref]()
+                                    { return InlineOpticWidth() * .5625f / (Ref.bSideBySide ? 2.f : 1.f); })[View]];
+    return SNew(SVerticalBox).Tag(TEXT("ScutInlineOptic")) + SVerticalBox::Slot().AutoHeight()[PhosphorHairline()] +
+           SVerticalBox::Slot().AutoHeight().Padding(0, 4)[Contents] +
+           SVerticalBox::Slot().AutoHeight()[PhosphorHairline()];
 }
 TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
 {
@@ -2498,81 +2847,88 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                                               Sim->bAILink ? TEXT("LINKED") : TEXT("LOCAL")));
                                       })]];
     auto Left = SNew(SVerticalBox);
-    Left->AddSlot().FillHeight(1)[TerminalDeckPanel(
-        TEXT("ScutTeletypePanel"), TEXT("MOTHER-7> // LIVE TELETYPED CARRIER"),
-        SAssignNew(LogScroll, SScrollBox)
-                .Tag(TEXT("ScutTerminalStream"))
-                .Clipping(EWidgetClipping::ClipToBoundsAlways)
-                .ScrollBarStyle(&SlimScrollStyle)
-                .ScrollBarThickness(FVector2D(3, 3))
-                .OnUserScrolled_Lambda([this](float Offset)
-                                       { bLogAutoScroll = Offset >= LogScroll->GetScrollOffsetOfEnd() - 2; }) +
-            SScrollBox::Slot()[SAssignNew(Log, SVerticalBox).Tag(TEXT("ScutInlineStream"))])];
-    Left->AddSlot().AutoHeight().Padding(0, 5, 0, 0)[SNew(SButton)
-                                                         .Tag(TEXT("ScutInitializeExperiment"))
-                                                         .IsFocusable(false)
-                                                         .Visibility_Lambda(
-                                                             [this]()
-                                                             {
-                                                                 return Sim->ExperimentPhase ==
-                                                                                EExperimentPhase::Briefing
-                                                                            ? EVisibility::Visible
-                                                                            : EVisibility::Collapsed;
-                                                             })
-                                                         .Text(FText::FromString(TEXT("[ENTER] INITIALIZE EXPERIMENT")))
-                                                         .OnClicked_Lambda(
-                                                             [this]()
-                                                             {
-                                                                 Sim->QueueConsoleCommand(TEXT("start_experiment"));
-                                                                 return FReply::Handled();
-                                                             })];
+    Left->AddSlot().FillHeight(1)[SNew(SBox).Tag(
+        TEXT("ScutTeletypePanel"))[SAssignNew(LogScroll, SScrollBox)
+                                       .Tag(TEXT("ScutTerminalStream"))
+                                       .Clipping(EWidgetClipping::ClipToBoundsAlways)
+                                       .ScrollBarStyle(&SlimScrollStyle)
+                                       .ScrollBarThickness(FVector2D(3, 3))
+                                       .OnUserScrolled_Lambda(
+                                           [this](float Offset)
+                                           { bLogAutoScroll = Offset >= LogScroll->GetScrollOffsetOfEnd() - 2; }) +
+                                   SScrollBox::Slot()[SAssignNew(Log, SVerticalBox).Tag(TEXT("ScutInlineStream"))]]];
+    Left->AddSlot().AutoHeight()[PhosphorHairline()];
+    auto Initialize = PhosphorSoftkey(
+        TEXT("ScutInitializeExperiment"), FText::FromString(TEXT("[ENTER] INITIALIZE EXPERIMENT")),
+        FSimpleDelegate::CreateLambda([this]() { Sim->QueueConsoleCommand(TEXT("start_experiment")); }));
+    Initialize->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+        [this]()
+        {
+            return Sim->ExperimentPhase == EExperimentPhase::Briefing ? EVisibility::Visible : EVisibility::Collapsed;
+        }));
+    Left->AddSlot().AutoHeight().Padding(0, 5, 0, 0)[Initialize];
     auto Bar = SNew(SHorizontalBox).Tag(TEXT("ScutInquiryBar"));
     const TCHAR *Labels[] = {TEXT("[1] FINDINGS"),      TEXT("[2] SUBJECTS"), TEXT("[3] BLINDSPOTS"),
                              TEXT("[4] CROSS-EXAMINE"), TEXT("[5] OVERRIDE"), TEXT("[R] SCRUB 15S")};
     for (int32 I = 0; I < 6; ++I)
     {
-        Bar->AddSlot().AutoWidth().Padding(0, 7, 10,
-                                           6)[SNew(SButton)
-                                                  .IsFocusable(false)
-                                                  .Tag(FName(*FString::Printf(TEXT("ScutInquiry%d"), I + 1)))
-                                                  .ButtonStyle(FCoreStyle::Get(), "NoBorder")
-                                                  .OnClicked_Lambda(
-                                                      [this, I]()
-                                                      {
-                                                          Inquiry(I);
-                                                          return FReply::Handled();
-                                                      })[SNew(STextBlock)
-                                                             .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-                                                             .ColorAndOpacity(EvaluatePhosphorColor(1))
-                                                             .Text(FText::FromString(Labels[I]))]];
+        Bar->AddSlot().AutoWidth().Padding(
+            0, 7, 6,
+            6)[PhosphorSoftkey(FName(*FString::Printf(TEXT("ScutInquiry%d"), I + 1)), FText::FromString(Labels[I]),
+                               FSimpleDelegate::CreateLambda([this, I]() { Inquiry(I); }))];
     }
     Left->AddSlot().AutoHeight()[Bar];
-    Left->AddSlot().AutoHeight()[SNew(SHorizontalBox) +
-                                 SHorizontalBox::Slot().AutoWidth().VAlign(
-                                     VAlign_Center)[SNew(STextBlock)
-                                                        .Text(FText::FromString(TEXT("> ")))
-                                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 17))
-                                                        .ColorAndOpacity(EvaluatePhosphorColor(1))] +
-                                 SHorizontalBox::Slot().FillWidth(
-                                     1)[SAssignNew(Prompt, SEditableTextBox)
-                                            .Tag(TEXT("ScutPrompt"))
-                                            .Text(Draft)
-                                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
-                                            .ForegroundColor(EvaluatePhosphorColor(1))
-                                            .BackgroundColor(FLinearColor(.003f, .008f, .004f))
-                                            .ClearKeyboardFocusOnCommit(false)
-                                            .HintText(FText::FromString(TEXT(
-                                                "show_cam med_bay | show_widget ecg vale | show_widget pip bridge")))
-                                            .OnKeyCharHandler_Lambda(
-                                                [this](const FGeometry &, const FCharacterEvent &E)
-                                                {
-                                                    const bool Suppress =
-                                                        SuppressPromptChar && (E.GetCharacter() == SuppressPromptChar ||
-                                                                               E.GetCharacter() == '~');
-                                                    SuppressPromptChar = 0;
-                                                    return Suppress ? FReply::Handled() : FReply::Unhandled();
-                                                })
-                                            .OnTextCommitted(this, &SDirectOrScutWorkstationWidget::Commit)]];
+    Left->AddSlot().AutoHeight()
+        [SNew(SHorizontalBox).Tag(TEXT("ScutPromptLine")) +
+         SHorizontalBox::Slot().AutoWidth().VAlign(
+             VAlign_Center)[SNew(STextBlock)
+                                .Text(FText::FromString(TEXT("> ")))
+                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 17))
+                                .ColorAndOpacity(EvaluatePhosphorColor(1))] +
+         SHorizontalBox::Slot().FillWidth(
+             1)[SNew(SOverlay) +
+                SOverlay::Slot()[SAssignNew(Prompt, SEditableTextBox)
+                                     .Tag(TEXT("ScutPrompt"))
+                                     .Style(&PhosphorPromptStyle)
+                                     .Text(Draft)
+                                     .Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
+                                     .ForegroundColor(EvaluatePhosphorColor(1))
+                                     .BackgroundColor(FLinearColor::Transparent)
+                                     .ClearKeyboardFocusOnCommit(false)
+                                     .OnKeyCharHandler_Lambda(
+                                         [this](const FGeometry &, const FCharacterEvent &E)
+                                         {
+                                             const bool Suppress =
+                                                 SuppressPromptChar &&
+                                                 (E.GetCharacter() == SuppressPromptChar || E.GetCharacter() == '~');
+                                             SuppressPromptChar = 0;
+                                             return Suppress ? FReply::Handled() : FReply::Unhandled();
+                                         })
+                                     .OnTextCommitted(this, &SDirectOrScutWorkstationWidget::Commit)] +
+                SOverlay::Slot()
+                    .HAlign(HAlign_Left)
+                    .VAlign(VAlign_Center)
+                    .Padding(TAttribute<FMargin>::CreateLambda(
+                        [this]()
+                        {
+                            const float TextWidth =
+                                FSlateApplication::Get()
+                                    .GetRenderer()
+                                    ->GetFontMeasureService()
+                                    ->Measure(Prompt->GetText(), FCoreStyle::GetDefaultFontStyle("Regular", 14))
+                                    .X;
+                            const float Available = float(Prompt->GetCachedGeometry().GetLocalSize().X);
+                            return FMargin(FMath::Clamp(TextWidth, 0.f, FMath::Max(0.f, Available - 16.f)), 0, 0, 0);
+                        }))[SNew(STextBlock)
+                                .Tag(TEXT("ScutBlockCursor"))
+                                .Visibility(EVisibility::HitTestInvisible)
+                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 17))
+                                .ColorAndOpacity(EvaluatePhosphorColor(1))
+                                .Text_Lambda(
+                                    [this]()
+                                    {
+                                        return FText::FromString(IsBlockCursorVisible() ? TEXT("\u2588") : TEXT(" "));
+                                    })]]];
     Workstation->AddSlot().FillHeight(1)
         [SNew(SHorizontalBox).Tag(TEXT("ScutPaneledWorkspace")) +
          SHorizontalBox::Slot().FillWidth(.56f).Padding(0, 0, 7,
@@ -2599,11 +2955,12 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
     {
         auto Row = SNew(SVerticalBox).Tag(FName(*FString::Printf(TEXT("ScutStreamEntry%llu"), Entry.Id)));
         const uint64 Id = Entry.Id;
+        const bool bMOTD = !Entry.Attachment.IsSet() && Entry.Text.StartsWith(TEXT("+---"));
         Row->AddSlot().AutoHeight().Padding(
             0, 2, 0, 5)[SNew(STextBlock)
                             .Tag(TEXT("ScutTeletypeLine"))
-                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
-                            .AutoWrapText(true)
+                            .Font(FCoreStyle::GetDefaultFontStyle(bMOTD ? "Mono" : "Regular", 13))
+                            .AutoWrapText(!bMOTD)
                             .ColorAndOpacity(EvaluatePhosphorColor(.9f))
                             .Text_Lambda(
                                 [this, Id]()
@@ -2615,49 +2972,128 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
         if (Entry.Attachment.IsSet())
         {
             const auto Ref = Entry.Attachment.GetValue();
+            auto Header = SNew(SHorizontalBox);
+            Row->AddSlot().AutoHeight()[Header];
+            if (Ref.Kind != EInlineAttachmentKind::OcularScan)
+            {
+                Header->AddSlot().AutoWidth()[PhosphorSoftkey(
+                    FName(*FString::Printf(TEXT("ScutInlineCompare%llu"), Id)),
+                    FText::FromString(Ref.Kind == EInlineAttachmentKind::PulseStrip ? TEXT("[+ OVERLAY]")
+                                                                                    : TEXT("[COMPARE]")),
+                    FSimpleDelegate::CreateLambda([this, Id]() { CompareInlineAttachment(Id); }))];
+            }
             if (Ref.Kind == EInlineAttachmentKind::OpticFeed)
             {
                 if (const auto Slot = FindInlineOpticSlot(Entry.Id))
                 {
-                    Row->AddSlot().AutoHeight().HAlign(HAlign_Left)[BuildOpticFrame(Ref, Slot.ToSharedRef())];
+                    auto Pair = SNew(SHorizontalBox)
+                                    .Tag(Ref.bSideBySide ? TEXT("ScutOpticComparison") : TEXT("ScutOpticSingle"));
+                    for (int32 I = 0; I < Ref.SubjectCount; ++I)
+                    {
+                        if (const auto Live = FindInlineOpticSlot(Id, I))
+                        {
+                            auto ViewRef = Ref;
+                            ViewRef.Subject = Ref.Subjects[I];
+                            Pair->AddSlot().AutoWidth()[BuildOpticFrame(ViewRef, Live.ToSharedRef())];
+                        }
+                    }
+                    Row->AddSlot().AutoHeight().HAlign(HAlign_Left)[Pair];
                 }
                 else
                 {
                     const uint64 Seconds = Ref.ObservationTick / 30;
-                    Row->AddSlot().AutoHeight().HAlign(HAlign_Left)
-                        [SNew(SButton)
-                             .IsFocusable(false)
-                             .ButtonStyle(FCoreStyle::Get(), "NoBorder")
-                             .Tag(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), Entry.Id)))
-                             .OnClicked_Lambda(
-                                 [this, Ref]()
-                                 {
-                                     bLogAutoScroll = true;
-                                     PresentOptic(Ref.Subject);
-                                     return FReply::Handled();
-                                 })[SNew(STextBlock)
-                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-                                        .ColorAndOpacity(EvaluatePhosphorColor(.8f))
-                                        .Text(FText::FromString(FString::Printf(
-                                            TEXT("[OPTIC REF // CAM-%02d %s @ %02llu:%02llu]"),
-                                            ACompartmentCameraRig::FeedForRoom(Ref.Subject),
-                                            DirectOrScut::RoomName(Ref.Subject), Seconds / 60, Seconds % 60)))]];
+                    Row->AddSlot().AutoHeight().HAlign(
+                        HAlign_Left)[SNew(SButton)
+                                         .IsFocusable(false)
+                                         .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                                         .Tag(FName(*FString::Printf(TEXT("ScutOpticRef%llu"), Entry.Id)))
+                                         .OnClicked_Lambda(
+                                             [this, Ref]()
+                                             {
+                                                 bLogAutoScroll = true;
+                                                 if (Ref.SubjectCount == 2)
+                                                 {
+                                                     PresentAttachment(Ref.Kind, Ref.Subject, Ref.Subjects[1]);
+                                                 }
+                                                 else
+                                                 {
+                                                     PresentOptic(Ref.Subject);
+                                                 }
+                                                 return FReply::Handled();
+                                             })[SNew(STextBlock)
+                                                    .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                                    .ColorAndOpacity(EvaluatePhosphorColor(.8f))
+                                                    .Text(FText::FromString(FString::Printf(
+                                                        TEXT("[OPTIC REF // CAM-%02d %s%s @ %02llu:%02llu]"),
+                                                        ACompartmentCameraRig::FeedForRoom(Ref.Subject),
+                                                        DirectOrScut::RoomName(Ref.Subject),
+                                                        Ref.SubjectCount == 2
+                                                            ? *FString::Printf(TEXT(" // %s"),
+                                                                               DirectOrScut::RoomName(Ref.Subjects[1]))
+                                                            : TEXT(""),
+                                                        Seconds / 60, Seconds % 60)))]];
                 }
             }
             else
             {
                 const bool Pulse = Ref.Kind == EInlineAttachmentKind::PulseStrip;
-                Row->AddSlot().AutoHeight()[TerminalDeckPanel(
-                    Pulse ? TEXT("ScutPulseAttachment") : TEXT("ScutSchematicAttachment"),
-                    Pulse ? TEXT("[PULSE STRIP] // LIVE SUBJECT TELEMETRY")
-                          : TEXT("[COMPARTMENT SCHEMATIC] // ROOM GEOMETRY"),
-                    SNew(SBox).HeightOverride(
-                        Pulse ? 86 : 130)[SNew(SDirectOrScutInstrument)
-                                              .Owner(SharedThis(this))
-                                              .Kind(Pulse ? ETerminalInstrument::ECG : ETerminalInstrument::Schematic)
-                                              .Subject(Ref.Subject)
-                                              .Clipping(EWidgetClipping::ClipToBounds)
-                                              .Tag(Pulse ? TEXT("ScutInlineECG") : TEXT("ScutZoomedRoomSchematic"))])];
+                const bool Ocular = Ref.Kind == EInlineAttachmentKind::OcularScan;
+                Header->AddSlot().FillWidth(1).VAlign(
+                    VAlign_Center)[SNew(STextBlock)
+                                       .Tag(TEXT("ScutInlineTelemetryHeader"))
+                                       .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                                       .ColorAndOpacity(EvaluatePhosphorColor(.95f))
+                                       .Text_Lambda(
+                                           [this, Id]()
+                                           {
+                                               const auto *E = FindTerminalEntry(Id);
+                                               if (!E || !E->Attachment.IsSet())
+                                               {
+                                                   return FText::GetEmpty();
+                                               }
+                                               const auto &R = E->Attachment.GetValue();
+                                               const TCHAR *Names[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"),
+                                                                       TEXT("ASH")};
+                                               if (R.Kind == EInlineAttachmentKind::OcularScan)
+                                               {
+                                                   return FText::FromString(FString::Printf(
+                                                       TEXT("[OCULAR SCAN] %s // %.2f mm // AI-REPORTED"),
+                                                       Names[R.Subject], OcularDiameter(Id)));
+                                               }
+                                               if (R.Kind == EInlineAttachmentKind::PulseStrip)
+                                               {
+                                                   const float A = Sim->TerminalBiometrics(R.Subject).HeartRateBPM;
+                                                   if (R.SubjectCount == 2)
+                                                   {
+                                                       const float B =
+                                                           Sim->TerminalBiometrics(R.Subjects[1]).HeartRateBPM;
+                                                       return FText::FromString(FString::Printf(
+                                                           TEXT("%s %.0f BPM // %s %.0f BPM [%+.0f DELTA]"),
+                                                           Names[R.Subject], A, Names[R.Subjects[1]], B, B - A));
+                                                   }
+                                                   return FText::FromString(FString::Printf(
+                                                       TEXT("[PULSE STRIP] %s %.0f BPM"), Names[R.Subject], A));
+                                               }
+                                               return FText::FromString(
+                                                   R.SubjectCount == 2
+                                                       ? FString::Printf(TEXT("[SCHEMATIC] %s // %s"),
+                                                                         DirectOrScut::RoomName(R.Subject),
+                                                                         DirectOrScut::RoomName(R.Subjects[1]))
+                                                       : FString::Printf(TEXT("[SCHEMATIC] %s"),
+                                                                         DirectOrScut::RoomName(R.Subject)));
+                                           })];
+                Row->AddSlot().AutoHeight()[SNew(SBox)
+                                                .HeightOverride(Pulse ? 86 : 130)
+                                                .Tag(Pulse    ? TEXT("ScutPulseAttachment")
+                                                     : Ocular ? TEXT("ScutOcularAttachment")
+                                                              : TEXT("ScutSchematicAttachment"))
+                                                    [SNew(SScutInlineVector)
+                                                         .Owner(SharedThis(this))
+                                                         .EntryId(Id)
+                                                         .Clipping(EWidgetClipping::ClipToBounds)
+                                                         .Tag(Pulse    ? TEXT("ScutInlineECG")
+                                                              : Ocular ? TEXT("ScutInlineOcular")
+                                                                       : TEXT("ScutZoomedRoomSchematic"))]];
             }
         }
         Log->AddSlot().AutoHeight().Padding(0, 2, 0, 10)[Row];
