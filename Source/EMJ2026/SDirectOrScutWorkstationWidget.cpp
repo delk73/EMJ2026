@@ -106,7 +106,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
     }
     auto Header=SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Tag(FName(*FString::Printf(TEXT("ScutFeedLabel%d"),F))).Font(FCoreStyle::GetDefaultFontStyle("Bold",9)).AutoWrapText(true)
-            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s%s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("NOMINAL"),Sim->IsCameraTallyActive(R)?TEXT(" [REC // TALLY LIVE]"):TEXT("")));})]
+            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s%s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("PRESSURIZED / OPEN"),Sim->IsCameraTallyActive(R)?TEXT(" [REC // TALLY LIVE]"):TEXT("")));})]
         +SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Tag(FName(*FString::Printf(TEXT("ScutInspect%d"),F))).IsFocusable(false)
             .OnClicked_Lambda([this,F](){SetConsoleOpen(false);SelectFeed(F,false);ExpandSelected();return FReply::Handled().SetUserFocus(AsShared());})
             [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).Text(FText::FromString(TEXT("[INSPECT]")))]];

@@ -23,11 +23,10 @@ void ADirectOrScutSetAnchor::PopulateDefaults(UWorld* World)
 {
     for(int32 R=0;R<8;++R)for(int32 RoleId=0;RoleId<7;++RoleId)for(int32 Slot=0;Slot<(RoleId==4 || RoleId==5?4:1);++Slot)
     {
-        const FVector Positions[]={FVector(450,-350,0),FVector(-450,-350,0),FVector(-180,350,0),FVector(180,350,0),FVector(-800,500+Slot*100,0),FVector(-450+Slot*220,100,45),FVector(850,550,0)};
+        const FVector Positions[]={FVector(-100,-220,0),FVector(-100,220,0),FVector(-180,350,0),FVector(180,350,0),FVector(-800,500+Slot*100,0),FVector(-450+Slot*220,100,45),FVector(-350,250,0)};
         const auto Stage=UDirectOrScutSimSubsystem::DefaultSetTransform(R);
         FVector Local=Positions[RoleId];
         float Facing=RoleId==0 || RoleId==1?0.f:-90.f;
-        if(R==2 && RoleId==0)Local=FVector(270,-350,0);
         if(R==3 && RoleId==5){Local=FVector(150,Slot%2?470:-470,130);if(Slot>=2){Local.Y+=Slot%2?-220:220;Local.Z=0;}Facing=0;}
         if(RoleId==4)Local=FVector(-800,400+Slot*105,0);
         const FVector Location=Stage.WorldOrigin+FRotator(0,Stage.Yaw,0).RotateVector(Local);

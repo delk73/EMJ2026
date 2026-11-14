@@ -12,6 +12,10 @@ ARoomSetBase::ARoomSetBase()
 {
     PrimaryActorTick.bCanEverTick=true;
     SetMesh=CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("SoundstageGeometry")); RootComponent=SetMesh;
+    ContainmentBarrier=CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("ContainmentBarrier"));
+    ContainmentBarrier->SetupAttachment(RootComponent);
+    ContainmentBarrier->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    ContainmentBarrier->SetVisibility(false);
     auto* Label=CreateDefaultSubobject<UTextRenderComponent>(TEXT("RoomLabel"));
     Label->SetupAttachment(RootComponent);Label->SetRelativeLocation(FVector(1000,0,380));Label->SetRelativeRotation(FRotator(0,180,0));Label->SetHorizontalAlignment(EHTA_Center);Label->SetWorldSize(38);
     auto* OverviewLabel=CreateDefaultSubobject<UTextRenderComponent>(TEXT("OverviewLabel"));
@@ -51,13 +55,19 @@ void ARoomSetBase::OnConstruction(const FTransform& T)
     for(float Y:{-865.f,865.f}) Block({0,Y,30},{Length,12,12},2);
     switch(RoomId) {case 0:BuildReactor();break;case 1:BuildCorridor();break;case 2:BuildBridge();break;case 3:BuildMedical();break;case 4:BuildObservation();break;case 5:BuildQuarters();break;case 6:BuildArchive();break;case 7:BuildAirlock();break;default:break;}
     Finish(SetMesh);
+    ContainmentBarrier->GetDynamicMesh()->Reset();Materials(ContainmentBarrier);
+    // A thin containment field at the staged threshold, not articulated door art.
+    Box(ContainmentBarrier->GetDynamicMesh(),{-150,250,135},{6,220,270},4);
+    for(int32 I=0;I<5;++I)Box(ContainmentBarrier->GetDynamicMesh(),{-155,250,30+I*50.f},{4,220,12},3);
+    Finish(ContainmentBarrier);ContainmentBarrier->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 void ARoomSetBase::BeginPlay()
 {
     Super::BeginPlay();
     // Rebuild CPU-only footprint metadata after map load; the mesh reset is idempotent.
     OnConstruction(GetActorTransform());
-    auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();if(!S || RoomId==1)return;
+    auto* S=GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>();if(!S)return;
+    S->RegisterRoomSet(this);if(RoomId==1)return;
     const float Yaw=RoomId>=2?Stations()[RoomId-2].Face*45.f:0;
     const FVector Center=RoomId>=2?Radial(Yaw,PodCenterRadius()):FVector::ZeroVector;
     const float Scale=RoomId>=2?1.4f:1;
@@ -132,4 +142,9 @@ void ARoomSetBase::BuildCorridor()
     }
     for(float X=-2600;X<3000;X+=400) {for(float Y:{-800.f,800.f}) {Block({X,Y,220},{24,30,430},2);Block({X,Y*.95f,40},{270,130,12},7);}
         for(float Y:{-740.f,740.f}) {Block({X,Y,395},{35,300,40},1,45);Block({X,Y,60},{35,300,40},1,45);} }
+}
+
+void ARoomSetBase::ApplyContainmentBarrier(bool Sealed)
+{
+    ContainmentBarrier->SetVisibility(Sealed);
 }

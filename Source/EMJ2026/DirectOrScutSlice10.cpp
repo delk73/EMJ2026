@@ -200,4 +200,5 @@ void UDirectOrScutSimSubsystem::FixedStep()
             RecordCue(U.Room,Significant?.7f:.2f,FString::Printf(TEXT("Crew %d: %s | BPM %.0f RPM %.0f pupil %.1f mm"),I,DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM),Significant);
     }
     EvaluateExperimentEnding();
+    SynchronizeActors();
 }

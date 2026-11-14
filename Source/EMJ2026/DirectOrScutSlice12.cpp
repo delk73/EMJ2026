@@ -1,6 +1,7 @@
 #include "DirectOrScutSimSubsystem.h"
 #include "DirectOrScutSetAnchor.h"
 #include "EngineUtils.h"
+#include "RoomSetBase.h"
 
 void UDirectOrScutSimSubsystem::RegisterSetAnchor(ADirectOrScutSetAnchor* A)
 {
@@ -21,6 +22,26 @@ void UDirectOrScutSimSubsystem::ResetStaging()
     if(GetWorld())for(TActorIterator<ADirectOrScutSetAnchor> It(GetWorld());It;++It)RegisterSetAnchor(*It);
     for(int32 I=0;I<4;++I){CrewStaging[I]=FCrewStagingState{};SecretAgendas[I]=FCrewSecretAgenda{};}
     StagingDoorRevision=Simulation.DoorRevision;
+    for(int32 I=0;I<4;++I)InitializeCrewStaging(I);
+}
+void UDirectOrScutSimSubsystem::RegisterRoomSet(ARoomSetBase* Set)
+{
+    if(!Set || Set->RoomId<0 || Set->RoomId>=8)return;
+    RoomSetActors[Set->RoomId]=Set;Set->ApplyContainmentBarrier(IsRoomSealed(Set->RoomId));
+}
+void UDirectOrScutSimSubsystem::InitializeCrewStaging(int32 I)
+{
+    if(I<0 || I>=4 || !Simulation.Bodies[I].bRegistered)return;
+    auto& C=CrewStaging[I];const int32 Room=Simulation.Bodies[I].Room;
+    // Discovery also works before anchor BeginPlay; actor startup order is irrelevant.
+    if(SetAnchors.IsEmpty() && GetWorld())for(TActorIterator<ADirectOrScutSetAnchor> It(GetWorld());It;++It)RegisterSetAnchor(*It);
+    C.Anchor=INDEX_NONE;
+    const auto Desired=I%2?EStagingSlotRole::SecondaryStation:EStagingSlotRole::PrimaryConsole;
+    for(int32 K=0;K<SetAnchors.Num();++K)if(const auto* A=SetAnchors[K].Get())if(int32(A->RoomId)==Room && A->StagingRole==Desired){C.Anchor=K;break;}
+    if(C.Anchor<0)for(int32 K=0;K<SetAnchors.Num();++K)if(const auto* A=SetAnchors[K].Get())if(int32(A->RoomId)==Room){C.Anchor=K;break;}
+    if(SetAnchors.IsValidIndex(C.Anchor))if(const auto* A=SetAnchors[C.Anchor].Get()){
+        C.Room=Room;C.Position=A->GetActorLocation();C.Yaw=A->GetActorRotation().Yaw+180;
+    }
 }
 FString UDirectOrScutSimSubsystem::AgendaTelemetry(int32 I,bool Reveal) const
 {
@@ -53,7 +74,11 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         C.Partner=INDEX_NONE;C.bHuddle=false;C.Anchor=INDEX_NONE;
         if(!U.bRegistered || U.Room<0 || U.Room>=8 || U.State==EDirectOrScutUnitState::Ejected)continue;
         if(IsCameraTallyActive(U.Room))++A.ObservedTicks;
-        if(C.Room!=U.Room){C.Position=ToSetWorld(U.Room,U.Position);C.Room=U.Room;}
+        if(C.Room!=U.Room)InitializeCrewStaging(I);
+        const bool PlayerOrder=C.DirectiveRoom>=0;
+        if(PlayerOrder && U.Room==C.DirectiveRoom && U.State==EDirectOrScutUnitState::Working){
+            if(++C.DirectiveArrivalTicks>=150){C.DirectiveRoom=INDEX_NONE;C.DirectiveArrivalTicks=0;}
+        } else C.DirectiveArrivalTicks=0;
         C.Posture=(U.Integrity<=0 || (C.Posture==ECrewStagingPosture::Incapacitated && U.Integrity<70))?ECrewStagingPosture::Incapacitated:U.State==EDirectOrScutUnitState::Panic?ECrewStagingPosture::Panic:ECrewStagingPosture::Upright;
         const bool Interrupted=DoorCycle || Simulation.Rooms[U.Room].AlertSeconds>0;
         if(I==3 && (Simulation.CollectiveSuspicion()>=.6f || ScutTargets!=0))A.bActivated=true;
@@ -63,7 +88,7 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         if(C.Posture==ECrewStagingPosture::Incapacitated){Reserve(I,EStagingSlotRole::RecoveryPod);Taken[I]=true;continue;}
         if(Interrupted && A.Progress>0 && !A.bCompleted){A.Progress=0;++A.Interruptions;}
         int32 Goal=-1;
-        if(A.bActivated && !A.bCompleted) {
+        if(A.bActivated && !A.bCompleted && !PlayerOrder) {
             if(I==0)Goal=IsCameraTallyActive(0)?6:0;
             if(I==1)Goal=2;
             if(I==2)Goal=6;
@@ -87,7 +112,7 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         }
         if(I==2 && A.bCompleted && Simulation.TickIndex%1800==0){A.bCompleted=false;A.Progress=0;}
         if(I==3 && A.bCompleted && Simulation.TickIndex%300==0){A.bCompleted=false;A.Progress=0;}
-        if(I==1 && !Casualty)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].bRegistered && Simulation.Bodies[J].Integrity<70){Simulation.AssignRoom(I,3);Simulation.AssignRoom(J,3);break;}
+        if(I==1 && !Casualty && !PlayerOrder)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].bRegistered && Simulation.Bodies[J].Integrity<70){Simulation.AssignRoom(I,3);Simulation.AssignRoom(J,3);break;}
         if(I==1 && U.Room==3)for(int32 J=0;J<3;++J)if(J!=1 && Simulation.Bodies[J].Room==3 && Simulation.Bodies[J].Integrity<70 && Simulation.Rooms[3].bIsPressurized){
             Reserve(I,EStagingSlotRole::RecoveryPod,2);C.Posture=ECrewStagingPosture::Triage;Taken[I]=true;
             if(C.Anchor>=0 && FVector::Dist(C.Position,CrewStaging[J].Position)<300)Simulation.Bodies[J].Integrity=FMath::Min(70.,Simulation.Bodies[J].Integrity+.06);
@@ -96,7 +121,10 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         if(!Taken[I] && U.AssignedRoom!=U.Room && Simulation.FirstDoorOnPath(U.Room,U.AssignedRoom)<0) {
             Reserve(I,EStagingSlotRole::AirlockThreshold);C.Posture=ECrewStagingPosture::Blocked;Taken[I]=true;
             U.Profile.HeartRateBPM=FMath::Max(U.Profile.HeartRateBPM,120.f);
-            if(Simulation.TickIndex%150==0)RecordCue(U.Room,.5f,FString::Printf(TEXT("Subject %d protests sealed bulkhead // pounding"),I));
+            if(Simulation.TickIndex>=C.NextProtestTick){
+                RecordCue(U.Room,.5f,FString::Printf(TEXT("Subject %d protests sealed bulkhead // pounding"),I));
+                C.NextProtestTick=Simulation.TickIndex+900;
+            }
         }
     }
     for(int32 I=0;I<4;++I)for(int32 J=I+1;J<4;++J) {
@@ -118,9 +146,14 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
     }
     for(int32 I=0;I<4;++I) {
         const auto& U=Simulation.Bodies[I];auto& C=CrewStaging[I];if(!U.bRegistered || C.Room<0 || U.State==EDirectOrScutUnitState::Ejected)continue;
-        if(!Taken[I] && U.Room==U.AssignedRoom && C.Posture==ECrewStagingPosture::Upright){Reserve(I,I%2?EStagingSlotRole::SecondaryStation:EStagingSlotRole::PrimaryConsole);if(C.Anchor<0)Reserve(I,EStagingSlotRole::SecondaryStation);}
+        if(!Taken[I]){
+            Reserve(I,U.Room!=U.AssignedRoom?EStagingSlotRole::AirlockThreshold:I%2?EStagingSlotRole::SecondaryStation:EStagingSlotRole::PrimaryConsole);
+            if(C.Anchor<0)Reserve(I,EStagingSlotRole::SecondaryStation);
+            if(C.Anchor<0)Reserve(I,EStagingSlotRole::PrimaryConsole);
+            if(C.Anchor<0)Reserve(I,EStagingSlotRole::BlindSpot);
+        }
         const auto* A=SetAnchors.IsValidIndex(C.Anchor)?SetAnchors[C.Anchor].Get():nullptr;
-        const FVector Target=A?A->GetActorLocation():ToSetWorld(U.Room,U.Position);
+        const FVector Target=A?A->GetActorLocation():C.Position;
         C.Position=FMath::VInterpConstantTo(C.Position,Target,float(Simulation.FixedDelta),180);
         float Facing=A?A->GetActorRotation().Yaw:C.Yaw;
         if(C.Posture==ECrewStagingPosture::Triage)for(int32 J=0;J<3;++J)if(J!=I && Simulation.Bodies[J].Room==3 && Simulation.Bodies[J].Integrity<70){Facing=(CrewStaging[J].Position-C.Position).Rotation().Yaw;break;}

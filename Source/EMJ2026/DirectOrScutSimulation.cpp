@@ -56,7 +56,8 @@ void FDirectOrScutSimulation::ResetRuntime()
     ObjectiveProgress=0; bShiftComplete=false; bObjectiveFailed=false; SweptRooms=0;
     for (auto& R:Rooms) R=FCompartmentState{};
     TickIndex=0; RandomState=1970; Accumulator=0; ++DoorRevision;
-    for (auto& D:Doors) D.bIsOpen=false;
+    // Interior station graph boots traversable. The exterior vacuum edge stays closed.
+    for (auto& D:Doors) D.bIsOpen=D.RoomB>=0;
     for (auto& U:Bodies)
     {
         const auto Old=U;
@@ -347,9 +348,8 @@ void FDirectOrScutSimulation::UpdateBody(FDirectOrScutUnitState& U)
         const FVector2D Delta=Target-U.Position;
         const FVector2D Movement=Delta.GetSafeNormal()*FMath::Min(Delta.Size(),Speed*FixedDelta);
         U.Position+=Movement; if (Vacuum) U.SuctionVelocity=Movement/FixedDelta;
-        const double Side=FVector2D::DotProduct(U.Position-D.Position,D.Normal);
-        U.Room=Side>0?D.RoomB:D.RoomA;
-        if (U.Room==-1) U.Room=U.CrossFromRoom; // Ejection occurs only beyond the full threshold.
+        // Publish the room change only after the complete threshold transit.
+        // Camera badges and anchor projection consume this same authoritative room.
         if (U.Position.Equals(Target,.01))
         {
             U.Room=U.CrossToRoom; U.bCrossing=false; U.ActiveDoor=-1; U.RouteCount=0; U.RouteRevision=MAX_uint32;

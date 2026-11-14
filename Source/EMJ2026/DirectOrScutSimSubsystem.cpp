@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "DirectOrScutSetAnchor.h"
 #include "EngineUtils.h"
+#include "RoomSetBase.h"
 
 namespace
 {
@@ -72,6 +73,8 @@ void UDirectOrScutSimSubsystem::RegisterCrew(ACrewUnitBlockout* Crew)
     BodyActors[I]=Crew;
     Simulation.RegisterBody(I,FVector2D(DirectOrScut::CrewSpawnPoint(I)),I+2,Crew->bAndroid);
     Simulation.Bodies[I].bSuited=Crew->bSuited;
+    InitializeCrewStaging(I);
+    SynchronizeActors();
 }
 bool UDirectOrScutSimSubsystem::RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw)
 {
@@ -83,6 +86,8 @@ bool UDirectOrScutSimSubsystem::RecordObstacle(int32 Room,FVector Center,FVector
 }
 void UDirectOrScutSimSubsystem::FinishLayout()
 {
+    ResetStaging();
+    SynchronizeActors();
     const bool Success=Simulation.BuildNavigation();
     ensureMsgf(Success,TEXT("DIRECT OR SCUT navigation construction failed"));
     UE_LOG(LogTemp,Display,TEXT("SCUT SIM layout: obstacles=%d waypoints=%d ready=%d"),Simulation.ObstacleCount,Simulation.NodeCount,Success);
@@ -96,6 +101,7 @@ bool UDirectOrScutSimSubsystem::SetDoorOpen(int32 I,bool Open)
 void UDirectOrScutSimSubsystem::SynchronizeActors()
 {
     for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(Simulation.Doors[I].bIsOpen);
+    for(int32 R=0;R<8;++R)if(auto* Set=RoomSetActors[R].Get())Set->ApplyContainmentBarrier(IsRoomSealed(R));
     for (int32 I=0;I<12;++I)
     {
         if (auto* Actor=BodyActors[I].Get())
@@ -126,7 +132,7 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
     PendingDirectives.Reset(); Events.Reset(); bAILink=false; RequestedFeed=-1; FollowedCrew=-1; ++FollowRevision;
     CommandRecords.Reset(); CinematicCues.Reset(); ConfigureScenario(bMedicalScenario);
     Simulation.ResetRuntime(); Simulation.Scenario.ShiftDuration=600;
-    for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(false);
+    for (int32 I=0;I<9;++I) if (auto* Door=DoorActors[I].Get()) Door->ApplySimulationOpen(Simulation.Doors[I].bIsOpen);
     ResetStaging();
     SynchronizeActors();
 }
@@ -197,6 +203,7 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
             R=ResolveRoom(T[2]);
             const float Before=I>=0?Simulation.Bodies[I].Profile.Suspicion:0;
             const bool OK=Simulation.AssignTask(I,R,T.Num()>3);
+            if(OK && I>=0 && I<4){CrewStaging[I].DirectiveRoom=R;CrewStaging[I].DirectiveArrivalTicks=0;}
             const bool Suspicious=I>=0 && Simulation.Bodies[I].Profile.Suspicion>Before;
             const TCHAR* Outcome=OK?TEXT("complied"):I>=0 && Simulation.Bodies[I].Profile.Suspicion<=.75f?TEXT("hesitated / needs physical trigger"):TEXT("refused");
             LogEvent(FString::Printf(TEXT("Ship AI: diagnostic maintenance routing %s -> %s: %s%s"),*T[1],*T[2],Outcome,Suspicious?TEXT("; suspicion increased"):TEXT("")),R);

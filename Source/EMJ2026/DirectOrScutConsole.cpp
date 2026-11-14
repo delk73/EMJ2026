@@ -21,7 +21,7 @@ bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString& Input)
 void UDirectOrScutSimSubsystem::SetScreenMenu(EShipAIScreenMenu Menu) { if (ActiveMenu!=Menu) MenuParents.Add(ActiveMenu); ActiveMenu=Menu; ++MenuRevision; }
 bool UDirectOrScutSimSubsystem::IsRoomSealed(int32 Room) const
 {
-    for(const auto& D:Simulation.Doors) if((D.RoomA==Room || D.RoomB==Room) && D.bIsOpen) return false;
+    for(const auto& D:Simulation.Doors) if(D.RoomB>=0 && (D.RoomA==Room || D.RoomB==Room) && D.bIsOpen) return false;
     return true;
 }
 void UDirectOrScutSimSubsystem::MenuBack()

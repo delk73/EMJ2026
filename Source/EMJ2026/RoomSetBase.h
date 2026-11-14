@@ -14,6 +14,8 @@ public:
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
+    void ApplyContainmentBarrier(bool Sealed);
+    UPROPERTY(VisibleAnywhere) TObjectPtr<UDynamicMeshComponent> ContainmentBarrier;
 private:
     struct FSolid { FVector Center,Size; float Yaw; };
     TArray<FSolid> Solids;

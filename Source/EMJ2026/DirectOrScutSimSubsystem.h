@@ -51,6 +51,7 @@ struct FShipAIScreenChoice
     bool bEnabled=true;
 };
 class ADirectOrScutSetAnchor;
+class ARoomSetBase;
 enum class ECrewStagingPosture : uint8 { Upright, Panic, Blocked, Incapacitated, Triage };
 struct FCrewStagingState {
     FVector Position=FVector::ZeroVector;
@@ -58,6 +59,9 @@ struct FCrewStagingState {
     int32 Room=-1, Anchor=INDEX_NONE, Partner=INDEX_NONE;
     ECrewStagingPosture Posture=ECrewStagingPosture::Upright;
     bool bHuddle=false;
+    uint64 NextProtestTick=0;
+    int32 DirectiveRoom=INDEX_NONE;
+    uint32 DirectiveArrivalTicks=0;
 };
 struct FCrewSecretAgenda {
     uint32 Progress=0, ObservedTicks=0, Interruptions=0, Completions=0;
@@ -157,6 +161,9 @@ private:
 public:
     void RegisterSetAnchor(ADirectOrScutSetAnchor* Anchor);
     void ResetStaging();
+    void InitializeCrewStaging(int32 Crew);
+    void RegisterRoomSet(ARoomSetBase* Set);
+    TWeakObjectPtr<ARoomSetBase> RoomSetActors[8];
     void StepStagingAndAgendas();
     FString AgendaTelemetry(int32 Crew, bool Reveal=false) const;
     TArray<TWeakObjectPtr<ADirectOrScutSetAnchor>> SetAnchors;
@@ -185,7 +192,11 @@ public:
     bool RecordObstacle(int32 Room,FVector Center,FVector Size,float Yaw);
     void FinishLayout();
     bool SetDoorOpen(int32 Index,bool Open);
-    bool AssignRoom(int32 Unit,int32 Room) { return ExperimentPhase==EExperimentPhase::Active && Simulation.AssignRoom(Unit,Room); }
+    bool AssignRoom(int32 Unit,int32 Room) {
+        if(ExperimentPhase!=EExperimentPhase::Active || !Simulation.AssignRoom(Unit,Room))return false;
+        if(Unit>=0 && Unit<4){CrewStaging[Unit].DirectiveRoom=Room;CrewStaging[Unit].DirectiveArrivalTicks=0;}
+        return true;
+    }
     void ResetSimulation();
     void AdvanceSteps(int32 Count);
     void SynchronizeActors();
