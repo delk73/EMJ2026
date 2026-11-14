@@ -1,9 +1,25 @@
 # Architectural Pivot & Phase II Specification
 
-**2026-11-14 — Active design contract: Unified Shader-Driven Terminal & Unreliable AI Mediation.** The canonical agent rules are in [AGENTS.md](AGENTS.md). This specification supersedes earlier architecture and future-work instructions below, including requirements to preserve the permanent camera wall or forbid feed shaders. Slice 1-14 records the completed multi-tile workstation baseline through Slice 14; those entries and their verification evidence remain historical. P2-00 foundation implementation and verification are recorded below; P2-01 through P2-04 remain planned.
+**2026-11-14 — Active design contract: Unified Shader-Driven Terminal & Unreliable AI Mediation.** The canonical agent rules are in [AGENTS.md](AGENTS.md). This specification supersedes earlier architecture and future-work instructions below, including requirements to preserve the permanent camera wall or forbid feed shaders. Slice 1-14 records the completed multi-tile workstation baseline through Slice 14; those entries and their verification evidence remain historical. P2-00 and P2-01 implementation and fresh verification are recorded below; P2-02 through P2-04 remain planned.
 
 
-## P2-00 implementation ? 2026-11-14
+## P2-01 implementation - 2026-11-14
+
+**P2-01 Complete.**
+
+The default `UnifiedTerminal` owns the viewport: `CARRIER: THETA-9 // PROJECT: GLASS HOUSE`, authored MOTHER-7 teletype, inline optical evidence, ECG strips and compartment schematics, a single inquiry row and the `>` prompt. The owned terminal material also processes the full-viewport Slate retainer through an explicit `OpticRenderTarget` binding. A separate MID keeps the terminal surface independent from optical block textures, tint and wipe state.
+
+`DebugEightCamGrid` is an opt-in diagnostic view (`F9`, prompt command `debug_grid` or `/debug`). It retains the previous 4x2 camera wall and developer controls. View switching rebuilds presentation only, preserving the operator draft, stream and simulation state; it does not queue inspection/menu commands. Explicit debug inspection actions still use the existing queued subsystem path. Diagnostic Slate rendering bypasses the full-surface CRT retainer. All eight room render targets continue capturing at the existing 15 Hz optical cadence in both views, independent of the 30 Hz kernel.
+
+The deterministic presentation dispatcher accepts `show_cam <room-name|0-7>`, `show_widget ecg <vale|chen|ortiz|ash>` and `show_widget schematic <room-name|0-7>`. The existing subsystem's requested-feed/follow outputs also select inline optics. Each optical block owns its own GC-safe MID and stable heap-owned brush; the active block wipes from exactly 0 to 1 over 0.65 presentation seconds. Superseded live blocks close to text explicitly marked as unrecorded, rather than masquerading as forensic images. The stream retains at most 48 blocks, prose is capped at 2048 characters, and teletype/wipe time is bounded presentation time only.
+
+Room power/O2 drive native phosphor tint, and `EPowerState::Offline` binds `SignalOfflineNoise=1` with an explicit no-live-carrier caption. ECG geometry reads live crew BPM; schematic contours use canonical topology and each adjacent door's actual seal state. Reticle overlays call the bounded native helpers. Inline widths adapt to the viewport; vector geometry stays in local Slate units, while material dimensions use physical pixels. `SetPresentationNoise` provides bounded scrub/voice hooks and reset clears both.
+
+The inquiry row is `[1] FINDINGS`, `[2] SUBJECTS`, `[3] BLINDSPOTS`, `[4] CROSS-EXAMINE`, `[5] OVERRIDE`, `[R] SCRUB 15S`. Findings/subjects insert evidence; unavailable cross-examination and forensic coverage report explicit system feedback. Overrides offer the ordinary validated command prompt, with no privileged model mutation. This milestone provides deterministic presentation entry points; P2-02 still owns hybrid model-tool validation, forensic storage and contradiction mechanics, and P2-03 owns voice progression. No forensic rewind, model-driven action authority or voice playback is claimed here.
+
+Verification: full `preflight.ps1` passed C++/link and NullRHI smoke (no editor-open skip). `Scripts/Test-DirectOrScut.ps1 -ReportName UnifiedTerminal` passed **10**, failed **0**, not run **0**, warnings **0**, D3D12 SM6. Fresh unified, debug and offline screenshots were inspected. `git diff --check` and the source architecture gate passed; no Loom source/content/config path references were found. Existing Fab/ToolsetRegistry and non-Windows SDK warnings remain. Initial legacy debug failures were corrected by preserving the selected feed during runtime reset; a test-only private-access compilation error was also corrected before the final build. This pass did not rerun the P2-00 material cook or claim full packaged-game verification. Fresh evidence lives in `Saved/Logs/PreflightBuild.log`, `Saved/Logs/PreflightSmoke.log`, `Saved/Logs/UnifiedTerminal.log`, `Saved/DirectOrScut/UnifiedTerminalReport/index.json`, `UnifiedTerminalPIE.png`, `DebugEightCamGridPIE.png` and `UnifiedOfflineOpticPIE.png` under `Saved/DirectOrScut/`. The new `DirectOrScut.PIE.UnifiedPhosphorTerminal` test covers default layout, real F9/prompt toggling and fixed-tick/state-hash purity, wipe progression/endpoints, texture and noise bindings, all eight optical sources, inline instruments, MID isolation and reset. Existing diagnostic regressions explicitly enable the debug view. All implementation remains in existing canonical source files; no `.cpp` was added.
+
+## P2-00 implementation - 2026-11-14
 
 **P2-00 Complete.** The current authorized implementation supersedes the documentation-only scope of the original pivot recording. The unified viewport, mediation/director, rolling forensic history and voice progression remain P2-01 through P2-04 work.
 
@@ -25,7 +41,7 @@ The permanent eight-tile `4x2` wall and verbose telemetry HUD distribute attenti
 
 ### Unified Shader Terminal
 
-The teletype stream owns the viewport. MOTHER-7 splices live room camera feeds into inline `[OPTIC BUFFER]` blocks using raster wipe transitions, then returns to text. Inline ECG and schematic shader widgets replace persistent verbose telemetry. Use native Slate drawing and native curve evaluation first; port only selected reference math into canonical C++ and one owned `MD_UI` material, `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal`, bound through `UMaterialInstanceDynamic`. `Content/Loom/` is temporary reference material to be removed in P2-00, with removal mandatory before P2-01 completion. The Reference Gap Audit below supersedes the earlier direct-personal-asset reuse assumption and defines proposed owned parameters; no Loom dependency is permitted in the delivered terminal. Camera capture remains an optical source beneath the terminal composition.
+The teletype stream owns the viewport. MOTHER-7 splices live room camera feeds into inline `[OPTIC BUFFER]` blocks using raster wipe transitions, then returns to text. Inline ECG and schematic shader widgets replace persistent verbose telemetry. Use native Slate drawing and native curve evaluation first; port only selected reference math into canonical C++ and one owned `MD_UI` material, `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal`, bound through `UMaterialInstanceDynamic`. `Content/Loom/` was removed in P2-00 and must remain absent. The Reference Gap Audit below supersedes the earlier direct-personal-asset reuse assumption and defines proposed owned parameters; no Loom dependency is permitted in the delivered terminal. Camera capture remains an optical source beneath the terminal composition.
 
 ### MOTHER-7 Mediation & Contradiction Mechanics
 
@@ -63,7 +79,7 @@ All upcoming work uses these names. Do not continue Slice numbering or create nu
 | Milestone | Scope and acceptance focus |
 | --- | --- |
 | Phase II — Stage 00 (`P2-00`) | Reference Audit, Math Porting, & `Content/Loom/` Removal. Port only useful corrected math, use native equivalents, remove all Loom dependencies and purge the folder; verify absence before P2-01 completion. |
-| Phase II — Stage 01 (`P2-01`) | Unified Phosphor Terminal, Custom CRT Shader Integration, & AI-Directed Inline `[OPTIC BUFFER]` Wipes. Verify viewport composition, reusable material bindings and live-feed/wipe return to teletype. |
+| Phase II — Stage 01 (`P2-01`) - **Complete** | Unified Phosphor Terminal, Custom CRT Shader Integration, & AI-Directed Inline `[OPTIC BUFFER]` Wipes, & Toggleable 8-Cam Debug View. Verify viewport composition, reusable material bindings and live-feed/wipe return to teletype. |
 | Phase II — Stage 02 (`P2-02`) | Hybrid Small-LLM Tool-Calling Director, `[1]`-`[5]` TUI Inquiry Probes, 15s Forensic Buffer Scrub, & Contradiction/Override Loop. Verify schema rejection, fallback, one action commit, bounded history/reset and replay parity. |
 | Phase II — Stage 03 (`P2-03`) | Directional Room Acoustics, Deception Carrier Tells, & `TextOnly` -> `VoiceOnly` Act III Transition. Verify voice state gates/reset, MOTHER-7 teletype cessation, acoustic behavior and presentation-independent fixed stepping. |
 | Phase II — Stage 04 (`P2-04`) | *PROJECT: GLASS HOUSE* Scenario Tuning, Endings, & Full Automation Verification. Tune contradictions and consequences; exercise endings, lifecycle, integrated terminal/director/voice flows and deterministic replay. |
@@ -119,7 +135,7 @@ void BuildReticlePoints(const FVector2f& Center, float Radius,
 void InitializePhosphorCurve();
 FLinearColor EvaluatePhosphorColor(float NormalizedIntensity) const;
 void ApplyTerminalMaterialParameters(UMaterialInstanceDynamic& Material,
-                                     UTexture* OpticTexture,
+                                     UTexture* OpticRenderTarget,
                                      const FVector2f& PixelSize,
                                      float PresentationTimeSeconds,
                                      float WipeProgress,
@@ -130,7 +146,7 @@ void ApplyTerminalMaterialParameters(UMaterialInstanceDynamic& Material,
 
 `InitializePhosphorCurve` creates one transient native `UCurveLinearColor`, retained with explicit GC-safe ownership (for example `TStrongObjectPtr<UCurveLinearColor>` in the Slate owner), and populates its four native `FRichCurve` channels with these **new project palette keys in linear RGBA**: `0.0 -> (0.002,0.006,0.002,1)`, `0.25 -> (0.008,0.06,0.012,1)`, `0.65 -> (0.08,0.45,0.12,1)`, `1.0 -> (0.65,1.0,0.72,1)`. Use linear interpolation and constant extrapolation; these are proposed phosphor art values, not extracted Loom keys. `EvaluatePhosphorColor` clamps finite input to [0,1] (nonfinite becomes 0) and calls native `GetLinearColorValue`. No replacement rich-curve evaluator, LUT asset, or Loom curve pointer is needed. CPU evaluation drives Slate colors and MID `PhosphorTint`; the minimal material does not silently claim to evaluate the entire four-key curve per pixel.
 
-Own exactly one base UI material at `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal` (owned asset path), `MaterialDomain=MD_UI`, translucent blend with straight-alpha Final Color and Opacity. Runtime MIDs may be per inline block so different room buffers do not overwrite each other's textures. Slate text remains readable above/within the composed surface; a material on an optic brush does not automatically postprocess all Slate children. Any full-viewport retainer integration must explicitly bind the retainer's effect texture rather than assuming it shares `OpticTexture`.
+Own exactly one base UI material at `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal` (owned asset path), `MaterialDomain=MD_UI`, translucent blend with straight-alpha Final Color and Opacity. Runtime MIDs may be per inline block so different room buffers do not overwrite each other's textures. Slate text remains readable above/within the composed surface; a material on an optic brush does not automatically postprocess all Slate children. Any full-viewport retainer integration must explicitly bind the retainer's effect texture rather than assuming it shares `OpticRenderTarget`.
 
 | Owned parameter name | Exact binding signature / type | Units and bounds |
 | --- | --- | --- |
@@ -224,11 +240,11 @@ These are existing domain owners and planned extensions, not implementation clai
 | `DirectOrScutGameMode`, `DirectOrScutHUD` | Lifecycle/workstation mounting; retire the verbose persistent HUD from the active player surface. |
 | `DirectOrScutPIETest.cpp`, `DirectOrScutSimulationTest.cpp` | Integrated PIE regression and pure deterministic model tests respectively; domain-based names, no numbered test units. |
 
-Zero numbered `.cpp` files is permanent: both `DirectOrScutSlice*.cpp` and `DirectOrScutStage*.cpp` are banned. Milestones label documentation and planning only. P2-00 ports selected reference math to canonical C++ and one owned UI material; this pass records that work without modifying shader assets or source.
+Zero numbered `.cpp` files is permanent: both `DirectOrScutSlice*.cpp` and `DirectOrScutStage*.cpp` are banned. Milestones label documentation and planning only. P2-00 ports selected reference math to canonical C++ and one owned UI material; the original documentation pass recorded its planned scope. See the implementation entries above for delivered source and verification.
 
-## Verification status of this specification
+## Historical verification status of the original pivot recording
 
-Documentation-only architectural recording on 2026-11-14. No `.h`, `.cpp`, `.uasset` or `.umap` files are changed. Phase II acceptance checks above are future requirements, not passed tests. Slice 14's consolidated nine-test pass and its two reproduced legacy registration failures remain historical evidence below; do not promote them into a Phase II verification claim.
+The original architectural recording on 2026-11-14 was documentation only: it changed no `.h`, `.cpp`, `.uasset` or `.umap` files. Its Phase II acceptance checks were future requirements, not passed tests. Current milestone verification is recorded in the P2-00 and P2-01 implementation entries above. Slice 14's consolidated nine-test pass and its two reproduced legacy registration failures remain historical evidence below; do not promote them into a Phase II verification claim.
 
 ---
 

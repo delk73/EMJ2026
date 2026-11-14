@@ -1,3 +1,15 @@
+# P2-01 unified phosphor terminal - 2026-11-14
+
+**P2-01 Complete.** Implemented the default full-viewport MOTHER-7 terminal, typed prose and bounded inline optical/instrument blocks, the compact inquiry row and free-text prompt. The owned CRT material processes the terminal retainer with explicit `OpticRenderTarget` binding, while per-block MIDs drive 0.65-second raster wipes, room power/O2 tint and offline carrier noise. Bounded scrub/voice hooks are present for later milestones.
+
+Preserved the 4x2 diagnostic layout behind F9 / `debug_grid` / `/debug`; it is hidden on startup and toggles without simulation or inspection commands. All eight optical sources stay active. Existing diagnostic tests now opt into this view; new domain-named PIE coverage verifies the unified experience and bindings. Reset-time debug selection was corrected after two legacy checks found that startup optical initialization had selected the wrong feed. Fresh unified, debug and offline screenshots are captured by automation. No new `.cpp` files and no Loom assets/references were introduced.
+
+Final verification: `preflight.ps1` passed compilation/link plus clean NullRHI boot; `Scripts/Test-DirectOrScut.ps1 -ReportName UnifiedTerminal` passed **10**, failed **0**, not run **0**, warnings **0** on D3D12 SM6. Fresh `UnifiedTerminalPIE.png`, `DebugEightCamGridPIE.png`, and `UnifiedOfflineOpticPIE.png` were inspected. Unknown instrument kinds are rejected at the presentation boundary. Source architecture, Loom absence/path scans and Git whitespace checks passed. Existing engine Fab/ToolsetRegistry and non-Windows SDK warnings remain. The earlier two debug regressions and test compilation issue were fixed before the final passing run. No fresh cook/full packaged-game verification is claimed by this pass.
+
+P2-02's model director/forensic scrub/contradiction loop and P2-03's voice remain future work, with explicit unavailable feedback rather than simulated coverage. Detailed scope and final verification are recorded in [DIRECT_OR_SCUT.md](DIRECT_OR_SCUT.md#p2-01-implementation---2026-11-14).
+
+---
+
 # P2-00 foundation implementation ? 2026-11-14
 
 **P2-00 Complete.** Implemented bounded native phosphor/geometry helpers in the existing workstation header/implementation, authored the single owned UI terminal material under `/Game/DirectOrScut/Materials`, bound isolated strongly owned MIDs with DPI-aware dimensions, and removed all 421 temporary Loom packages from disk (the tree was Git-ignored and untracked). No new `.cpp` files.

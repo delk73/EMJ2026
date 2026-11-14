@@ -198,6 +198,7 @@ class FBriefingSurveillanceCheck : public IAutomationLatentCommand
             return false;
         }
         auto UI = H->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage explicitly opts into the debug layout.
         if (Last == 0)
         {
             TArray<FVector2f> Outline;
@@ -824,6 +825,7 @@ class FStationRoutesCheck : public IAutomationLatentCommand
         S->bAutomaticAdvance = false;
         auto &M = S->Simulation;
         auto UI = H->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage explicitly opts into the debug layout.
         auto Boot = [&]()
         {
             for (int32 D = 0; D < 9; ++D)
@@ -1115,6 +1117,7 @@ class FSingleCommitRoutesCheck : public IAutomationLatentCommand
         }
         S->bAutomaticAdvance = false;
         auto UI = H->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage explicitly opts into the debug layout.
         auto &M = S->Simulation;
         auto &C = S->CrewStaging[0];
         auto &U = M.Bodies[0];
@@ -1669,6 +1672,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             return false;
         }
         auto UI = H->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage explicitly opts into the debug layout.
         if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now - Last < .55)
         {
             return false;
@@ -2120,6 +2124,7 @@ class FExperimentEndingsCheck : public IAutomationLatentCommand
             return false;
         }
         auto UI = H->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage explicitly opts into the debug layout.
         if (Now - Last < .5 || UI->GetCachedGeometry().GetLocalSize().X < 100)
         {
             return false;
@@ -2360,6 +2365,7 @@ class FArchitectureRegressionCommand : public IAutomationLatentCommand
             return false;
         }
         auto UI = HUD->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage.
         if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
         {
             return false;
@@ -2581,6 +2587,7 @@ class FTactileSurveillanceCheck : public IAutomationLatentCommand
             return false;
         }
         auto UI = HUD->GetWorkstation();
+        UI->SetDebugEightCamGrid(true); // Legacy diagnostic coverage.
         if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
         {
             return false;
@@ -2927,6 +2934,218 @@ bool FTactileSurveillanceTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FTactileSurveillanceCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FUnifiedPhosphorTerminalCheck(FAutomationTestBase *In) : Test(In) {}
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 60)
+        {
+            Test->AddError(TEXT("Unified terminal verification timed out"));
+            return true;
+        }
+        auto *World = GEditor->PlayWorld.Get();
+        if (!World || !World->HasBegunPlay())
+        {
+            return false;
+        }
+        auto *Sim = World->GetSubsystem<UDirectOrScutSimSubsystem>();
+        auto *PC = World->GetFirstPlayerController();
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        if (!Sim || !HUD || !HUD->GetWorkstation())
+        {
+            return false;
+        }
+        auto Workstation = HUD->GetWorkstation();
+        if (Workstation->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
+        {
+            return false;
+        }
+        auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(Workstation->GetContentRoot(), Tag); };
+        auto Capture = [&](const TCHAR *Name)
+        {
+            TArray<FColor> Pixels;
+            FIntVector Size;
+            const bool OK = FSlateApplication::Get().TakeScreenshot(Workstation.ToSharedRef(), Pixels, Size);
+            Test->TestTrue(TEXT("Fresh CRT screenshot captured"), OK);
+            if (OK)
+            {
+                TArray64<uint8> PNG;
+                FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, PNG);
+                Test->TestTrue(
+                    TEXT("CRT screenshot saved"),
+                    FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut") / Name)));
+            }
+        };
+        auto Key = [&](FKey K)
+        {
+            auto &App = FSlateApplication::Get();
+            App.SetKeyboardFocus(Workstation);
+            App.ProcessKeyDownEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+            App.ProcessKeyUpEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+        };
+        switch (Stage++)
+        {
+        case 0:
+            Sim->bAutomaticAdvance = false;
+            Test->TestFalse(TEXT("Unified startup hides debug grid"), Workstation->IsDebugEightCamGrid());
+            Test->TestFalse(TEXT("Startup is not grid navigation"), Workstation->bGrid);
+            Test->TestTrue(TEXT("Unified stream exists"), Find(TEXT("ScutUnifiedTerminal")).IsValid());
+            Test->TestFalse(TEXT("Legacy camera wall absent by default"), Find(TEXT("ScutCameraWall")).IsValid());
+            Test->TestTrue(TEXT("Inline ECG and schematic inserted"),
+                           Find(TEXT("ScutInlineECG")).IsValid() && Find(TEXT("ScutInlineSchematic")).IsValid());
+            Test->TestEqual(TEXT("Startup two instrument blocks"), Workstation->GetInlineInstrumentCount(), 2);
+            Hash = Sim->SurveillanceStateHash();
+            Tick = Sim->Simulation.TickIndex;
+            Ready = Now + 1.5;
+            break;
+        case 1:
+            Capture(TEXT("UnifiedTerminalPIE.png"));
+            Key(EKeys::F9);
+            Test->TestTrue(TEXT("F9 enables diagnostics"), Workstation->IsDebugEightCamGrid());
+            Test->TestEqual(TEXT("F9 does not change authoritative hash"), Sim->SurveillanceStateHash(), Hash);
+            Ready = Now + .3;
+            break;
+        case 2:
+        {
+            for (int32 I = 1; I <= 8; ++I)
+            {
+                Test->TestTrue(TEXT("Eight diagnostic tiles present"),
+                               Find(FName(*FString::Printf(TEXT("ScutCamera%d"), I))).IsValid());
+            }
+            Capture(TEXT("DebugEightCamGridPIE.png"));
+            Test->TestEqual(TEXT("Debug view keeps fixed tick frozen"), Sim->Simulation.TickIndex, Tick);
+            Test->TestEqual(TEXT("Debug view preserves simulation and surveillance state"),
+                            Sim->SurveillanceStateHash(), Hash);
+            auto CommandPrompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+            Test->TestTrue(TEXT("Diagnostic command prompt exists"), CommandPrompt.IsValid());
+            if (CommandPrompt)
+            {
+                CommandPrompt->SetText(FText::FromString(TEXT("debug_grid")));
+                auto &App = FSlateApplication::Get();
+                App.SetKeyboardFocus(CommandPrompt);
+                App.ProcessKeyDownEvent(FKeyEvent(EKeys::Enter, FModifierKeysState(), 0, false, 0, 0));
+                App.ProcessKeyUpEvent(FKeyEvent(EKeys::Enter, FModifierKeysState(), 0, false, 0, 0));
+            }
+            Test->TestFalse(TEXT("debug_grid returns to unified"), Workstation->IsDebugEightCamGrid());
+            Workstation->HandlePresentationCommand(TEXT("/debug"));
+            Test->TestTrue(TEXT("/debug enables diagnostics"), Workstation->IsDebugEightCamGrid());
+            Key(EKeys::F9);
+            Test->TestFalse(TEXT("F9 returns to unified"), Workstation->IsDebugEightCamGrid());
+            Test->TestEqual(TEXT("All view toggles remain pure presentation"), Sim->SurveillanceStateHash(), Hash);
+            Test->TestTrue(TEXT("Director room selection accepted"),
+                           Workstation->HandlePresentationCommand(TEXT("show_cam med_bay")));
+            Test->TestEqual(TEXT("Switch starts hidden wipe"), Workstation->GetInlineWipeProgress(), 0.f);
+            Ready = Now + .15;
+            break;
+        }
+        case 3:
+            Test->TestTrue(TEXT("Raster wipe progresses between endpoints"),
+                           Workstation->GetInlineWipeProgress() > 0 && Workstation->GetInlineWipeProgress() < 1);
+            Test->TestEqual(TEXT("Wipe never advances simulation"), Sim->Simulation.TickIndex, Tick);
+            Sim->StationRooms[3].Power =
+                EPowerState::Offline; // Explicit authoritative fixture; rendering may only read it.
+            Workstation->SetPresentationNoise(.25f, .4f);
+            Ready = Now + .8;
+            break;
+        case 4:
+        {
+            auto *MID = Workstation->GetInlineOpticMaterial();
+            Test->TestNotNull(TEXT("Inline optic owns an MID"), MID);
+            if (MID)
+            {
+                Test->TestEqual(TEXT("Offline room binds carrier noise"),
+                                MID->K2_GetScalarParameterValue(TEXT("SignalOfflineNoise")), 1.f);
+                Test->TestEqual(TEXT("Wipe reaches exactly revealed"),
+                                MID->K2_GetScalarParameterValue(TEXT("WipeProgress")), 1.f);
+                Test->TestEqual(TEXT("Scrub hook reaches MID"),
+                                MID->K2_GetScalarParameterValue(TEXT("ScrubTrackingNoise")), .25f);
+                Test->TestEqual(TEXT("Voice hook reaches MID"),
+                                MID->K2_GetScalarParameterValue(TEXT("VoiceBleedIntensity")), .4f);
+                ACompartmentCameraRig *Rig = nullptr;
+                for (TActorIterator<ACompartmentCameraRig> It(World); It; ++It)
+                {
+                    Rig = *It;
+                }
+                Test->TestNotNull(TEXT("Camera rig available"), Rig);
+                if (Rig)
+                {
+                    Test->TestEqual(TEXT("Active optic binds MED_BAY render target"),
+                                    MID->K2_GetTextureParameterValue(TEXT("OpticRenderTarget")),
+                                    static_cast<UTexture *>(Rig->Targets[ACompartmentCameraRig::FeedForRoom(3)].Get()));
+                    for (int32 I = 1; I <= 8; ++I)
+                    {
+                        Test->TestTrue(TEXT("All eight optical sources stay active"), Rig->CaptureCounts[I] > 1);
+                    }
+                }
+            }
+            Capture(TEXT("UnifiedOfflineOpticPIE.png"));
+            Workstation->HandlePresentationCommand(TEXT("show_widget ecg chen"));
+            Workstation->HandlePresentationCommand(TEXT("show_widget schematic med_bay"));
+            Test->TestEqual(TEXT("Director inserts inline instruments"), Workstation->GetInlineInstrumentCount(), 4);
+            Workstation->PresentOptic(2);
+            if (MID)
+            {
+                Test->TestTrue(TEXT("Separate blocks have isolated MIDs"),
+                               MID != Workstation->GetInlineOpticMaterial());
+            }
+            Sim->StationRooms[3].Power = EPowerState::Nominal;
+            Workstation->SetPresentationNoise(0, 0);
+            Ready = Now + .8;
+            break;
+        }
+        case 5:
+        {
+            auto *MID = Workstation->GetInlineOpticMaterial();
+            if (MID)
+            {
+                Test->TestEqual(TEXT("Online compartment clears offline carrier"),
+                                MID->K2_GetScalarParameterValue(TEXT("SignalOfflineNoise")), 0.f);
+            }
+            Test->TestFalse(TEXT("Invalid subject rejected"),
+                            Workstation->PresentInstrument(ETerminalInstrument::ECG, 4));
+            Test->TestFalse(TEXT("Invalid room rejected"), Workstation->PresentOptic(8));
+            Test->TestFalse(TEXT("Unknown instrument rejected"),
+                            Workstation->PresentInstrument(static_cast<ETerminalInstrument>(255), 0));
+            Test->TestEqual(TEXT("Presentation preserves fixed tick throughout"), Sim->Simulation.TickIndex, Tick);
+            Test->TestEqual(TEXT("Presentation preserves simulation hash after fixture restore"),
+                            Sim->SurveillanceStateHash(), Hash);
+            Sim->ResetExperiment();
+            Ready = Now + .3;
+            break;
+        }
+        case 6:
+            Test->TestFalse(TEXT("Reset retains default unified mode"), Workstation->IsDebugEightCamGrid());
+            Test->TestEqual(TEXT("Reset clears stream history to startup instruments"),
+                            Workstation->GetInlineInstrumentCount(), 2);
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0;
+    uint64 Hash = 0, Tick = 0;
+    double Started = 0, Ready = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUnifiedPhosphorTerminalTest, "DirectOrScut.PIE.UnifiedPhosphorTerminal",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUnifiedPhosphorTerminalTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FUnifiedPhosphorTerminalCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

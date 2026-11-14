@@ -15,6 +15,13 @@ class SScrollBox;
 class SOverlay;
 class SBox;
 class UMaterialInstanceDynamic;
+enum class ETerminalInstrument : uint8
+{
+    ECG,
+    Schematic,
+    Reticle
+};
+struct FTerminalStreamBlock;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
 {
   public:
@@ -35,10 +42,25 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     virtual FReply OnKeyDown(const FGeometry &, const FKeyEvent &) override;
     virtual FReply OnMouseButtonDown(const FGeometry &, const FPointerEvent &) override;
     virtual void Tick(const FGeometry &, double, float) override;
+    bool IsDebugEightCamGrid() const
+    {
+        return bDebugEightCamGrid;
+    }
+    void SetDebugEightCamGrid(bool Enabled);
+    bool HandlePresentationCommand(const FString &Input);
+    bool PresentOptic(int32 Room);
+    bool PresentInstrument(ETerminalInstrument Kind, int32 Subject);
+    void SetPresentationNoise(float ScrubTracking, float VoiceBleed);
+    float GetInlineWipeProgress() const;
+    UMaterialInstanceDynamic *GetInlineOpticMaterial() const;
+    int32 GetInlineInstrumentCount() const;
+    FLinearColor TerminalTint(int32 Room) const;
+    int32 PaintTerminalInstrument(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
+                                  ETerminalInstrument Kind, int32 Subject) const;
     int32 ActiveFeed = 1;
     int32 SelectedCameraIndex = 0;
     void ExpandSelected();
-    bool bGrid = true, bFullscreen = false;
+    bool bGrid = false, bFullscreen = false;
     void SelectFeed(int32 Feed, bool AllowDoubleTap = true);
     void ToggleExpanded();
     void ShowGrid();
@@ -60,10 +82,24 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void BuildRasterOverlay(const FVector2f &Size, float Progress, TArray<TArray<FVector2f>> &OutLines) const;
     FLinearColor EvaluatePhosphorColor(float Intensity, float Amber = 0, float Hypoxia = 0, float Offline = 0,
                                        float Deception = 0) const;
-    void ApplyTerminalMaterialParameters(UMaterialInstanceDynamic &Material, UTexture *OpticTexture,
+    void ApplyTerminalMaterialParameters(UMaterialInstanceDynamic &Material, UTexture *OpticRenderTarget,
                                          const FVector2f &PixelSize, float Time, float Wipe, float Deception) const;
 
   private:
+    bool bDebugEightCamGrid = false;
+    float ScrubTrackingNoise = 0, VoiceBleedIntensity = 0;
+    float PresentationSeconds = 0;
+    int32 UnifiedEventCursor = 0;
+    TArray<TSharedPtr<FTerminalStreamBlock>> TerminalStream;
+    TWeakPtr<FTerminalStreamBlock> ActiveOptic;
+    TStrongObjectPtr<UMaterialInstanceDynamic> TerminalSurfaceMaterial;
+    TSharedRef<SWidget> BuildUnifiedTerminal(const FText &Draft);
+    void RebuildUnifiedStream();
+    void AppendTerminalProse(const FString &Text);
+    void AppendTerminalBlock(TSharedRef<FTerminalStreamBlock> Block);
+    void Inquiry(int32 Index);
+    void ResetTerminalPresentation();
+    void UpdateTerminalPresentation(float Delta, const FGeometry &Geometry);
     void InitializePhosphorCurve();
     TStrongObjectPtr<UCurveLinearColor> PhosphorCurve;
     TStrongObjectPtr<UMaterialInstanceDynamic> TerminalMaterials[9];
