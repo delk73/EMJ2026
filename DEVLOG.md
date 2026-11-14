@@ -1,3 +1,21 @@
+# Active architectural pivot — 2026-11-14
+
+**Unified Shader-Driven Terminal & Unreliable AI Mediation** is the active design contract. See [AGENTS.md](AGENTS.md) for canonical agent rules and [Architectural Pivot & Phase II Specification](DIRECT_OR_SCUT.md#architectural-pivot--phase-ii-specification) for the complete system specification, roadmap and file responsibility matrix.
+
+- **Decision:** Replace the completed Slice 14 permanent `4x2` camera wall and verbose telemetry HUD with one full-viewport custom-shader 1970s CRT teletype. MOTHER-7 mediates conversation and directs inline `[OPTIC BUFFER]` room feeds, raster wipes and ECG/schematic widgets.
+- **Authority:** Preserve the 30 Hz deterministic `DirectOrScutSimulation` / `UDirectOrScutSimSubsystem` kernel. Plan rolling 15s optic history and read-only forensic scrub. `AI-LINK>` uses a small-LLM director plus deterministic fallback with validated `show_cam`, `show_widget`, `sim_action`, and `voice_blend` directives; only accepted actions enter the fixed-tick queue.
+- **Experience:** `[1]`-`[5]` inquiry probes, contradiction/override mechanics and subtle shader deception tells make mediation contestable. Reuse personal CRT/scanline/wipe/distortion assets through UI-domain `UMaterialInstanceDynamic` parameters. Plan `FVoicePresentationState`: `TextOnly` -> `HybridTextAndVoice` -> `VoiceOnly`; in Act III MOTHER-7 stops teletype and communicates solely by voice.
+- **Roadmap:** Retire Slice 1-14 for future work. `P2-01`: unified terminal/shaders/inline optic wipes. `P2-02`: hybrid director/probes/15s scrub/contradiction and override. `P2-03`: directional acoustics/carrier tells/Act III voice transition. `P2-04`: *PROJECT: GLASS HOUSE* tuning/endings/full automation verification. Full names are Phase II — Stage 01 through Stage 04.
+- **Discipline:** Permanently ban numbered `.cpp` files, including `DirectOrScutSlice*.cpp` and `DirectOrScutStage*.cpp`. Use canonical domain pairs and consolidated test files. Created root `AGENTS.md` as canonical guidance and aligned the existing source-level instructions. Audit found no other agent instruction/context files in the repository root or `.agents/`, `.cursor/`, `.claude/`, `.codex/`, or `.github/` locations.
+- **Verification scope:** Documentation only; no runtime implementation, build, PIE or asset integration is claimed. Verify documentation paths and whitespace with Git. Historical build/test outcomes below retain their original scope, including the known legacy failures.
+- **Next implementation milestone:** Phase II — Stage 01 (`P2-01`), following the active specification. No Phase II implementation is included in this pass.
+
+---
+
+## Historical development log
+
+Earlier entries below describe their original implementation checkpoints and do not override the active Phase II contract.
+
 # Attraction Puzzle Development Log
 
 ### [2026-11-12 09:01] — Baseline inspection

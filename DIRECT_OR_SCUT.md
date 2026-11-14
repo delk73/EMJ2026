@@ -1,3 +1,86 @@
+# Architectural Pivot & Phase II Specification
+
+**2026-11-14 — Active design contract: Unified Shader-Driven Terminal & Unreliable AI Mediation.** The canonical agent rules are in [AGENTS.md](AGENTS.md). This specification supersedes earlier architecture and future-work instructions below, including requirements to preserve the permanent camera wall or forbid feed shaders. Slice 1-14 records the completed multi-tile workstation baseline through Slice 14; those entries and their verification evidence remain historical. Phase II is specified, not implemented or runtime-verified by this documentation pass.
+
+## Rationale
+
+The permanent eight-tile `4x2` wall and verbose telemetry HUD distribute attention across simultaneous feeds and expose too much state directly. Replace them with a single full-viewport 1970s phosphor CRT terminal. The operator must request evidence from MOTHER-7, an unreliable conversational mediator and optical director. Curated inline optics, pauses and contradictions create uncertainty while the deterministic station continues to supply objective consequences. Existing rooms, cameras and simulation remain the foundation; the permanent grid and two-tier layout cease to be the active presentation contract.
+
+## Phase II System Specification
+
+### Unified Shader Terminal
+
+The teletype stream owns the viewport. MOTHER-7 splices live room camera feeds into inline `[OPTIC BUFFER]` blocks using raster wipe transitions, then returns to text. Inline ECG and schematic shader widgets replace persistent verbose telemetry. Reuse custom CRT, scanline, wipe and distortion shaders from existing personal shader assets, binding UI-domain `UMaterialInstanceDynamic` parameters for intensity, scanline behavior, wipe progress and distortion. Asset availability, paths and parameter names must be inspected during implementation; none are asserted here. Do not write replacement shaders from scratch. Camera capture remains an optical source beneath the terminal composition.
+
+### MOTHER-7 Mediation & Contradiction Mechanics
+
+`AI-LINK>` accepts conversational requests; contextual `[1]`-`[5]` TUI inquiry probes provide bounded alternatives and deterministic navigation. MOTHER-7 may omit, mislabel, delay or selectively present evidence, but cannot rewrite physical truth. The operator compares claims with room optics, ECG/schematic evidence and the 15s forensic record, challenges contradictions, and explicitly requests an override. Overrides use the same validation and queued simulation-action path as other operational commands; dialogue alone grants no privileged mutation. Contradiction consequences remain deterministic and must be specified/tested with scenario tuning rather than inferred from generated prose.
+
+### Hybrid 30 Hz Kernel + Small-LLM Tool Schema
+
+`FDirectOrScutSimulation` in `DirectOrScutSimulation` and `UDirectOrScutSimSubsystem` own ground-truth physics, rooms, crew, doors, scenario consequences and rolling 15s optic history. Preserve 30 Hz fixed stepping, retained backlog and bounded command queues. A small-LLM director proposes presentation and actions asynchronously through `AI-LINK>`; a deterministic provider remains available when the model is unavailable, late, malformed or unsupported. Model latency and render frames cannot drive simulation time.
+
+The following is the planned tool contract, not a claim of existing APIs. Envelopes carry a directive kind, request identity and observation tick; validate types, bounds, room/subject identifiers, lifecycle and action eligibility before dispatch. Reject unknown tools and malformed arguments without mutation. Prevent duplicate action commits; record accepted/rejected directives and their fixed-tick outcomes for replay.
+
+| Directive | Structured arguments and ownership |
+| --- | --- |
+| `show_cam` | Room identifier, live/buffer mode, bounded history offset and wipe choice. Presentation selects validated optical evidence; never changes room state. |
+| `show_widget` | Allowlisted ECG/schematic kind, subject or room identifier and display duration. Read-only projection of supplied state, with mediated claims distinguished from recorded evidence internally. |
+| `sim_action` | Allowlisted action and typed target/arguments. Subsystem validates and queues an accepted action for the next fixed tick; no direct model write from generated text. |
+| `voice_blend` | Target voice presentation mode and bounded blend/duration. Controls presentation only; scenario gates authorize the Act III transition. |
+
+### 15s Buffer Scrub
+
+Maintain a bounded rolling 15 simulated seconds of timestamped optic history with matching authoritative room/crew evidence. At 30 Hz this spans 450 fixed ticks; optical sampling/storage cadence is an implementation decision, not a requirement for 450 full-resolution images per camera. Synchronize captured frames with recorded tick metadata. Scrub is read-only forensic playback: clamp requests to available history, expose missing/warming/unavailable coverage, and never relabel stale footage as live. Clear history at experiment reset so evidence cannot leak between runs. The existing incident reel is sparse historical keyframes, not a substitute for the rolling optic buffer.
+
+### Subtle Shader Deception Tells
+
+Use restrained scanline drift, wipe discontinuities, phosphor persistence or distortion as learnable carrier tells when MOTHER-7 curates deceptive evidence. These are presentation cues rather than blanket glitch overlays or simulation inputs. Preserve internal provenance of live, buffered and mediated material so automation can verify contradictions without relying on subjective visual judgments. Tune tell visibility and audio counterparts in Phase II; do not claim current shader assets or tells have been integrated.
+
+### TextOnly -> VoiceOnly Act III Progression
+
+Plan `FVoicePresentationState` with modes `TextOnly` -> `HybridTextAndVoice` -> `VoiceOnly`. Begin with teletype-led communication, introduce synchronized voice/text blending, then stage an Act III fourth-wall transition: MOTHER-7 ceases teletype output and communicates solely via voice. Preserve operator input and necessary system/status feedback; this silence applies to MOTHER-7's utterances. Directional room acoustics and deception carrier tells support the transition. Voice playback/blending never advances the kernel or changes action timing; reset returns to `TextOnly`. This state and transition are design requirements, not declarations added to source in this pass.
+
+## Phase II Roadmap
+
+All upcoming work uses these names. Do not continue Slice numbering or create numbered source files.
+
+| Milestone | Scope and acceptance focus |
+| --- | --- |
+| Phase II — Stage 01 (`P2-01`) | Unified Phosphor Terminal, Custom CRT Shader Integration, & AI-Directed Inline `[OPTIC BUFFER]` Wipes. Verify viewport composition, reusable material bindings and live-feed/wipe return to teletype. |
+| Phase II — Stage 02 (`P2-02`) | Hybrid Small-LLM Tool-Calling Director, `[1]`-`[5]` TUI Inquiry Probes, 15s Forensic Buffer Scrub, & Contradiction/Override Loop. Verify schema rejection, fallback, one action commit, bounded history/reset and replay parity. |
+| Phase II — Stage 03 (`P2-03`) | Directional Room Acoustics, Deception Carrier Tells, & `TextOnly` -> `VoiceOnly` Act III Transition. Verify voice state gates/reset, MOTHER-7 teletype cessation, acoustic behavior and presentation-independent fixed stepping. |
+| Phase II — Stage 04 (`P2-04`) | *PROJECT: GLASS HOUSE* Scenario Tuning, Endings, & Full Automation Verification. Tune contradictions and consequences; exercise endings, lifecycle, integrated terminal/director/voice flows and deterministic replay. |
+
+## Canonical File Responsibility Matrix
+
+These are existing domain owners and planned extensions, not implementation claims. All runtime owners below use their canonical `.h`/`.cpp` pairs under `Source/EMJ2026/`.
+
+| Canonical owner | Phase II responsibility |
+| --- | --- |
+| `DirectOrScutSimulation` | Pure deterministic 30 Hz physical/crew/room model; no LLM, rendering or audio dependencies. |
+| `DirectOrScutSimSubsystem` | Fixed-step orchestration, validation/queue commits, authoritative history metadata, bounded optic-history coordination, contradiction/override consequences, scenario/ending gates and voice-state authority. |
+| `SDirectOrScutWorkstationWidget` | Full-viewport teletype, inline optics/widgets, material-instance bindings, wipe composition, inquiry probes, forensic scrub UI and voice/text presentation. |
+| `SScutCameraTile` | Reuse/adapt camera-feed presentation for inline optical blocks; no permanent grid requirement. |
+| `OfflineShipAIIntentProvider` | Deterministic fallback/intent behavior and shared validated directive boundary; keep any model-provider integration in canonical domain files, not milestone units. |
+| `ScutTacticalInput`, `DirectOrScutPlayerController` | Terminal input/focus and inquiry/scrub/override dispatch; no direct simulation mutation. |
+| `DirectOrScutAudioComponent` | Voice playback/blending, directional room acoustics and audible carrier tells; explicit playback lifecycle cleanup. |
+| `RoomSetBase`, existing room subclass pairs, `DirectOrScutSetAnchor` | Physical sets, optical sources, room acoustics anchors and existing deterministic staging bindings. |
+| `DirectOrScutGameMode`, `DirectOrScutHUD` | Lifecycle/workstation mounting; retire the verbose persistent HUD from the active player surface. |
+| `DirectOrScutPIETest.cpp`, `DirectOrScutSimulationTest.cpp` | Integrated PIE regression and pure deterministic model tests respectively; domain-based names, no numbered test units. |
+
+Zero numbered `.cpp` files is permanent: both `DirectOrScutSlice*.cpp` and `DirectOrScutStage*.cpp` are banned. Milestones label documentation and planning only. Shader reuse is material binding work; this pass does not modify shader assets or source.
+
+## Verification status of this specification
+
+Documentation-only architectural recording on 2026-11-14. No `.h`, `.cpp`, `.uasset` or `.umap` files are changed. Phase II acceptance checks above are future requirements, not passed tests. Slice 14's consolidated nine-test pass and its two reproduced legacy registration failures remain historical evidence below; do not promote them into a Phase II verification claim.
+
+---
+
+## Historical implementation and verification record
+
+The following entries describe their original checkpoints. Their camera-wall, no-shader, active Chunk and Slice-specific instructions are superseded by the active contract above.
+
 > Current build: Chunk 2 is active. The Chunk 1/1.5 sections below are historical; their no-simulation/no-HUD scope applies to those earlier passes. See the Chunk 2 entry for current controls and verification.
 
 # DIRECT OR SCUT - Chunk 1: clinical polymer refinement
