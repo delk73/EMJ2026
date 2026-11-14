@@ -102,11 +102,11 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
             .Visibility_Lambda([this,I,R](){const auto& U=Sim->Simulation.Bodies[I];return Sim->CanFollowCrew(I) && U.Room==R?EVisibility::Visible:EVisibility::Collapsed;})
             .OnClicked_Lambda([this,Command](){SetConsoleOpen(false);Sim->QueueConsoleCommand(Command);return FReply::Handled().SetUserFocus(AsShared());})
             [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.6f,1,.65f))
-                .Text_Lambda([this,I](){const auto& U=Sim->Simulation.Bodies[I];const TCHAR* N[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};return FText::FromString(FString::Printf(TEXT("[%s%s] %s | %.0f BPM %.0f RPM %.1fmm"),N[I],Sim->FollowedCrew==I?TEXT(" // FOLLOW"):TEXT(""),DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM));})]];
+                .Text_Lambda([this,I](){const auto& U=Sim->Simulation.Bodies[I];const TCHAR* N[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};return FText::FromString(FString::Printf(TEXT("[%s%s] %s | %.0f BPM %.0f RPM %.1fmm"),N[I],Sim->FollowedCrew==I?TEXT(" // FOLLOW"):TEXT(""),(*Sim->MedicalReadout(I)),Sim->TerminalBiometrics(I).HeartRateBPM,Sim->TerminalBiometrics(I).RespirationRateRPM,U.Profile.PupilDilationMM));})]];
     }
     auto Header=SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Tag(FName(*FString::Printf(TEXT("ScutFeedLabel%d"),F))).Font(FCoreStyle::GetDefaultFontStyle("Bold",9)).AutoWrapText(true)
-            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s%s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("PRESSURIZED / OPEN"),Sim->IsCameraTallyActive(R)?TEXT(" [REC // TALLY LIVE]"):TEXT("")));})]
+            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s | %s%s"),F,DirectOrScut::RoomName(R),*Sim->RoomLifeSupport(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("PRESSURIZED / OPEN"),Sim->IsCameraTallyActive(R)?TEXT(" [REC // TALLY LIVE]"):TEXT("")));})]
         +SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Tag(FName(*FString::Printf(TEXT("ScutInspect%d"),F))).IsFocusable(false)
             .OnClicked_Lambda([this,F](){SetConsoleOpen(false);SelectFeed(F,false);ExpandSelected();return FReply::Handled().SetUserFocus(AsShared());})
             [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).Text(FText::FromString(TEXT("[INSPECT]")))]];
@@ -120,7 +120,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                     +SOverlay::Slot()[SNew(SBorder).Tag(FName(*FString::Printf(TEXT("ScutFeedInterrupted%d"),F))).Padding(8).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.024f,.014f))
                         .HAlign(HAlign_Center).VAlign(VAlign_Center).Visibility_Lambda([this,R](){return Sim->CameraFeedState(R)!=ECameraFeedState::Online?EVisibility::Visible:EVisibility::Collapsed;})
                         [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.5f,1,.6f)).AutoWrapText(true).Justification(ETextJustify::Center)
-                            .Text_Lambda([this,R](){return FText::FromString(FString::Printf(TEXT("CAMERA FEED INTERRUPTED // TAMPER DETECTED\n%s\nrepair_cam %s"),Sim->CameraStateName(Sim->CameraFeedState(R)),DirectOrScut::RoomName(R)));})]]]]
+                            .Text_Lambda([this,R](){return FText::FromString(FString::Printf(TEXT("CAMERA FEED INTERRUPTED\n%s\nPOWER / CAMERA DIAGNOSTICS %s"),Sim->CameraStateName(Sim->CameraFeedState(R)),DirectOrScut::RoomName(R)));})]]]]
             +SVerticalBox::Slot().AutoHeight()[CrewBadges]]];
 }
 
@@ -281,7 +281,7 @@ FReply SDirectOrScutWorkstationWidget::OnMouseButtonDown(const FGeometry&,const 
 }
 FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry&,const FKeyEvent& E)
 {
-    if(Sim->ExperimentPhase==EExperimentPhase::Resolved)return FReply::Handled();
+    if(Sim->ExperimentPhase==EExperimentPhase::Resolved)return FReply::Unhandled();
     const auto Key=E.GetKey();
     if(Sim->ExperimentPhase==EExperimentPhase::Briefing && Key==EKeys::Enter && !E.IsRepeat() && !IsPromptFocused()) {Sim->QueueConsoleCommand(TEXT("start_experiment"));return FReply::Handled();}
     if(!E.IsRepeat() && (Key==EKeys::F9 || Key==EKeys::F10)) {if(Key==EKeys::F9)Sim->bCleanDevRendering=true;else Sim->bWorkstationVisible=!Sim->bWorkstationVisible;return FReply::Handled();}
@@ -408,6 +408,13 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildEvaluationDossier()
         Text(TEXT("INCIDENT LOG // CHRONOLOGICAL HIGHLIGHTS"),13);
         for(const auto& Cue:Sim->CinematicCues)Text(FString::Printf(TEXT("[%07.2f s] %s | %.2f | %s"),Cue.Tick/30.,DirectOrScut::RoomName(int32(Cue.RoomId)),Cue.Severity,*Cue.Subtitle),11);
     }
+    Content->AddSlot().AutoHeight()[SNew(STextBlock).AutoWrapText(true).Text_Lambda([this](){return FText::FromString(Sim->IncidentCaption());})];
+    Content->AddSlot().AutoHeight().Padding(0,6)[SNew(SEditableTextBox).HintText(FText::FromString(TEXT("CMD> incident_reel play | next | prev | stop"))).OnTextCommitted_Lambda([this](const FText& Value,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter)Sim->QueueConsoleCommand(Value.ToString());})];
+    auto Reel=SNew(SHorizontalBox);
+    const TCHAR* ReelLabels[]={TEXT("[PLAY INCIDENT REEL]"),TEXT("[PREVIOUS]"),TEXT("[NEXT]"),TEXT("[STOP]")};
+    const TCHAR* ReelCommands[]={TEXT("incident_reel play"),TEXT("incident_reel prev"),TEXT("incident_reel next"),TEXT("incident_reel stop")};
+    for(int32 I=0;I<4;++I){const FString Command=ReelCommands[I];Reel->AddSlot().AutoWidth().Padding(4)[SNew(SButton).Text(FText::FromString(ReelLabels[I])).OnClicked_Lambda([this,Command](){Sim->QueueConsoleCommand(Command);return FReply::Handled();})];}
+    Content->AddSlot().AutoHeight()[Reel];
     auto Actions=SNew(SHorizontalBox);
     Actions->AddSlot().FillWidth(1).Padding(6)[SNew(SButton).Tag(TEXT("ScutNewExperiment")).Text(FText::FromString(TEXT("[NEW EXPERIMENT]"))).OnClicked_Lambda([this](){Sim->QueueConsoleCommand(TEXT("reset_experiment"));return FReply::Handled().SetUserFocus(AsShared());})];
     Actions->AddSlot().FillWidth(1).Padding(6)[SNew(SButton).Tag(TEXT("ScutSwitchScenario")).Text(FText::FromString(TEXT("[SWITCH SCENARIO]"))).OnClicked_Lambda([this](){Sim->QueueConsoleCommand(Sim->bMedicalScenario?TEXT("scenario behavioral"):TEXT("scenario medical"));return FReply::Handled().SetUserFocus(AsShared());})];

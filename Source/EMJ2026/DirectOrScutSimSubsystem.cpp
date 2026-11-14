@@ -1,4 +1,5 @@
 #include "DirectOrScutSimSubsystem.h"
+#include "DirectOrScutAudioComponent.h"
 #include "DirectOrScutGeometry.h"
 #include "DoorActor.h"
 #include "CrewUnitBlockout.h"
@@ -36,7 +37,7 @@ bool UDirectOrScutSimSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 }
 void UDirectOrScutSimSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    Super::Initialize(Collection); ResetSurveillance(); for(int32 R=0;R<8;++R) CompartmentSets.Add(static_cast<ERoomId>(R),DefaultSetTransform(R)); Simulation.Initialize(); ConfigureScenario(false); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
+    Super::Initialize(Collection); ResetCrisis(); ResetSurveillance(); for(int32 R=0;R<8;++R) CompartmentSets.Add(static_cast<ERoomId>(R),DefaultSetTransform(R)); Simulation.Initialize(); ConfigureScenario(false); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
 }
 bool UDirectOrScutSimSubsystem::IsTickable() const
 {
@@ -124,6 +125,7 @@ void UDirectOrScutSimSubsystem::AdvanceSteps(int32 Count)
 }
 void UDirectOrScutSimSubsystem::ResetSimulation()
 {
+    ResetCrisis();
     ResolvedCommandAccumulator=0;
     ++RuntimeRevision;
     ExperimentPhase=EExperimentPhase::Briefing; ResetSurveillance(); ExperimentEnding=EExperimentEnding::None;
@@ -151,7 +153,8 @@ int32 UDirectOrScutSimSubsystem::ResolveRoom(const FString& Name)
 void UDirectOrScutSimSubsystem::LogEvent(const FString& Text,int32 Room,bool TerminalVisible)
 {
     ++EventRevision;
-    Events.Add({FString::Printf(TEXT("[%06llu] %s"),Simulation.TickIndex,*Text),Room,TerminalVisible});
+    const int32 Seconds=int32(Simulation.TickIndex/30);
+    Events.Add({FString::Printf(TEXT("[%02d:%02d] %s"),Seconds/60,Seconds%60,*Text),Room,TerminalVisible});
 }
 FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
 {
@@ -172,8 +175,8 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
     {
         FString Result;
         const TCHAR* Names[]={TEXT("VALE / engineer"),TEXT("CHEN / medic"),TEXT("ORTIZ / technician"),TEXT("ASH / android")};
-        for (int32 I=0;I<4;++I) { const auto& U=Simulation.Bodies[I]; const auto& P=U.Profile;
-            Result+=FString::Printf(TEXT("%s %s %s Cmp %.2f Cps %.2f Aff %.2f Utl %.2f Sus %.2f Stress %.0f Integrity %.0f BPM %.0f RPM %.0f Pupil %.1fmm\n"),Names[I],DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.Compliance,P.Composure,P.Affinity,P.Utility,P.Suspicion,U.Stress,U.Integrity,P.HeartRateBPM,P.RespirationRateRPM,P.PupilDilationMM); }
+        for (int32 I=0;I<4;++I) { const auto& U=Simulation.Bodies[I]; const auto P=TerminalBiometrics(I);
+            Result+=FString::Printf(TEXT("%s %s %s Cmp %.2f Cps %.2f Aff %.2f Utl %.2f Sus %.2f Stress %.0f Integrity %.0f BPM %.0f RPM %.0f Pupil %.1fmm\n"),Names[I],DirectOrScut::RoomName(U.Room),DirectOrScutStateName(U.State),P.Compliance,P.Composure,P.Affinity,P.Utility,P.Suspicion,U.Stress,TerminalIntegrity(I),P.HeartRateBPM,P.RespirationRateRPM,P.PupilDilationMM); Result+=TEXT("MED ")+MedicalReadout(I)+TEXT("\n"); }
         return Result;
     }
     if (Line==TEXT("rooms")) { FString Result; for (int32 R=0;R<8;++R) Result+=FString::Printf(TEXT("%s %s alert %.0fs\n"),DirectOrScut::RoomName(R),Simulation.Rooms[R].bIsPressurized?TEXT("PRESSURIZED"):TEXT("VACUUM"),Simulation.Rooms[R].AlertSeconds); return Result; }
@@ -195,6 +198,7 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
     for (const auto& Line:PendingDirectives)
     {
         TArray<FString> T; Line.ParseIntoArrayWS(T); if (T.IsEmpty()) continue;
+        if(ExecuteCrisisCommand(T))continue;
         const FString Op=T[0]; int32 R=T.Num()>1?ResolveRoom(T[1]):-1;
         if (Op==TEXT("direct") && T.Num()>=3)
         {
@@ -220,7 +224,8 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
                 if (D==8 && Open) continue;
                 Simulation.ToggleDoor(D,Open); Any=true;
             }
-            LogEvent(Any?TEXT("Ship AI: bulkhead protocol applied."):TEXT("Invalid door or room; doors are 0-8, rooms use full names."),R);
+            if(Any){AudioCue(3);CaptureIncident(TEXT("Bulkhead protocol: ")+Line,R);}
+            LogEvent(Any?TEXT("[BULKHEAD] Protocol applied."):TEXT("Invalid door or room; doors are 0-8, rooms use full names."),R);
         }
         else if (((Op==TEXT("vent") || Op==TEXT("scut")) && R==7) || (Op==TEXT("flush") && R>=0))
         {

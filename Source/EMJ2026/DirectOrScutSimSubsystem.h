@@ -42,7 +42,7 @@ public:
 struct FShipAIEvent { FString Text; int32 Room=-1; bool bTerminalVisible=true; };
 enum class EShipAIScreenMenu : uint8
 {
-    None, AI, Events, Crew, RouteCrew, RouteRoom, RoutePretext,
+    None, Warfare, SpoofCrew, SpoofMode, SpoofRoom, PowerRoom, PowerMode, AI, Events, Crew, RouteCrew, RouteRoom, RoutePretext,
     AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask, Experiment, CameraRepair
 };
 struct FShipAIScreenChoice
@@ -50,6 +50,16 @@ struct FShipAIScreenChoice
     FString Label, Detail;
     bool bEnabled=true;
 };
+enum class EPowerState : uint8 { Nominal, Low, Offline };
+struct FStationRoomState { float OxygenPct=100; EPowerState Power=EPowerState::Nominal; bool bO2Warning=false, bAshAnomaly=false; };
+struct FMedicalSpoof { uint64 Until=0; bool bCritical=false, bExposed=false; };
+struct FVoiceSpoof { int32 Voice=-1, Room=-1; uint64 MoveUntil=0, CompareUntil=0; uint8 Lured=0, Exposed=0; };
+struct FIncidentReelFrame {
+    uint64 Tick=0; FString Caption; int32 Room=-1;
+    FStationRoomState Compartments[8]; int32 CrewRooms[4]{};
+    float Suspicion=0, Objective=0; uint32 BreachTicks=0;
+};
+class UDirectOrScutAudioComponent;
 class ADirectOrScutSetAnchor;
 class ARoomSetBase;
 enum class ECrewStagingPosture : uint8 { Upright, Panic, Blocked, Incapacitated, Triage };
@@ -86,7 +96,33 @@ public:
     virtual void Tick(float DeltaTime) override;
     virtual TStatId GetStatId() const override;
     virtual bool IsTickable() const override;
+    UPROPERTY(Transient) TObjectPtr<UDirectOrScutAudioComponent> CrisisAudio;
     FDirectOrScutSimulation Simulation;
+    FStationRoomState StationRooms[8];
+    FMedicalSpoof MedicalSpoofs[4];
+    FVoiceSpoof VoiceSpoof;
+    float PairTrust[3][3]{{1,.45f,.45f},{.45f,1,.45f},{.45f,.45f,1}};
+    float ShipAITrust[4]{1,1,1,1};
+    uint32 BreachTicks=0; uint8 BreachCrew=0; int32 BreachRoom=6;
+    uint64 BreachRetryTick=0;
+    int32 ScenarioAct=0; float CrisisObjective=0;
+    bool bUsedSpoof=false, bUsedGrid=false, bMedicalExam=false;
+    double HeartAudioPhase=0, BreathAudioPhase=0; int32 AudioFocus=-1, PreviousAudioFocus=-1;
+    TArray<FIncidentReelFrame> IncidentReel;
+    int32 ReelCursor=INDEX_NONE; bool bReelPlaying=false; uint32 ReelPlaybackTicks=0;
+    void StepIncidentPlayback();
+    void ResetCrisis();
+    void StepCrisis();
+    bool ExecuteCrisisCommand(const TArray<FString>& Tokens);
+    void CaptureIncident(const FString& Caption,int32 Room=-1);
+    void ChangePairTrust(int32 A,int32 B,float Delta);
+    FString MedicalReadout(int32 Crew) const;
+    FCrewProfile TerminalBiometrics(int32 Crew) const;
+    double TerminalIntegrity(int32 Crew) const;
+    FString RoomLifeSupport(int32 Room) const;
+    FString IncidentCaption() const;
+    void AudioCue(int32 Kind);
+
     static constexpr uint64 ExperimentTicks=18000;
     static constexpr uint64 ExposureSustainTicks=90;
     EExperimentPhase ExperimentPhase=EExperimentPhase::Briefing;

@@ -32,7 +32,7 @@ const TCHAR* UDirectOrScutSimSubsystem::CameraStateName(ECameraFeedState State)
 }
 ECameraFeedState UDirectOrScutSimSubsystem::CameraFeedState(int32 Room) const
 {
-    return Room>=0 && Room<8?Cameras[Room].State:ECameraFeedState::Offline;
+    return Room>=0 && Room<8 && StationRooms[Room].Power!=EPowerState::Offline?Cameras[Room].State:ECameraFeedState::Offline;
 }
 void UDirectOrScutSimSubsystem::QueueCameraInspection(int32 Room)
 {
@@ -56,7 +56,7 @@ bool UDirectOrScutSimSubsystem::IsCameraTallyActive(int32 Room) const
 void UDirectOrScutSimSubsystem::TamperCamera(int32 Room,ECameraFeedState State)
 {
     if(ExperimentPhase!=EExperimentPhase::Active || Room<0 || Room>=8 || Cameras[Room].RepairGraceTicks>0 || uint8(State)<=uint8(Cameras[Room].State))return;
-    Cameras[Room].State=State;++MenuRevision;
+    Cameras[Room].State=State;++MenuRevision;AudioCue(5);CaptureIncident(TEXT("Camera sabotage"),Room);
     RecordCue(Room,.9f,FString::Printf(TEXT("CAMERA FEED INTERRUPTED // TAMPER DETECTED // %s %s"),DirectOrScut::RoomName(Room),CameraStateName(State)));
 }
 bool UDirectOrScutSimSubsystem::RepairCamera(int32 Room)
@@ -86,6 +86,7 @@ void UDirectOrScutSimSubsystem::StepSurveillance()
     }
     for(int32 R=0;R<8;++R) {
         auto& C=Cameras[R];
+        if(StationRooms[R].Power==EPowerState::Offline){C.TamperTicks=0;continue;}
         if(C.RepairGraceTicks>0){--C.RepairGraceTicks;C.TamperTicks=0;continue;}
         C.TamperTicks=Saboteur[R]?FMath::Min(C.TamperTicks+1,CameraOfflineTicks):0;
         if(C.TamperTicks>=CameraOfflineTicks)TamperCamera(R,ECameraFeedState::Offline);
@@ -108,5 +109,11 @@ uint64 UDirectOrScutSimSubsystem::SurveillanceStateHash() const
         Add(C.NextProtestTick);Add(uint64(C.DirectiveRoom+1));Add(C.DirectiveArrivalTicks);
         Add(A.Progress);Add(A.ObservedTicks);Add(A.Interruptions);Add(A.Completions);Add(A.bActivated);Add(A.bCompleted);
     }
+    for(const auto& R:StationRooms){Add(uint64(FMath::RoundToInt(R.OxygenPct*10000)));Add(uint64(R.Power));Add(R.bO2Warning);Add(R.bAshAnomaly);}
+    for(int32 I=0;I<4;++I){const auto& M=MedicalSpoofs[I];Add(M.Until);Add(M.bCritical);Add(M.bExposed);Add(uint64(FMath::RoundToInt(ShipAITrust[I]*10000)));}
+    for(int32 I=0;I<3;++I)for(int32 J=0;J<3;++J)Add(uint64(FMath::RoundToInt(PairTrust[I][J]*10000)));
+    Add(uint64(VoiceSpoof.Voice+1));Add(uint64(VoiceSpoof.Room+1));Add(VoiceSpoof.MoveUntil);Add(VoiceSpoof.CompareUntil);Add(VoiceSpoof.Lured);Add(VoiceSpoof.Exposed);
+    Add(BreachTicks);Add(BreachCrew);Add(BreachRoom);Add(BreachRetryTick);Add(ScenarioAct);Add(bUsedSpoof);Add(bUsedGrid);Add(bMedicalExam);
+    Add(uint64(FMath::RoundToInt(CrisisObjective*10000)));Add(uint64(FMath::RoundToInt(HeartAudioPhase*1000000)));Add(uint64(FMath::RoundToInt(BreathAudioPhase*1000000)));Add(IncidentReel.Num());
     return Hash;
 }

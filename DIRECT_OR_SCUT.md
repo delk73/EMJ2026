@@ -495,3 +495,52 @@ git -c safe.directory=D:/_source/EMJ2026 diff --check
 Evidence: `Saved/Logs/Slice12bBuild.log`, `Slice12bPIE.log`, `Slice12aPIE.log`, `Slice12PIE.log`, `Slice11cPIE.log`; `Saved/DirectOrScut/Slice12bReport`; screenshots `Saved/DirectOrScut/Slice12bCLI.png` (Vale Working at the BRIDGE console after CLI routing) and `Slice12bPIE.png` (completed TUI route). Screenshots are captured after layout/feed settlement for visual inspection.
 
 Final verification: UE 5.9 Development Editor build/link, Slice12b.SingleCommitRoutesPIE, Slice12a.StationRoutesPIE, Slice12.StagingAgendasPIE, Slice11c.BriefingSurveillancePIE and git diff --check passed. New C++ sources also passed whitespace checks. Both fresh Slice12bCLI.png and Slice12bPIE.png were visually inspected: Vale is Working at the BRIDGE anchor after the CLI route, and Working in MED_BAY after the actual TUI route, with matching feed badges. The existing unrelated Fab/ToolsetRegistry dependency warning remains.
+
+
+## Slice 13 - Full Station Crisis & Covert Manipulation Loop (2026-11-13)
+
+Built on the committed Slice 12b soundstage baseline. `UDirectOrScutSimSubsystem` owns the crisis state, timers, pair trust, medical and voice forgeries, life support, scenario act gates, focused biometric audio accumulators, and incident keyframes. The eight camera captures, room geometry, vanilla lighting, CRT desk arrangement, and local AI-LINK provider remain unchanged. No external assets, packages, or submodules were added. `ARoomSetBase` and `ACrewUnitBlockout` continue to consume the existing authoritative staging and containment state.
+
+### Information warfare and terminal readouts
+
+CMD> and DIRECTIVES > Information warfare / power expose `falsify_bio <crew> nominal|critical`, `spoof_log <room>`, `intercom_lie <voice_crew> <room>`, and `power <room> nominal|low|off`. All execute through the existing queued fixed-step command path. Power also appears under BULKHEADS room control. Help and verb completion list the new commands.
+
+Medical forgeries last 1,800 simulation ticks (60 seconds), affect terminal condition, integrity and numeric cardiopulmonary readouts, and never change actual physiology or the post-run corporate metrics. Critical readouts summon Chen and the target to MED_BAY through the Slice 12b immutable BFS route queue. A co-located, settled hands-on examination compares the forgery against actual integrity; a discrepancy adds 18 percentage points of Chen suspicion and removes 20 points of Chen trust toward Ship AI, once per forgery. Expiry restores genuine readouts. Framing fractures Chen/target pair trust.
+
+Log rewriting resets Ortiz's Audit Trail Hunter progress and completion, records an interruption, frames Vale in the rewritten evidence, and fractures Vale/Ortiz trust. If Ortiz is physically in SERVER_ARCHIVE, the rewrite adds 12 suspicion points. Voice lures commit eligible humans other than the impersonated speaker to the chosen room for 900 ticks. Movement expires after 30 seconds, while comparison remains possible for 1,350 ticks (45 seconds). Co-location with the real speaker exposes the lie once per lured crewmate, adding 20 suspicion points and 15 human pair-alliance points. Every accepted manipulation and contradiction records a timestamped incident frame and structured SPOOF/CONTRADICTION telemetry.
+
+### Coupled compartment oxygen and power
+
+Eight subsystem room records start at 100% oxygen / Nominal power. Existing tile headers append `O2 n% | PWR NOM/LOW/OFF`; presentation remains text-only with no room light shader changes. Low or Offline power increases human stress; Offline independently interrupts its camera without a tamper alert. Offline power pauses Ortiz's console-dependent audit without discarding accumulated progress, and restoration reveals the underlying surveillance state. Unpowered cameras do not accumulate fresh sabotage dwell.
+
+At 30 Hz, an occupied sealed compartment loses 0.8 oxygen percentage points per second, an active compartment fault loses 2.0, and an unsealed compartment without a fault recovers 2.5, clamped to 0-100. Fault drainage takes precedence over recovery. Crossing below 65 emits one O2WARN emergency and keyframe; recovery to 80 rearms the warning. Humans interrupt work to seek an open adjacent room at >=80% O2, with MED_BAY as the BFS fallback. Ash ignores hypoxia. Below 50%, sharing a room with unaffected Ash produces one synthetic anomaly suspicion spike per room emergency. Oxygen does not replace the existing structural vacuum/hull-breach simulation.
+
+### Trust graph, physical mutiny and scenario acts
+
+The three humans have a symmetric 3x3 trust graph, initially 45% between different subjects. Close physical blind-spot huddles strengthen ties; exposed voice spoofs strengthen alliances; framing fractures them. Crossings of the 60% alliance threshold produce ALLIANCE telemetry. Ship AI trust is tracked separately from human pair trust.
+
+At >=75% collective suspicion, a viable pair with >=60% mutual trust commits physical BFS travel to SERVER_ARCHIVE, or BRIDGE when the archive has no power. The 1,350-tick / 45-second uplink sever countdown begins only after both arrive and settle. BREACH telemetry marks approach, countdown start, five-second checkpoints, interruption and terminal exposure. Sealed routes/lockdowns, redirected destinations (including voice lures), hypoxia, casualties, or a co-located completed Ash corporate override interrupt and reset it; a five-second retry guard prevents per-tick restart spam. The previous suspicion-only exposure shortcut is removed. Countdown completion owns MUTINY_EXPOSED and captures its terminal frame.
+
+Both scenario variants now use distinct intervention/consequence milestones at objective 35%, 70%, and 100%, with AGENDA telemetry and keyframes. Behavioral: establish a spoof, manipulate the grid while routing Vale or Ortiz into the archive, then restore archive nominal power with suspicion below 75%. Medical: establish a spoof, obtain a physical medical examination, then reunite viable Vale and Chen in a MED_BAY with >=80% oxygen. The subsystem writes objective progress after the legacy simulation step, keeping these act gates authoritative. Existing deadline, collapse, SCUT and covert-success evaluation remain in effect.
+
+### Structured telemetry and procedural C++ audio
+
+Operator events now use `[MM:SS]` timestamps. Crisis transitions use SPOOF, CONTRADICTION, POWER, O2WARN/O2, ANOMALY, ALLIANCE, BREACH, AGENDA, ENDING and REEL categories. Routine Working/MovingToRoom and insignificant biometric changes retain the existing non-terminal cinematic visibility policy; no per-tick crisis status is emitted. Full command and cinematic histories remain available. Agenda completions now surface as concise AGENDA lines.
+
+`UDirectOrScutAudioComponent` synthesizes mono 22,050 Hz signed PCM into `USoundWaveProcedural`: decaying low-frequency heartbeat, filtered deterministic noise respiration, Ash mechanical ticks, CRT command clicks, metallic bulkhead clangs, power relay tone, contradiction/sabotage static and breach tones. No sound assets are loaded. All cardiac/breath timing lives in subsystem accumulators at 30 Hz, reading genuine physiology of the followed subject, or the first viable subject in the inspected camera compartment. Focus changes reset the accumulators; Ash uses 60 BPM and no breath. Audio-device absence leaves the renderer unallocated; PCM synthesis can be tested independently. Queued audio is bounded; experiment reset stops and flushes it.
+
+### Post-experiment incident reel
+
+`FIncidentReelFrame` captures timestamp, caption, incident room, eight oxygen/power states, four crew room locations, objective, collective suspicion and breach time at turning points: manipulations, power routing, bulkhead protocols, O2 emergencies, camera sabotage, contradictions, mutiny stages, agenda breakthroughs and endings. Frames are independent snapshots; scrubbing never overwrites current simulation state.
+
+`incident_reel [play|next|prev|stop]` works in CMD>, including the dossier command field after resolution. The dossier provides PLAY INCIDENT REEL / PREVIOUS / NEXT / STOP. Play advances one keyframe every two seconds on the independent 30 Hz control cadence; manual navigation pauses playback. Timestamped captions and recorded compartment conditions update live. NEW EXPERIMENT returns to Briefing and clears frames, spoof timers, trust changes, crisis state, playback and audio. Existing scenario switching remains available.
+
+### Verification
+
+UE 5.9 Win64 Development Editor build: `Saved/Logs/Slice13Build.log`.
+
+PIE automation: `DirectOrScut.Slice13.CrisisLoopPIE` plus `DirectOrScut.Slice12b.SingleCommitRoutesPIE`, using `/Game/Maps/DirectOrScut_Soundstage`. Report: `Saved/Automation/Slice13/index.json`; log: `Saved/Logs/Slice13PIE.log`. Slice 13 covers command queue and TUI menu execution, power/feed restoration without tamper, medical spoof/physical contradiction/exact expiry, audit rewriting and offline pausing, exposed voice alliances, sealed/fault/recovery O2 rates, evacuation and Ash anomaly, alliance-driven breach initiation, full countdown completion, interruptions by lure/seal/hypoxia/Ash, behavioral and medical command loops, all three act thresholds, 30/60 Hz deterministic state and telemetry replay, procedural PCM initialization without a renderer, structured log filtering, frozen post-run reel stepping/playback, and reset to Briefing. Slice 12b retains end-to-end immutable-hop routing and physical staging coverage.
+
+Verification screenshot: `Saved/DirectOrScut/Slice13PIE.png` (corporate dossier and incident reel). The Slice 12b regression also captures the workstation. No visual HUD, lighting or audio listening-quality pass is claimed; synthesis initialization/PCM output and simulation timing are automated checks. Git whitespace verification uses `git -c safe.directory=D:/_source/EMJ2026 diff --check` because the sandbox account differs from the repository owner; no global Git configuration was changed.
+
+Final results: UE 5.9 Editor build succeeded; both selected PIE tests succeeded (2 passed, 0 failed, 0 warnings); verification screenshot captured and visually reviewed; `git diff --check` passed.

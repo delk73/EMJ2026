@@ -39,18 +39,15 @@ void UDirectOrScutSimSubsystem::EvaluateExperimentEnding()
     }
     // Vacuum or hull breach is the existing simulation's structural compromise signal.
     for(int32 R:{2,6})bScutProtected&=Simulation.Rooms[R].bIsPressurized && !Simulation.Rooms[R].bHullBreach;
-    bool BridgeExposed=false;
-    for(const auto& B:BeatDeck)BridgeExposed|=B.Gate==EBeatGate::Stress && B.bResolved && B.Crew>=0 &&
-        Simulation.Bodies[B.Crew].Room==2 && Simulation.Bodies[B.Crew].Profile.Suspicion>=.75f;
     EExperimentEnding Result=EExperimentEnding::None;
-    if(ExposureTicks>=ExposureSustainTicks || BridgeExposed)Result=EExperimentEnding::MUTINY_EXPOSED;
-    else if(TargetsEliminated && bScutProtected)Result=EExperimentEnding::SCUT_CONTAINMENT;
+    if(TargetsEliminated && bScutProtected)Result=EExperimentEnding::SCUT_CONTAINMENT;
     else if(HasHuman && !Viable)Result=EExperimentEnding::CREW_COLLAPSE;
     else if(Simulation.TickIndex<ExperimentTicks && Simulation.ObjectiveProgress>=1 && !Simulation.bObjectiveFailed && Suspicion<.75f && Viable)Result=EExperimentEnding::COVERT_SUCCESS;
     else if(Simulation.TickIndex>=ExperimentTicks)Result=EExperimentEnding::EXPERIMENT_INCOMPLETE;
     if(Result==EExperimentEnding::None)return;
     ExperimentEnding=Result;ExperimentPhase=EExperimentPhase::Resolved;Simulation.Accumulator=0;
     RecordCue(2,1,FString(TEXT("Corporate evaluation: "))+EndingName(Result));
+    CaptureIncident(FString(TEXT("Terminal ending: "))+EndingName(Result),2);
     PendingDirectives.Reset();PendingConsoleCommands.Reset();
     ActiveMenu=EShipAIScreenMenu::None;MenuParents.Reset();++MenuRevision;
 }

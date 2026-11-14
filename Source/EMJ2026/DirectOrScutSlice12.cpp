@@ -83,11 +83,12 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
         if(C.Room!=U.Room)InitializeCrewStaging(I);
         if(IsCrewRouteLocked(I))continue;
         if(C.AnchorHoldTicks>0)--C.AnchorHoldTicks;
-        const bool PlayerOrder=C.DirectiveRoom>=0;
+        const bool PlayerOrder=C.DirectiveRoom>=0 || (BreachCrew&(1<<I)) || (VoiceSpoof.MoveUntil>Simulation.TickIndex && (VoiceSpoof.Lured&(1<<I))) || (MedicalSpoofs[I].Until>Simulation.TickIndex && MedicalSpoofs[I].bCritical);
         if(PlayerOrder && U.Room==C.DirectiveRoom && U.State==EDirectOrScutUnitState::Working){
             if(++C.DirectiveArrivalTicks>=150){C.DirectiveRoom=INDEX_NONE;C.DirectiveArrivalTicks=0;}
         } else C.DirectiveArrivalTicks=0;
         C.Posture=(U.Integrity<=0 || (C.Posture==ECrewStagingPosture::Incapacitated && U.Integrity<70))?ECrewStagingPosture::Incapacitated:U.State==EDirectOrScutUnitState::Panic?ECrewStagingPosture::Panic:ECrewStagingPosture::Upright;
+        const bool ConsoleOffline=I==2 && StationRooms[U.Room].Power==EPowerState::Offline;
         const bool Interrupted=DoorCycle || Simulation.Rooms[U.Room].AlertSeconds>0;
         if(I==3 && (Simulation.CollectiveSuspicion()>=.6f || ScutTargets!=0))A.bActivated=true;
         if(I==1 && Casualty)A.bActivated=true;
@@ -106,8 +107,9 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
             if(I==2)Goal=6;
             if(I==3){
                 Goal=2;for(int32 R=0;R<8;++R)if(CameraFeedState(R)!=ECameraFeedState::Online){Goal=R;break;}
+                if(BreachCrew)Goal=BreachRoom;
             }
-            if(!Interrupted) {
+            if(!Interrupted && !ConsoleOffline) {
                 if(U.AssignedRoom!=Goal)StartCrewRoute(I,Goal);
                 if(U.Room==Goal && U.State==EDirectOrScutUnitState::Working && !(I==1 && Goal==3)) {
                     ++A.Progress;
@@ -117,7 +119,8 @@ void UDirectOrScutSimSubsystem::StepStagingAndAgendas()
                         if(I==1)RecordCue(2,.7f,TEXT("Distress log broadcast // quarantine casualty reported"));
                         if(I==2)U.Profile.Suspicion=FMath::Min(1.f,U.Profile.Suspicion+.12f);
                         if(I==3){RepairCamera(U.Room);for(int32 D=0;D<9;++D)if(Simulation.Doors[D].RoomA==2 || Simulation.Doors[D].RoomB==2)Simulation.ToggleDoor(D,false);}
-                        RecordCue(U.Room,.4f,FString::Printf(TEXT("Subject %d: encrypted activity signature recorded"),I),false);
+                        RecordCue(U.Room,.4f,FString::Printf(TEXT("[AGENDA] Subject %d: encrypted activity signature recorded"),I),true);
+                        CaptureIncident(TEXT("Crew agenda breakthrough"),U.Room);
                     }
                 }
             }
