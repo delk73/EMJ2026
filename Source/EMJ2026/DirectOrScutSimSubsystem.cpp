@@ -33,7 +33,7 @@ bool UDirectOrScutSimSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 }
 void UDirectOrScutSimSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    Super::Initialize(Collection); for(int32 R=0;R<8;++R) CompartmentSets.Add(static_cast<ERoomId>(R),DefaultSetTransform(R)); Simulation.Initialize(); ConfigureScenario(false); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
+    Super::Initialize(Collection); ResetSurveillance(); for(int32 R=0;R<8;++R) CompartmentSets.Add(static_cast<ERoomId>(R),DefaultSetTransform(R)); Simulation.Initialize(); ConfigureScenario(false); Simulation.bExperiment=true; IntentProvider=MakeShared<FOfflineShipAIIntentProvider>();
 }
 bool UDirectOrScutSimSubsystem::IsTickable() const
 {
@@ -43,9 +43,12 @@ TStatId UDirectOrScutSimSubsystem::GetStatId() const { RETURN_QUICK_DECLARE_CYCL
 void UDirectOrScutSimSubsystem::Tick(float Delta)
 {
     if (!FMath::IsFinite(Delta) || Delta<=0) return;
-    if(ExperimentPhase==EExperimentPhase::Resolved) {
+    if(ExperimentPhase!=EExperimentPhase::Active) {
         ResolvedCommandAccumulator+=Delta;
-        if(ResolvedCommandAccumulator+1.e-9>=Simulation.FixedDelta) {ResolvedCommandAccumulator=0;ProcessConsoleCommands();}
+        int32 ControlBudget=240;
+        while(ExperimentPhase!=EExperimentPhase::Active && ResolvedCommandAccumulator+1.e-9>=Simulation.FixedDelta && ControlBudget-->0) {
+            ResolvedCommandAccumulator-=Simulation.FixedDelta;FixedStep();
+        }
         return;
     }
     Simulation.Accumulator+=Delta;
@@ -113,7 +116,7 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
 {
     ResolvedCommandAccumulator=0;
     ++RuntimeRevision;
-    ExperimentPhase=EExperimentPhase::Active; ExperimentEnding=EExperimentEnding::None;
+    ExperimentPhase=EExperimentPhase::Briefing; ResetSurveillance(); ExperimentEnding=EExperimentEnding::None;
     PeakSuspicion=0; ExposureTicks=0; ScutTargets=0; ScutEliminated=0; bScutProtected=true;
     ++EventRevision;
     PendingConsoleCommands.Reset(); MenuParents.Reset(); ActiveMenu=EShipAIScreenMenu::None; ++MenuRevision;
@@ -153,7 +156,7 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
         Line=Intent.Command.ToLower();
         if (Line.StartsWith(TEXT("direct ")) && !Intent.Pretext.IsEmpty()) Line+=TEXT(" ")+Intent.Pretext;
     }
-    if (Line==TEXT("status")) return FString::Printf(TEXT("%s\nCover: %s\nShift %.1f / %.1fs | Objective %.0f%% | Suspicion %.0f%% | %s"),*Simulation.Scenario.ScenarioId,*Simulation.Scenario.CoverStoryLabel,Simulation.TickIndex/30.,Simulation.Scenario.ShiftDuration,Simulation.ObjectiveProgress*100,Simulation.CollectiveSuspicion()*100,Simulation.bObjectiveFailed?TEXT("FAILED"):Simulation.bShiftComplete?TEXT("SHIFT COMPLETE"):TEXT("ACTIVE"));
+    if (Line==TEXT("status")) return FString::Printf(TEXT("%s\nCover: %s\nShift %.1f / %.1fs | Objective %.0f%% | Suspicion %.0f%% | %s"),*Simulation.Scenario.ScenarioId,*Simulation.Scenario.CoverStoryLabel,Simulation.TickIndex/30.,Simulation.Scenario.ShiftDuration,Simulation.ObjectiveProgress*100,Simulation.CollectiveSuspicion()*100,Simulation.bObjectiveFailed?TEXT("FAILED"):Simulation.bShiftComplete?TEXT("SHIFT COMPLETE"):ExperimentPhase==EExperimentPhase::Briefing?TEXT("BRIEFING"):TEXT("ACTIVE"));
     if (Line==TEXT("crew"))
     {
         FString Result;
@@ -164,6 +167,7 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString& Input)
     }
     if (Line==TEXT("rooms")) { FString Result; for (int32 R=0;R<8;++R) Result+=FString::Printf(TEXT("%s %s alert %.0fs\n"),DirectOrScut::RoomName(R),Simulation.Rooms[R].bIsPressurized?TEXT("PRESSURIZED"):TEXT("VACUUM"),Simulation.Rooms[R].AlertSeconds); return Result; }
     if (Line.StartsWith(TEXT("cam "))) { const FString N=Line.Mid(4); if (N.Len()==1 && N[0]>='1' && N[0]<='8') { RequestedFeed=N[0]-'0'; return TEXT("Camera selected."); } return TEXT("Camera must be 1 through 8."); }
+    if(ExperimentPhase!=EExperimentPhase::Active)return TEXT("BRIEFING // use start_experiment to initialize before crew directives.");
     if (PendingDirectives.Num()>=32) return TEXT("Command queue full.");
     PendingDirectives.Add(Line); return TEXT("Directive queued for next 30 Hz tick.");
 }
@@ -176,6 +180,7 @@ void UDirectOrScutSimSubsystem::ProcessDirectives()
 }
 void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
 {
+    if(ExperimentPhase!=EExperimentPhase::Active) { PendingDirectives.Reset();return; }
     for (const auto& Line:PendingDirectives)
     {
         TArray<FString> T; Line.ParseIntoArrayWS(T); if (T.IsEmpty()) continue;

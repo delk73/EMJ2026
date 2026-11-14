@@ -76,6 +76,7 @@ private:
     void RefreshMenuChoices();
     void Rebuild();
     TSharedRef<SWidget> BuildEvaluationDossier();
+    TSharedRef<SWidget> BuildBriefingCard();
     bool bShowingEvaluation=false;
     TSharedRef<SWidget> Video(int32 Feed);
     void Commit(const FText&,ETextCommit::Type);

@@ -105,8 +105,8 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
                 .Text_Lambda([this,I](){const auto& U=Sim->Simulation.Bodies[I];const TCHAR* N[]={TEXT("VALE"),TEXT("CHEN"),TEXT("ORTIZ"),TEXT("ASH")};return FText::FromString(FString::Printf(TEXT("[%s%s] %s | %.0f BPM %.0f RPM %.1fmm"),N[I],Sim->FollowedCrew==I?TEXT(" // FOLLOW"):TEXT(""),DirectOrScutStateName(U.State),U.Profile.HeartRateBPM,U.Profile.RespirationRateRPM,U.Profile.PupilDilationMM));})]];
     }
     auto Header=SNew(SHorizontalBox)
-        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Tag(FName(*FString::Printf(TEXT("ScutFeedLabel%d"),F))).Font(FCoreStyle::GetDefaultFontStyle("Bold",9))
-            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("NOMINAL")));})]
+        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Tag(FName(*FString::Printf(TEXT("ScutFeedLabel%d"),F))).Font(FCoreStyle::GetDefaultFontStyle("Bold",9)).AutoWrapText(true)
+            .ColorAndOpacity(FLinearColor(.4f,1,.55f)).Text_Lambda([this,F,R](){const auto& Room=Sim->Simulation.Rooms[R];return FText::FromString(FString::Printf(TEXT("[%d] %s | %s%s"),F,DirectOrScut::RoomName(R),!Room.bIsPressurized?TEXT("VENTING"):Room.AlertSeconds>0?TEXT("ALERT"):Sim->IsRoomSealed(R)?TEXT("SEALED"):TEXT("NOMINAL"),Sim->IsCameraTallyActive(R)?TEXT(" [REC // TALLY LIVE]"):TEXT("")));})]
         +SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Tag(FName(*FString::Printf(TEXT("ScutInspect%d"),F))).IsFocusable(false)
             .OnClicked_Lambda([this,F](){SetConsoleOpen(false);SelectFeed(F,false);ExpandSelected();return FReply::Handled().SetUserFocus(AsShared());})
             [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).Text(FText::FromString(TEXT("[INSPECT]")))]];
@@ -114,7 +114,13 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::Video(int32 F)
         [SNew(SBorder).Padding(0).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.005f,.012f,.008f))[SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight()[Header]
             +SVerticalBox::Slot().FillHeight(1)[SNew(SBorder).Padding(0).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor::Black)
-                [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SImage).Tag(FName(*FString::Printf(TEXT("ScutFeedImage%d"),F))).Image(&Brushes[F])]]]
+                [SNew(SOverlay)
+                    +SOverlay::Slot()[SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SImage).Tag(FName(*FString::Printf(TEXT("ScutFeedImage%d"),F))).Image(&Brushes[F])
+                        .Visibility_Lambda([this,R](){return Sim->CameraFeedState(R)==ECameraFeedState::Online?EVisibility::Visible:EVisibility::Hidden;})]]
+                    +SOverlay::Slot()[SNew(SBorder).Tag(FName(*FString::Printf(TEXT("ScutFeedInterrupted%d"),F))).Padding(8).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.024f,.014f))
+                        .HAlign(HAlign_Center).VAlign(VAlign_Center).Visibility_Lambda([this,R](){return Sim->CameraFeedState(R)!=ECameraFeedState::Online?EVisibility::Visible:EVisibility::Collapsed;})
+                        [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.5f,1,.6f)).AutoWrapText(true).Justification(ETextJustify::Center)
+                            .Text_Lambda([this,R](){return FText::FromString(FString::Printf(TEXT("CAMERA FEED INTERRUPTED // TAMPER DETECTED\n%s\nrepair_cam %s"),Sim->CameraStateName(Sim->CameraFeedState(R)),DirectOrScut::RoomName(R)));})]]]]
             +SVerticalBox::Slot().AutoHeight()[CrewBadges]]];
 }
 
@@ -141,11 +147,30 @@ void SDirectOrScutWorkstationWidget::SetConsoleOpen(bool PromptFocus,bool)
 void SDirectOrScutWorkstationWidget::RebuildCameraWall()
 {
     if(!CameraWall)return;
+    Sim->QueueCameraInspection(bGrid?-1:ACompartmentCameraRig::RoomForFeed(ActiveFeed));
+    TSharedRef<SWidget> Main=Video(ActiveFeed);
     if(bGrid) {
         auto Grid=SNew(SUniformGridPanel).SlotPadding(2);
         for(int32 F=1;F<=8;++F)Grid->AddSlot((F-1)%4,(F-1)/4)[Video(F)];
-        CameraWall->SetContent(Grid);
-    } else CameraWall->SetContent(Video(ActiveFeed));
+        Main=Grid;
+    }
+    CameraWall->SetContent(SNew(SOverlay)+SOverlay::Slot()[Main]
+        +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(12)[BuildBriefingCard()]);
+}
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildBriefingCard()
+{
+    auto Card=SNew(SVerticalBox);
+    auto Line=[&](TAttribute<FText> Text,int32 Size,FName FieldTag=NAME_None){Card->AddSlot().AutoHeight().Padding(0,5)[SNew(STextBlock).Tag(FieldTag).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(FLinearColor(.4f,1,.55f)).AutoWrapText(true).Text(Text)];};
+    Line(FText::FromString(TEXT("EXPERIMENT BRIEFING // AWAITING INITIALIZATION")),15);
+    Line(TAttribute<FText>::CreateLambda([this](){return FText::FromString(Sim->Simulation.Scenario.ScenarioId);}),13,TEXT("ScutBriefingScenario"));
+    Line(TAttribute<FText>::CreateLambda([this](){return FText::FromString(TEXT("COVER PROTOCOL\n")+Sim->Simulation.Scenario.CoverStoryLabel);}),12,TEXT("ScutBriefingCover"));
+    Line(TAttribute<FText>::CreateLambda([this](){return FText::FromString(TEXT("DIRECTOR SCUT OBJECTIVE\n")+Sim->BriefingObjective());}),12,TEXT("ScutBriefingObjective"));
+    Card->AddSlot().AutoHeight().Padding(0,8,0,0)[SNew(SButton).Tag(TEXT("ScutInitializeExperiment")).IsFocusable(false).Text(FText::FromString(TEXT("[INITIALIZE EXPERIMENT (ENTER)]")))
+        .OnClicked_Lambda([this](){SetConsoleOpen(false);Sim->QueueConsoleCommand(TEXT("start_experiment"));return FReply::Handled().SetUserFocus(AsShared());})];
+    return SNew(SBox).WidthOverride_Lambda([this](){const float Width=float(CameraWall->GetCachedGeometry().GetLocalSize().X);return Width>0?FMath::Clamp(Width-32,280.f,650.f):650.f;})
+        [SNew(SBorder).Tag(TEXT("ScutBriefingCard")).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.2f,.7f,.3f)).Padding(1)
+            .Visibility_Lambda([this](){return Sim->ExperimentPhase==EExperimentPhase::Briefing?EVisibility::Visible:EVisibility::Collapsed;})
+            [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.012f,.024f,.014f)).Padding(16)[Card]]];
 }
 void SDirectOrScutWorkstationWidget::Rebuild()
 {
@@ -258,6 +283,7 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry&,const F
 {
     if(Sim->ExperimentPhase==EExperimentPhase::Resolved)return FReply::Handled();
     const auto Key=E.GetKey();
+    if(Sim->ExperimentPhase==EExperimentPhase::Briefing && Key==EKeys::Enter && !E.IsRepeat() && !IsPromptFocused()) {Sim->QueueConsoleCommand(TEXT("start_experiment"));return FReply::Handled();}
     if(!E.IsRepeat() && (Key==EKeys::F9 || Key==EKeys::F10)) {if(Key==EKeys::F9)Sim->bCleanDevRendering=true;else Sim->bWorkstationVisible=!Sim->bWorkstationVisible;return FReply::Handled();}
     if(Key==EKeys::Tilde && !E.IsRepeat()) {SuppressPromptChar='`';SetConsoleOpen(true);return FReply::Handled();}
     if(Key==EKeys::Escape) {SetConsoleOpen(false);if(!bGrid)ShowGrid();return FReply::Handled().SetUserFocus(AsShared());}
@@ -324,7 +350,7 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry& G,double Now,float De
     SCompoundWidget::Tick(G,Now,Delta);if(!Sim.IsValid() || !Rig.IsValid()) return;
     const bool Resolved=Sim->ExperimentPhase==EExperimentPhase::Resolved;
     if(Resolved!=bShowingEvaluation) { bShowingEvaluation=Resolved;bConsoleOpen=false;Rebuild();FSlateApplication::Get().SetKeyboardFocus(AsShared()); }
-    if(SeenRuntimeRevision!=Sim->RuntimeRevision) {SeenRuntimeRevision=Sim->RuntimeRevision;bLogAutoScroll=true;CopiedUntil=0;if(!Resolved)SelectCategory(ActiveCategory,false);}
+    if(SeenRuntimeRevision!=Sim->RuntimeRevision) {SeenRuntimeRevision=Sim->RuntimeRevision;bLogAutoScroll=true;CopiedUntil=0;ShowGrid();if(!Resolved)SelectCategory(ActiveCategory,false);}
 
     if(Sim->RequestedFeed>=0) {SelectFeed(Sim->RequestedFeed,false);Sim->RequestedFeed=-1;if(bGrid && !bConsoleOpen)ToggleExpanded();}
     if(Sim->FollowedCrew>=0 && Sim->CanFollowCrew(Sim->FollowedCrew))

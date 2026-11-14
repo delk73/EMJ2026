@@ -117,7 +117,7 @@ void UDirectOrScutSimSubsystem::EvaluateBeatDeck()
             case EBeatGate::Concealment:Gate=!U.bAndroid && U.Profile.Suspicion>=.4f && U.Stress>=40;break;
             case EBeatGate::Quarantine:Gate=!U.bAndroid && U.Profile.Suspicion>=.3f && IsRoomSealed(U.Room) && Simulation.Rooms[U.Room].AlertSeconds>0;break;
             }
-            if(Gate) {B.bFired=true;B.Crew=I;RecordCue(U.Room,.8f,B.Node.Subtitle+TEXT(" // interaction available in menu events"));++MenuRevision;break;}
+            if(Gate) {if(B.Gate==EBeatGate::Concealment)TamperCamera(U.Room,ECameraFeedState::Looped);B.bFired=true;B.Crew=I;RecordCue(U.Room,.8f,B.Node.Subtitle+TEXT(" // interaction available in menu events"));++MenuRevision;break;}
         }
     }
 }
@@ -173,7 +173,8 @@ bool UDirectOrScutSimSubsystem::ResolveBeat(int32 Index,int32 Choice)
 }
 void UDirectOrScutSimSubsystem::FixedStep()
 {
-    if(ExperimentPhase==EExperimentPhase::Resolved) { ProcessConsoleCommands(); return; }
+    ApplyCameraInspection();
+    if(ExperimentPhase!=EExperimentPhase::Active) { ProcessConsoleCommands(); return; }
     PeakSuspicion=FMath::Max(PeakSuspicion,Simulation.CollectiveSuspicion());
     FDirectOrScutUnitState Previous[4];bool Pressure[8];
     for(int32 I=0;I<4;++I)Previous[I]=Simulation.Bodies[I];
@@ -182,7 +183,7 @@ void UDirectOrScutSimSubsystem::FixedStep()
     ProcessDirectives();
     if(RuntimeRevision!=BeforeReset)return;
     PeakSuspicion=FMath::Max(PeakSuspicion,Simulation.CollectiveSuspicion());
-    Simulation.Step();EvaluateBeatDeck();
+    Simulation.Step();StepSurveillance();EvaluateBeatDeck();
     if(FollowedCrew>=0 && !CanFollowCrew(FollowedCrew))SetFollowedCrew(-1);
     for(int32 R=0;R<8;++R)if(Pressure[R]!=Simulation.Rooms[R].bIsPressurized)
         RecordCue(R,1,Simulation.Rooms[R].bIsPressurized?TEXT("Pressure restored"):TEXT("Compartment exposed to vacuum"));

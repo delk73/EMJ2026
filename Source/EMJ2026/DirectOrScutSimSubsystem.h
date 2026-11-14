@@ -4,8 +4,11 @@
 #include "DirectOrScutSimulation.h"
 #include "DirectOrScutSimSubsystem.generated.h"
 
-enum class EExperimentPhase : uint8 { Active, Resolved };
+enum class EExperimentPhase : uint8 { Briefing, Active, Resolved };
 enum class EExperimentEnding : uint8 { None, COVERT_SUCCESS, MUTINY_EXPOSED, CREW_COLLAPSE, SCUT_CONTAINMENT, EXPERIMENT_INCOMPLETE };
+
+enum class ECameraFeedState : uint8 { Online, Looped, Offline };
+struct FSurveillanceCameraState { ECameraFeedState State=ECameraFeedState::Online; uint32 TamperTicks=0, RepairGraceTicks=0; };
 
 enum class ERoomId : uint8 { ReactorCore=0, RingCorridor=1, Bridge=2, MedBay=3, ObservationDeck=4, QuartersMess=5, ServerArchive=6, AirlockChamber=7 };
 struct FCompartmentSetTransform
@@ -39,7 +42,7 @@ struct FShipAIEvent { FString Text; int32 Room=-1; bool bTerminalVisible=true; }
 enum class EShipAIScreenMenu : uint8
 {
     None, AI, Events, Crew, RouteCrew, RouteRoom, RoutePretext,
-    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask, Experiment
+    AlertRoom, AlertKind, Protocol, Containment, DoorRoom, FlushRoom, AndroidRoom, DoorAction, ConfirmScut, AndroidTask, Experiment, CameraRepair
 };
 struct FShipAIScreenChoice
 {
@@ -61,7 +64,18 @@ public:
     FDirectOrScutSimulation Simulation;
     static constexpr uint64 ExperimentTicks=18000;
     static constexpr uint64 ExposureSustainTicks=90;
-    EExperimentPhase ExperimentPhase=EExperimentPhase::Active;
+    EExperimentPhase ExperimentPhase=EExperimentPhase::Briefing;
+    static constexpr uint32 TallyGraceTicks=150;
+    static constexpr uint32 CameraLoopTicks=150;
+    static constexpr uint32 CameraOfflineTicks=300;
+    static constexpr uint32 CameraRepairGraceTicks=300;
+    static constexpr float TallySuspicionPerSecond=.005f;
+    ECameraFeedState CameraFeedState(int32 Room) const;
+    bool IsCameraTallyActive(int32 Room) const;
+    void QueueCameraInspection(int32 Room);
+    FString BriefingObjective() const;
+    uint64 SurveillanceStateHash() const;
+    static const TCHAR* CameraStateName(ECameraFeedState State);
     EExperimentEnding ExperimentEnding=EExperimentEnding::None;
     float PeakSuspicion=0;
     uint64 ExposureTicks=0;
@@ -105,6 +119,16 @@ public:
     void LogEvent(const FString& Text,int32 Room=-1,bool TerminalVisible=true);
     static int32 ResolveRoom(const FString& Name);
 private:
+    FSurveillanceCameraState Cameras[8];
+    uint32 TallyTicks[12]{};
+    int32 TallyRoom[12]{};
+    int32 InspectedRoom=-1, PendingInspectedRoom=-2;
+    void ResetSurveillance();
+    void ApplyCameraInspection();
+    void StepSurveillance();
+    void TamperCamera(int32 Room,ECameraFeedState State);
+    bool RepairCamera(int32 Room);
+    void StartExperiment();
     double ResolvedCommandAccumulator=0;
     TArray<FString> PendingDirectives;
     TArray<FString> PendingConsoleCommands;

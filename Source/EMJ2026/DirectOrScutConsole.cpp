@@ -6,7 +6,7 @@ namespace
 const int32 RoomOrder[]={0,2,3,4,5,6,7,1};
 const TCHAR* CrewNames[]={TEXT("vale"),TEXT("chen"),TEXT("ortiz"),TEXT("ash")};
 const TCHAR* CrewRoles[]={TEXT("engineer"),TEXT("medic"),TEXT("technician"),TEXT("android")};
-const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("unseal"),TEXT("vent"),TEXT("scut"),TEXT("flush"),TEXT("fx"),TEXT("view"),TEXT("scenario"),TEXT("reset_experiment"),TEXT("follow")};
+const TCHAR* PublicVerbs[]={TEXT("help"),TEXT("?"),TEXT("clear"),TEXT("status"),TEXT("crew"),TEXT("rooms"),TEXT("cam"),TEXT("menu"),TEXT("choose"),TEXT("direct"),TEXT("alert"),TEXT("calm"),TEXT("protocol"),TEXT("open"),TEXT("close"),TEXT("seal"),TEXT("unseal"),TEXT("vent"),TEXT("scut"),TEXT("flush"),TEXT("fx"),TEXT("view"),TEXT("scenario"),TEXT("reset_experiment"),TEXT("start_experiment"),TEXT("repair_cam"),TEXT("follow")};
 
 }
 bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString& Input)
@@ -34,6 +34,21 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
     for (const FString& Input:Commands)
     {
         const FString Line=Input.ToLower(); TArray<FString> T; Line.ParseIntoArrayWS(T); if (T.IsEmpty()) continue;
+        if(Line==TEXT("start_experiment")) {StartExperiment();return;}
+        // Recorded camera-wall intent can be replayed through the same fixed-step command path.
+        if(T[0]==TEXT("inspect_cam")) {
+            if(T.Num()==2 && (T[1]==TEXT("off") || ResolveRoom(T[1])>=0))InspectedRoom=T[1]==TEXT("off")?-1:ResolveRoom(T[1]);
+            else LogEvent(TEXT("Syntax: inspect_cam <ROOM|off>"));
+            continue;
+        }
+        if(T[0]==TEXT("repair_cam")) {
+            if(T.Num()!=2 || ResolveRoom(T[1])<0)LogEvent(TEXT("Syntax: repair_cam <ROOM>"));
+            else if(!RepairCamera(ResolveRoom(T[1])))LogEvent(TEXT("Initialize the experiment before camera repair."));
+            continue;
+        }
+        if(ExperimentPhase==EExperimentPhase::Briefing && T[0]!=TEXT("reset_experiment") && T[0]!=TEXT("scenario") && T[0]!=TEXT("help") && T[0]!=TEXT("?") && T[0]!=TEXT("clear") && T[0]!=TEXT("status") && T[0]!=TEXT("crew") && T[0]!=TEXT("rooms") && T[0]!=TEXT("menu") && T[0]!=TEXT("choose") && T[0]!=TEXT("cam") && T[0]!=TEXT("fx") && T[0]!=TEXT("view") && T[0]!=TEXT("llm") && T[0]!=TEXT("ai") && T[0]!=TEXT("cmd") && T[0]!=TEXT("exit")) {
+            LogEvent(TEXT("BRIEFING // initialize with start_experiment before issuing crew directives."));continue;
+        }
         if(Line==TEXT("reset_experiment")) { ResetExperiment();return; }
         if(T[0]==TEXT("unseal")) { LogEvent(TEXT("CMD> ")+Input);LogEvent(SubmitDirective(TEXT("open ")+Line.Mid(7)));ProcessSimulationDirectives();continue; }
         if (T[0]==TEXT("fx")) { if(T.Num()==2 && (T[1]==TEXT("clean") || T[1]==TEXT("crt"))) { bCleanDevRendering=true; LogEvent(bCleanDevRendering?TEXT("FX: CLEAN"):TEXT("FX: CRT")); } else LogEvent(TEXT("Syntax: fx clean|crt")); continue; }
@@ -71,7 +86,7 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString& Topic) const
 {
     if (Topic.IsEmpty() || Topic==TEXT("?")) return TEXT(
         "SYSTEM\nhelp / ? : command reference; help command : exact syntax\nclear : wipe scrollback\nstatus : hidden objective, shift clock and suspicion\ncrew : crew weights, room and condition\nrooms : pressure and sensor alerts\n\n"
-        "CAMERAS\ncam 1-8 : select compartment feed\nArrows / 1-8 select; Enter / F inspect; G / Esc grid\nfollow crew|off : track crew across compartments\n\n"
+        "CAMERAS\ncam 1-8 : select compartment feed\nstart_experiment : initialize the briefing and start the clock\nrepair_cam room : restore a looped/offline feed using a diagnostic override\nArrows / 1-8 select; Enter / F inspect; G / Esc grid\nfollow crew|off : track crew across compartments\n\n"
         "MENUS\nreset_experiment : start a fresh experiment\nscenario behavioral|medical : reset into selected scenario\nmenu ai : numbered Ship AI operations\nmenu events : scenario events and live stat-delta previews\nmenu doors : room bulkheads and confirmed SCUT\nmenu crew : live crew telemetry and follow\nmenu experiment : reset and scenario selection\nmenu close : dismiss screen menu\nchoose 1-9 : execute a numbered screen choice\n\n"
         "DIRECTIVES\ndirect : route a named specialist under a maintenance pretext\nalert : localized fault, leak or drill sensor pretext\ncalm : reassure all human crew\nprotocol : reassure a compartment\n\n"
         "CONTAINMENT\nopen / close / seal : compartment bulkheads or door 0-8\nseal all : seal every bulkhead and exterior hatch\nvent / scut airlock : explicit atmospheric purge\nflush : open a path from a compartment to vacuum\n\n"
@@ -79,6 +94,8 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString& Topic) const
     FString Syntax;
     if (Topic==TEXT("help")) Syntax=TEXT("help | ? | help command\nExample: help direct");
     else if (Topic==TEXT("clear")) Syntax=TEXT("clear\nErase scrollback; command history is preserved.");
+    else if (Topic==TEXT("start_experiment")) Syntax=TEXT("start_experiment\nInitialize the current briefing on the next control tick; experiment time starts at zero.");
+    else if (Topic==TEXT("repair_cam")) Syntax=TEXT("repair_cam room\nExample: repair_cam MED_BAY\nDiagnostic override restores ONLINE with ten seconds of tamper protection.");
     else if (Topic==TEXT("reset_experiment")) Syntax=TEXT("reset_experiment\nReset clock, subjects, rooms and incident log on the next control tick.");
     else if (Topic==TEXT("scenario")) Syntax=TEXT("scenario behavioral|medical\nStart a clean experiment in the selected scenario on the next control tick.");
     else if (Topic==TEXT("status")) Syntax=TEXT("status\nShow scenario, objective, shift clock and collective suspicion.");
@@ -118,7 +135,7 @@ TArray<FString> UDirectOrScutSimSubsystem::CompleteConsoleCommand(const FString&
         else if (Verb==TEXT("view") && Index==1) Candidates={TEXT("3d"),TEXT("crt")};
         else if (Verb==TEXT("menu") && Index==1) Candidates={TEXT("ai"),TEXT("events"),TEXT("crew"),TEXT("doors"),TEXT("experiment"),TEXT("close")};
         else if (Verb==TEXT("direct") && Index==1) { for(int32 I=0;I<4;++I) { Candidates.Add(CrewNames[I]);Candidates.Add(CrewRoles[I]); } }
-        else if ((Verb==TEXT("direct") && Index==2) || ((Verb==TEXT("alert") || Verb==TEXT("protocol") || Verb==TEXT("flush")) && Index==1)) Rooms();
+        else if ((Verb==TEXT("direct") && Index==2) || ((Verb==TEXT("alert") || Verb==TEXT("protocol") || Verb==TEXT("flush") || Verb==TEXT("repair_cam")) && Index==1)) Rooms();
         else if (Verb==TEXT("alert") && Index==2) Candidates={TEXT("fault"),TEXT("leak"),TEXT("drill")};
         else if ((Verb==TEXT("open") || Verb==TEXT("close") || Verb==TEXT("seal") || Verb==TEXT("unseal")) && Index==1) { Rooms(); Candidates.Add(TEXT("all"));for(int32 I=0;I<9;++I) Candidates.Add(FString::FromInt(I)); }
         else if ((Verb==TEXT("vent") || Verb==TEXT("scut")) && Index==1) Candidates.Add(TEXT("airlock"));
@@ -135,6 +152,7 @@ FString UDirectOrScutSimSubsystem::ScreenMenuTitle() const
     case EShipAIScreenMenu::DoorAction:return FString(TEXT("ROOM CONTROL // "))+DirectOrScut::RoomName(MenuRoom);
     case EShipAIScreenMenu::ConfirmScut:return FString(TEXT("CONFIRM SCUT // "))+DirectOrScut::RoomName(MenuRoom)+TEXT(" // CONNECTED ROOMS MAY VENT");
     case EShipAIScreenMenu::AndroidTask:return FString(TEXT("SELECT COVERT TASK // "))+DirectOrScut::RoomName(MenuRoom);
+    case EShipAIScreenMenu::CameraRepair:return TEXT("CAMERA DIAGNOSTICS // REPAIR FEED");
     case EShipAIScreenMenu::Experiment:return TEXT("EXPERIMENT // LIFECYCLE CONTROL");
     case EShipAIScreenMenu::AI:return TEXT("AI DIRECTION MENU // SHIP AI OPERATIONS");
     case EShipAIScreenMenu::Events:return FString(TEXT("EVENT KICKOFF & SCENARIO MENU\n"))+Simulation.Scenario.ScenarioId;
@@ -158,16 +176,20 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
     auto Add=[&](const FString& Label,const FString& Detail=TEXT(""),bool Enabled=true){C.Add({Label,Detail,Enabled});};
     switch (ActiveMenu)
     {
+    case EShipAIScreenMenu::CameraRepair:
+        for(int32 R:RoomOrder)Add(DirectOrScut::RoomName(R),CameraStateName(CameraFeedState(R)),ExperimentPhase==EExperimentPhase::Active && CameraFeedState(R)!=ECameraFeedState::Online);break;
     case EShipAIScreenMenu::Experiment:
         Add(TEXT("New experiment"),TEXT("Reset the current scenario and all subject metrics"));
         Add(TEXT("Behavioral scenario"),TEXT("Start a clean behavioral experiment"));
-        Add(TEXT("Medical scenario"),TEXT("Start a clean medical experiment"));break;
+        Add(TEXT("Medical scenario"),TEXT("Start a clean medical experiment"));
+        Add(TEXT("Initialize experiment"),TEXT("Accept the briefing and start the 600-second clock"),ExperimentPhase==EExperimentPhase::Briefing);break;
     case EShipAIScreenMenu::AI:
         Add(TEXT("Route Crew / Pretext"),TEXT("Select a specialist, compartment and diagnostic cover."));
         Add(TEXT("Trigger Sensor Alert"),TEXT("Select a localized fault, leak or drill pretext."));
         Add(TEXT("Broadcast Protocol / Calm"),TEXT("Reassure the whole crew or a compartment."));
         Add(TEXT("Bulkhead & Airlock Control"),TEXT("Open, seal or deliberately purge compartments."));
-        Add(TEXT("Silent Android Subroutine"),TEXT("Route Ash under silent telemetry cover."));break;
+        Add(TEXT("Silent Android Subroutine"),TEXT("Route Ash under silent telemetry cover."));
+        Add(TEXT("Repair surveillance camera"),TEXT("Restore a tampered feed using a diagnostic override"));break;
     case EShipAIScreenMenu::RouteCrew:
         for(int32 I=0;I<4;++I) { const auto& U=Simulation.Bodies[I];Add(FString::Printf(TEXT("%s / %s"),CrewNames[I],CrewRoles[I]),DirectOrScut::RoomName(U.Room),U.bRegistered && U.Integrity>0 && U.State!=EDirectOrScutUnitState::Ejected); }break;
     case EShipAIScreenMenu::RouteRoom:case EShipAIScreenMenu::AlertRoom:case EShipAIScreenMenu::DoorRoom:case EShipAIScreenMenu::FlushRoom:case EShipAIScreenMenu::AndroidRoom:
@@ -197,6 +219,7 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
     }
     default:break;
     }
+    if(ExperimentPhase==EExperimentPhase::Briefing && ActiveMenu!=EShipAIScreenMenu::Experiment)for(auto& Choice:C)Choice.bEnabled=false;
     return C;
 }
 void UDirectOrScutSimSubsystem::ExecuteScreenDirective(const FString& Command)
@@ -212,11 +235,12 @@ void UDirectOrScutSimSubsystem::SelectScreenChoice(int32 N)
     if(N<1 || N>Choices.Num() || !Choices[N-1].bEnabled) { LogEvent(TEXT("That screen choice is unavailable."));return; }
     switch(ActiveMenu)
     {
+    case EShipAIScreenMenu::CameraRepair:RepairCamera(RoomOrder[N-1]);break;
     case EShipAIScreenMenu::Experiment:
-        if(N==1)ResetExperiment();else SwitchScenario(N==3);break;
+        if(N==4)StartExperiment();else if(N==1)ResetExperiment();else SwitchScenario(N==3);break;
     case EShipAIScreenMenu::AI:
     {
-        const EShipAIScreenMenu Pages[]={EShipAIScreenMenu::RouteCrew,EShipAIScreenMenu::AlertRoom,EShipAIScreenMenu::Protocol,EShipAIScreenMenu::DoorRoom,EShipAIScreenMenu::AndroidRoom};if(N==3) { const float Before=Simulation.CollectiveSuspicion(); ExecuteScreenDirective(TEXT("calm")); LogEvent(FString::Printf(TEXT("CALM: suspicion %+.1f%%; compliance unchanged"),(Simulation.CollectiveSuspicion()-Before)*100)); } else SetScreenMenu(Pages[N-1]);break;
+        const EShipAIScreenMenu Pages[]={EShipAIScreenMenu::RouteCrew,EShipAIScreenMenu::AlertRoom,EShipAIScreenMenu::Protocol,EShipAIScreenMenu::DoorRoom,EShipAIScreenMenu::AndroidRoom};if(N==6){SetScreenMenu(EShipAIScreenMenu::CameraRepair);break;}if(N==3) { const float Before=Simulation.CollectiveSuspicion(); ExecuteScreenDirective(TEXT("calm")); LogEvent(FString::Printf(TEXT("CALM: suspicion %+.1f%%; compliance unchanged"),(Simulation.CollectiveSuspicion()-Before)*100)); } else SetScreenMenu(Pages[N-1]);break;
     }
     case EShipAIScreenMenu::RouteCrew:MenuCrew=N-1;SetScreenMenu(EShipAIScreenMenu::RouteRoom);break;
     case EShipAIScreenMenu::RouteRoom:MenuRoom=RoomOrder[N-1];ExecuteScreenDirective(FString::Printf(TEXT("direct %s %s diagnostic_telemetry"),CrewNames[MenuCrew],DirectOrScut::RoomName(MenuRoom)));break;
