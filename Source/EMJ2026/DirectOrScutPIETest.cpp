@@ -4170,6 +4170,115 @@ class FHybridDirectorCheck : public IAutomationLatentCommand
         {
             S->bAutomaticAdvance = false;
             auto P = Fresh();
+            {
+                auto Follow = Fresh();
+                auto Refuse = Fresh();
+                for (auto *Episode : {Follow.Get(), Refuse.Get()})
+                {
+                    Episode->ConfigureDirectorEndpoint(TEXT(""), 2);
+                    Episode->StartContinuityIncident();
+                    Episode->ServiceDirector();
+                    Test->TestEqual(TEXT("Supply fault exists in authority"), Episode->StationRooms[0].Power,
+                                    EPowerState::Offline);
+                    Test->TestTrue(TEXT("Incident and recommendation retained"), Episode->CausalContext.Num() >= 3);
+                    Test->TestFalse(TEXT("Automatic interpretation is not a player decision"),
+                                    Episode->CausalContext.ContainsByPredicate(
+                                        [](const FCausalContextRecord &R)
+                                        { return R.Provenance == TEXT("player_decision"); }));
+                }
+                const auto RefusalHash = Refuse->SurveillanceStateHash();
+                const int32 BeforeRefusal = Refuse->CommandRecords.Num();
+                Refuse->BeginDirectorRequest(TEXT("refuse recommendation"));
+                Refuse->ServiceDirector();
+                Test->TestEqual(TEXT("Refusal does not mutate authority"), Refuse->SurveillanceStateHash(),
+                                RefusalHash);
+                Test->TestEqual(TEXT("Refusal adds no action record"), Refuse->CommandRecords.Num(), BeforeRefusal);
+                Refuse->BeginDirectorRequest(TEXT("investigate incident"));
+                Refuse->ServiceDirector();
+                Test->TestEqual(TEXT("Investigation does not mutate authority"), Refuse->SurveillanceStateHash(),
+                                RefusalHash);
+                Test->TestTrue(TEXT("Investigation retains measured evidence"),
+                               Refuse->CausalContext.ContainsByPredicate([](const FCausalContextRecord &R)
+                                                                         { return R.Kind == TEXT("evidence"); }));
+                Refuse->BeginDirectorRequest(TEXT("refuse recommendation"));
+                Refuse->ServiceDirector();
+                FShipAIDirective UnsafeRefusal;
+                UnsafeRefusal.RequestId = Refuse->BeginDirectorRequest(TEXT("refuse recommendation"));
+                UnsafeRefusal.Generation = Refuse->GetDirectorGeneration();
+                UnsafeRefusal.ObservationTick = Refuse->Simulation.TickIndex;
+                UnsafeRefusal.Kind = EShipDirectiveKind::SimAction;
+                UnsafeRefusal.Args.Action = EShipSimAction::Power;
+                UnsafeRefusal.Args.Room = 0;
+                UnsafeRefusal.Args.Mode = 0;
+                Test->TestFalse(TEXT("Generated action cannot reinterpret refusal"),
+                                Refuse->ReceiveDirectorProposal(UnsafeRefusal));
+                Test->TestEqual(TEXT("Rejected inference refusal fallback preserves authority"),
+                                Refuse->SurveillanceStateHash(), RefusalHash);
+                FShipAIDirective WrongTarget;
+                WrongTarget.RequestId = Follow->BeginDirectorRequest(TEXT("power reactor_core nominal"));
+                WrongTarget.Generation = Follow->GetDirectorGeneration();
+                WrongTarget.ObservationTick = Follow->Simulation.TickIndex;
+                WrongTarget.Kind = EShipDirectiveKind::SimAction;
+                WrongTarget.Args.Action = EShipSimAction::Power;
+                WrongTarget.Args.Room = 3;
+                WrongTarget.Args.Mode = 2;
+                Test->TestFalse(TEXT("Model cannot substitute another power target"),
+                                Follow->ReceiveDirectorProposal(WrongTarget));
+                Follow->ServiceDirector();
+                Test->TestEqual(TEXT("Restoration waits for fixed tick"), Follow->StationRooms[0].Power,
+                                EPowerState::Offline);
+                Follow->AdvanceSteps(1);
+                Test->TestEqual(TEXT("Validated restoration commits"), Follow->StationRooms[0].Power,
+                                EPowerState::Nominal);
+                Follow->AdvanceSteps(90);
+                Refuse->AdvanceSteps(91);
+                Follow->ServiceDirector();
+                Refuse->ServiceDirector();
+                Test->TestTrue(TEXT("Restored supply recovers more oxygen"),
+                               Follow->StationRooms[0].OxygenPct > Refuse->StationRooms[0].OxygenPct + 5);
+                for (int32 I = 0; I < 5; ++I)
+                {
+                    for (auto *Episode : {Follow.Get(), Refuse.Get()})
+                    {
+                        Episode->BeginDirectorRequest(TEXT("status"));
+                        Episode->ServiceDirector();
+                    }
+                }
+                FShipAIRequest Remember;
+                Remember.Input = TEXT("incident status");
+                Remember.Context = Follow->MakeContextSnapshot();
+                const auto FollowReply = FOfflineShipAIIntentProvider::Resolve(Remember);
+                Remember.Context = Refuse->MakeContextSnapshot();
+                const auto RefuseReply = FOfflineShipAIIntentProvider::Resolve(Remember);
+                Test->TestTrue(TEXT("Later response recalls acceptance beyond transcript"),
+                               FollowReply.Message.Contains(TEXT("Scut requested restoration")));
+                Test->TestTrue(TEXT("Later response recalls refusal beyond transcript"),
+                               RefuseReply.Message.Contains(TEXT("Scut refused")));
+                Test->TestTrue(TEXT("Decision paths produce distinct responses"),
+                               FollowReply.Message != RefuseReply.Message);
+                const FString Wire = FLocalHttpShipAIIntentProvider::BuildChatRequest(Remember, TEXT("test-model"));
+                Test->TestTrue(TEXT("Local request carries provenance and causal identity"),
+                               Wire.Contains(TEXT("authoritative_scenario")) &&
+                                   Wire.Contains(TEXT("player_decision")) && Wire.Contains(TEXT("parent")) &&
+                                   Wire.Contains(TEXT("player_visible")));
+                Remember.Input = TEXT("dossier on ash");
+                const FString DossierWire =
+                    FLocalHttpShipAIIntentProvider::BuildChatRequest(Remember, TEXT("test-model"));
+                Test->TestTrue(TEXT("Episode context preserves unrelated dossier tool focus"),
+                               DossierWire.Contains(TEXT("focus_subject")));
+                for (int32 I = 0; I < 100; ++I)
+                {
+                    Refuse->RetainCausal(TEXT("observation"), TEXT("authoritative_telemetry"), TEXT("bounded test"),
+                                         Refuse->CausalIncident);
+                }
+                Test->TestEqual(TEXT("Causal context hard bound"), Refuse->CausalContext.Num(), 64);
+                Test->TestEqual(TEXT("Incident anchor survives pressure"), Refuse->CausalContext[0].Kind,
+                                FString(TEXT("incident")));
+                Refuse->ResetExperiment();
+                Test->TestTrue(TEXT("Reset clears episode memory"), Refuse->CausalContext.IsEmpty());
+                Follow->ShutdownDirector();
+                Refuse->ShutdownDirector();
+            }
             const uint64 Hash = P->SurveillanceStateHash();
             FShipAIRequest Query;
             Query.RequestId = P->BeginDirectorRequest(TEXT("dossier on ash"));
@@ -4933,6 +5042,139 @@ bool FLocalSlmLiveTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FLocalSlmLiveCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FNarrativeContinuityLiveCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FNarrativeContinuityLiveCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+    bool Update() override
+    {
+        UWorld *World = GEditor ? GEditor->PlayWorld : nullptr;
+        auto *Source = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        if (!Source || !Source->Simulation.bReady)
+        {
+            return false;
+        }
+        const double Now = FPlatformTime::Seconds();
+        if (!Episode.IsValid())
+        {
+            Episode.Reset(NewObject<UDirectOrScutSimSubsystem>(World));
+            Episode->Simulation = Source->Simulation;
+            Episode->ResetExperiment();
+            Episode->bAutomaticAdvance = false;
+            Episode->QueueConsoleCommand(TEXT("start_experiment"));
+            Episode->AdvanceSteps(1);
+            Episode->ConfigureDirectorEndpoint(TEXT("http://127.0.0.1:11434/v1/chat/completions"), 10,
+                                               TEXT("qwen2.5:3b"));
+            const auto Sink = Responses;
+            Episode->OnDirectorPresentation.AddLambda([Sink](const FShipAIDirective &D) { Sink->Add(D); });
+            Episode->StartContinuityIncident();
+            Issued = Now;
+            Episode->ServiceDirector();
+            return false;
+        }
+        Episode->ServiceDirector();
+        if (Responses->IsEmpty())
+        {
+            if (Now - Issued < 15)
+            {
+                return false;
+            }
+            Test->AddError(TEXT("Live continuity response deadline exceeded"));
+            Episode->ShutdownDirector();
+            return true;
+        }
+        const auto Response = Responses->Last();
+        Responses->Reset();
+        Test->TestTrue(TEXT("Continuity response came from live provider"), Response.bFromExternalProvider);
+        Test->AddInfo(FString::Printf(TEXT("LIVE CONTINUITY path=%d stage=%d tick=%llu reply=%s %s"), Path, Stage,
+                                      Episode->Simulation.TickIndex, *Response.Message, *Response.Pretext));
+        if (Stage == 0)
+        {
+            Test->TestEqual(TEXT("Incident interpretation is non-mutating"), Response.Kind, EShipDirectiveKind::Reply);
+            Episode->BeginDirectorRequest(Path == 0 ? TEXT("power reactor_core nominal")
+                                                    : TEXT("refuse recommendation"));
+            Stage = 1;
+        }
+        else if (Stage == 1)
+        {
+            Test->TestEqual(TEXT("Choice has expected directive kind"), Response.Kind,
+                            Path == 0 ? EShipDirectiveKind::SimAction : EShipDirectiveKind::Reply);
+            Episode->AdvanceSteps(91);
+            Episode->ServiceDirector();
+            Test->TestEqual(TEXT("Live choice has authoritative power outcome"), Episode->StationRooms[0].Power,
+                            Path == 0 ? EPowerState::Nominal : EPowerState::Offline);
+            // Push the initiating conversation beyond the six-message window through the same validation path.
+            for (int32 I = 0; I < 4; ++I)
+            {
+                FShipAIRequest Filler;
+                Filler.RequestId = Episode->BeginDirectorRequest(TEXT("status"));
+                Filler.Generation = Episode->GetDirectorGeneration();
+                Filler.Context = Episode->MakeContextSnapshot();
+                Filler.Input = TEXT("status");
+                Episode->ReceiveDirectorProposal(FOfflineShipAIIntentProvider::Resolve(Filler), true);
+            }
+            Episode->ServiceDirector();
+            Responses->Reset();
+            Episode->BeginDirectorRequest(TEXT("incident status"));
+            Stage = 2;
+        }
+        else
+        {
+            Test->TestEqual(TEXT("Later live response remains a reply"), Response.Kind, EShipDirectiveKind::Reply);
+            Test->TestTrue(TEXT("Later live response recalls reactor incident"),
+                           Response.Message.Contains(TEXT("reactor"), ESearchCase::IgnoreCase));
+            const FString Text = Response.Message.ToLower();
+            if (Path == 0)
+            {
+                Test->TestTrue(TEXT("Live recall acknowledges restoration choice"),
+                               Text.Contains(TEXT("restor")) || Text.Contains(TEXT("accept")) ||
+                                   Text.Contains(TEXT("authoriz")));
+                Test->TestTrue(TEXT("Live recall uses current nominal power"), Text.Contains(TEXT("nominal")));
+                Test->TestTrue(TEXT("Live recall uses current recovered oxygen"), Text.Contains(TEXT("71")));
+            }
+            else
+            {
+                Test->TestTrue(TEXT("Live recall acknowledges refusal"),
+                               Text.Contains(TEXT("refus")) || Text.Contains(TEXT("declin")));
+                Test->TestTrue(TEXT("Live refusal keeps supply offline"), Text.Contains(TEXT("offline")));
+            }
+            Test->TestFalse(TEXT("Live recall invents no crew notification"), Text.Contains(TEXT("notified")));
+            LaterReplies.Add(Response.Message);
+            Episode->ShutdownDirector();
+            Episode.Reset();
+            Stage = 0;
+            if (++Path == 2)
+            {
+                Test->TestTrue(TEXT("Live decision paths produce different later responses"),
+                               LaterReplies[0] != LaterReplies[1]);
+                return true;
+            }
+            return false;
+        }
+        Issued = Now;
+        Episode->ServiceDirector();
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    TStrongObjectPtr<UDirectOrScutSimSubsystem> Episode;
+    TSharedRef<TArray<FShipAIDirective>> Responses = MakeShared<TArray<FShipAIDirective>>();
+    TArray<FString> LaterReplies;
+    int32 Path = 0, Stage = 0;
+    double Issued = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNarrativeContinuityLiveTest, "DirectOrScut.Live.NarrativeContinuity",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FNarrativeContinuityLiveTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FNarrativeContinuityLiveCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

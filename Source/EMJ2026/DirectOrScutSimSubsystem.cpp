@@ -16,6 +16,12 @@
 
 namespace
 {
+const TCHAR *PowerLabel(EPowerState State)
+{
+    return State == EPowerState::Nominal   ? TEXT("nominal")
+           : State == EPowerState::Offline ? TEXT("offline")
+                                           : TEXT("low");
+}
 const int32 RoomOrder[] = {0, 2, 3, 4, 5, 6, 7, 1};
 const TCHAR *CrewNames[] = {TEXT("vale"), TEXT("chen"), TEXT("ortiz"), TEXT("ash")};
 const TCHAR *CrewRoles[] = {TEXT("engineer"), TEXT("medic"), TEXT("technician"), TEXT("android")};
@@ -44,6 +50,7 @@ const TCHAR *PublicVerbs[] = {TEXT("help"),
                               TEXT("scenario"),
                               TEXT("reset_experiment"),
                               TEXT("start_experiment"),
+                              TEXT("continuity_incident"),
                               TEXT("repair_cam"),
                               TEXT("follow"),
                               TEXT("falsify_bio"),
@@ -269,6 +276,10 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
     RequestedFeed = -1;
     FollowedCrew = -1;
     ++FollowRevision;
+    CausalContext.Reset();
+    NextCausalId = 1;
+    CausalIncident = CausalDecision = CausalNextObservation = 0;
+    bCausalIncidentActive = false;
     CommandRecords.Reset();
     CinematicCues.Reset();
     ConfigureScenario(bMedicalScenario);
@@ -561,6 +572,52 @@ FSimContextSnapshot UDirectOrScutSimSubsystem::MakeContextSnapshot() const
     Writer->WriteValue(TEXT("uplink_heat_pct"), UplinkHeatPct);
     Writer->WriteValue(TEXT("uplink_lockout_seconds"), UplinkLockoutSeconds());
     Writer->WriteValue(TEXT("suspicion"), Simulation.CollectiveSuspicion());
+    Writer->WriteValue(TEXT("causal_context_scope"),
+                       TEXT("One operational episode, maximum 64 records; incident and recommendation pinned. Older "
+                            "records may be evicted; absent parent IDs are unavailable evidence."));
+    Writer->WriteValue(TEXT("causal_records_evicted"), LexToString(NextCausalId - 1 - CausalContext.Num()));
+    if (bCausalIncidentActive)
+    {
+        Writer->WriteObjectStart(TEXT("operational_episode"));
+        Writer->WriteValue(TEXT("incident_id"), LexToString(CausalIncident));
+        Writer->WriteValue(TEXT("historical_incident"),
+                           TEXT("REACTOR_CORE supply interruption, initial power offline, initial oxygen 64%."));
+        Writer->WriteValue(TEXT("recommendation_claim"),
+                           TEXT("Restore nominal reactor_core power; not proof of execution."));
+        FString Decision = TEXT("No decision yet"), Outcome = TEXT("No committed action recorded");
+        for (const auto &Record : CausalContext)
+        {
+            if (Record.Id == CausalDecision)
+            {
+                Decision = Record.Kind + TEXT(": ") + Record.Text;
+            }
+            if (Record.Provenance == TEXT("validator"))
+            {
+                Outcome = Record.Text;
+            }
+        }
+        Writer->WriteValue(TEXT("latest_scut_decision"), Decision);
+        Writer->WriteValue(TEXT("latest_validation"), Outcome);
+        Writer->WriteValue(TEXT("measured_tick"), LexToString(Simulation.TickIndex));
+        Writer->WriteValue(TEXT("measured_power_now"), PowerLabel(StationRooms[0].Power));
+        Writer->WriteValue(TEXT("measured_oxygen_now_pct"), StationRooms[0].OxygenPct);
+        Writer->WriteObjectEnd();
+    }
+    Writer->WriteArrayStart(TEXT("causal_context"));
+    for (const auto &Record : CausalContext)
+    {
+        Writer->WriteObjectStart();
+        Writer->WriteValue(TEXT("id"), LexToString(Record.Id));
+        Writer->WriteValue(TEXT("tick"), LexToString(Record.Tick));
+        Writer->WriteValue(TEXT("parent"), LexToString(Record.Parent));
+        Writer->WriteValue(TEXT("request"), LexToString(Record.Request));
+        Writer->WriteValue(TEXT("provenance"), Record.Provenance);
+        Writer->WriteValue(TEXT("kind"), Record.Kind);
+        Writer->WriteValue(TEXT("player_visible"), Record.bPlayerVisible);
+        Writer->WriteValue(TEXT("text"), Record.Text);
+        Writer->WriteObjectEnd();
+    }
+    Writer->WriteArrayEnd();
     Writer->WriteArrayStart(TEXT("crew"));
     for (int32 I = 0; I < 4; ++I)
     {
@@ -589,6 +646,8 @@ FSimContextSnapshot UDirectOrScutSimSubsystem::MakeContextSnapshot() const
         Writer->WriteValue(TEXT("name"), DirectOrScut::RoomName(R));
         Writer->WriteValue(TEXT("pressurized"), Simulation.Rooms[R].bIsPressurized);
         Writer->WriteValue(TEXT("alert"), Simulation.Rooms[R].AlertSeconds);
+        Writer->WriteValue(TEXT("oxygen_pct"), StationRooms[R].OxygenPct);
+        Writer->WriteValue(TEXT("power"), PowerLabel(StationRooms[R].Power));
         Writer->WriteObjectEnd();
     }
     Writer->WriteArrayEnd();
@@ -2995,6 +3054,11 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
             ExecuteCrisisCommand(T);
             continue;
         }
+        if (Line == TEXT("continuity_incident"))
+        {
+            StartContinuityIncident();
+            continue;
+        }
         if (Line == TEXT("start_experiment"))
         {
             StartExperiment();
@@ -4094,7 +4158,65 @@ bool UDirectOrScutSimSubsystem::ConfigureDirectorEndpoint(const FString &Endpoin
     }
     return true;
 }
-uint64 UDirectOrScutSimSubsystem::BeginDirectorRequest(const FString &Input)
+uint64 UDirectOrScutSimSubsystem::RetainCausal(const FString &Kind, const FString &Provenance, const FString &Text,
+                                               uint64 Parent, uint64 Request, bool Visible)
+{
+    if (CausalContext.Num() >= 64)
+    {
+        int32 Evict = INDEX_NONE;
+        for (int32 I = 2; I < CausalContext.Num(); ++I)
+        {
+            const auto &Old = CausalContext[I];
+            if (Old.Kind == TEXT("operator_input") || Old.Kind == TEXT("delivered_claim") ||
+                Old.Kind == TEXT("observation"))
+            {
+                Evict = I;
+                break;
+            }
+        }
+        // Episode/recommendation anchors survive; missing older parents remain explicit IDs.
+        CausalContext.RemoveAt(Evict == INDEX_NONE ? 2 : Evict);
+    }
+    const uint64 Id = NextCausalId++;
+    CausalContext.Add({Id, Simulation.TickIndex, Parent, Request, Provenance, Kind, Text.Left(384), Visible});
+    return Id;
+}
+uint64 UDirectOrScutSimSubsystem::CausalRequestParent(uint64 Request) const
+{
+    for (int32 I = CausalContext.Num() - 1; I >= 0; --I)
+    {
+        const auto &Record = CausalContext[I];
+        if (Record.Request == Request && Record.Provenance == TEXT("player_decision"))
+        {
+            return Record.Id;
+        }
+    }
+    return CausalIncident;
+}
+void UDirectOrScutSimSubsystem::StartContinuityIncident()
+{
+    if (ExperimentPhase != EExperimentPhase::Active || bCausalIncidentActive || bDirectorReplay)
+    {
+        LogEvent(TEXT("SYSTEM> continuity_incident requires an active shift and one fresh episode."));
+        return;
+    }
+    bCausalIncidentActive = true;
+    bAILink = true;
+    // Authored supply interruption in existing authoritative operational state.
+    StationRooms[0].Power = EPowerState::Offline;
+    StationRooms[0].OxygenPct = 64.f;
+    CausalIncident = RetainCausal(
+        TEXT("incident"), TEXT("authoritative_scenario"),
+        TEXT("REACTOR_CORE supply interruption: power offline, measured oxygen 64%. Cause not diagnosed."));
+    const FString Recommendation =
+        TEXT("REACTOR_CORE power is offline; oxygen is 64%. Recommend `power reactor_core nominal` to restore supply. "
+             "Scut may `refuse recommendation` or `investigate incident`. Restoration is not yet committed.");
+    RetainCausal(TEXT("recommendation"), TEXT("mother7_claim"), Recommendation, CausalIncident, 0, true);
+    RecordCue(0, .8f, TEXT("MOTHER-7> ") + Recommendation);
+    BeginDirectorRequest(TEXT("incident assessment"), false);
+}
+
+uint64 UDirectOrScutSimSubsystem::BeginDirectorRequest(const FString &Input, bool PlayerInput)
 {
     if (bDirectorShuttingDown || bDirectorReplay || ExperimentPhase == EExperimentPhase::Resolved ||
         DirectorRequests.Num() >= 32 || Input.IsEmpty() || Input.Len() > 1024)
@@ -4103,6 +4225,30 @@ uint64 UDirectOrScutSimSubsystem::BeginDirectorRequest(const FString &Input)
     }
     FPendingDirectorRequest Pending;
     Pending.Request = {NextDirectorRequest++, DirectorGeneration, MakeContextSnapshot(), Input};
+    if (bCausalIncidentActive && PlayerInput)
+    {
+        const FString Choice = Input.TrimStartAndEnd().ToLower();
+        const FString Kind = Choice == TEXT("refuse recommendation")        ? TEXT("refusal")
+                             : Choice == TEXT("investigate incident")       ? TEXT("investigation")
+                             : Choice == TEXT("power reactor_core nominal") ? TEXT("acceptance")
+                                                                            : TEXT("operator_input");
+        const uint64 Record =
+            RetainCausal(Kind, TEXT("player_decision"), Input, CausalIncident, Pending.Request.RequestId, true);
+        if (Kind != TEXT("operator_input"))
+        {
+            CausalDecision = Record;
+            if (Kind == TEXT("investigation"))
+            {
+                const FString Evidence = FString::Printf(TEXT("Read-only supply inspection: REACTOR_CORE power=%s "
+                                                              "oxygen=%.1f%%; underlying cause remains undiagnosed."),
+                                                         PowerLabel(StationRooms[0].Power), StationRooms[0].OxygenPct);
+                RetainCausal(TEXT("evidence"), TEXT("authoritative_telemetry"), Evidence, Record,
+                             Pending.Request.RequestId, true);
+                LogEvent(TEXT("SYSTEM> ") + Evidence, 0);
+            }
+        }
+        Pending.Request.Context = MakeContextSnapshot();
+    }
     Pending.Request.Transcript = DirectorTranscript;
     const uint64 Id = Pending.Request.RequestId;
     DirectorRequests.Add(Id, MoveTemp(Pending));
@@ -4118,6 +4264,15 @@ void UDirectOrScutSimSubsystem::ServiceDirector(double Now)
     if (Now < 0)
     {
         Now = FPlatformTime::Seconds();
+    }
+    if (bCausalIncidentActive && Simulation.TickIndex >= CausalNextObservation)
+    {
+        CausalNextObservation = Simulation.TickIndex + 90;
+        RetainCausal(
+            TEXT("observation"), TEXT("authoritative_telemetry"),
+            FString::Printf(TEXT("REACTOR_CORE power=%s oxygen=%.1f%% at tick %llu; measured, not an inferred repair."),
+                            PowerLabel(StationRooms[0].Power), StationRooms[0].OxygenPct, Simulation.TickIndex),
+            CausalDecision ? CausalDecision : CausalIncident);
     }
     // Observe transitions outside FixedStep. Presentation never advances or edits truth.
     for (; ProactiveEventCursor < Events.Num(); ++ProactiveEventCursor)
@@ -4220,6 +4375,12 @@ void UDirectOrScutSimSubsystem::ServiceDirector(double Now)
     {
         if (D.Generation == DirectorGeneration)
         {
+            if (bCausalIncidentActive)
+            {
+                RetainCausal(TEXT("delivered_claim"), TEXT("mother7_claim"),
+                             D.Message.IsEmpty() ? D.Pretext : D.Message, CausalRequestParent(D.RequestId), D.RequestId,
+                             true);
+            }
             OnDirectorPresentation.Broadcast(D);
         }
     }
@@ -4227,6 +4388,13 @@ void UDirectOrScutSimSubsystem::ServiceDirector(double Now)
 void UDirectOrScutSimSubsystem::RecordDirectorOutcome(const FShipAIDirective &D, bool Accepted, const FString &Reason,
                                                       uint64 CommitTick)
 {
+    if (bCausalIncidentActive && (!Accepted || D.Kind == EShipDirectiveKind::SimAction))
+    {
+        RetainCausal(
+            Accepted ? TEXT("accepted_outcome") : TEXT("rejected_outcome"), TEXT("validator"),
+            FString::Printf(TEXT("%s // %s // commit_tick=%llu"), *CanonicalDirectorAction(D), *Reason, CommitTick),
+            CausalRequestParent(D.RequestId), D.RequestId);
+    }
     FDirectorCommandRecord R;
     R.Tick = Simulation.TickIndex;
     R.bResolvedOutcome = true;
@@ -4274,11 +4442,21 @@ bool UDirectOrScutSimSubsystem::ReceiveDirectorProposal(FShipAIDirective D, bool
     FString Reason;
     const auto OfflineIntent = FOfflineShipAIIntentProvider::Resolve(Request);
     const bool RequiresReply = OfflineIntent.Kind == EShipDirectiveKind::Reply && D.Kind != EShipDirectiveKind::Reply;
+    const bool WrongRestoration =
+        bCausalIncidentActive &&
+        Request.Input.TrimStartAndEnd().Equals(TEXT("power reactor_core nominal"), ESearchCase::IgnoreCase) &&
+        (D.Kind != EShipDirectiveKind::SimAction || D.Args.Action != EShipSimAction::Power || D.Args.Room != 0 ||
+         D.Args.Mode != 0);
+    if (WrongRestoration)
+    {
+        Reason = TEXT("restoration request requires nominal reactor_core power");
+    }
     if (RequiresReply)
     {
         Reason = TEXT("query or ambiguous group request requires a non-mutating reply");
     }
-    if (RequiresReply || D.ObservationTick != Request.Context.Tick || !ValidateDirectorDirective(D, Reason))
+    if (RequiresReply || WrongRestoration || D.ObservationTick != Request.Context.Tick ||
+        !ValidateDirectorDirective(D, Reason))
     {
         RecordDirectorOutcome(D, false, Reason.IsEmpty() ? TEXT("observation identity mismatch") : Reason);
         if (!Fallback)

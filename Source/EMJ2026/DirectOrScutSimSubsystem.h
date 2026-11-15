@@ -116,6 +116,12 @@ struct FDirectorMenuOption
     int32 Room = -1;
     FInteractionChoice Choice;
 };
+struct FCausalContextRecord
+{
+    uint64 Id = 0, Tick = 0, Parent = 0, Request = 0;
+    FString Provenance, Kind, Text;
+    bool bPlayerVisible = false;
+};
 struct FSimContextSnapshot
 {
     uint64 Tick = 0;
@@ -460,7 +466,7 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     TArray<FShipAIEvent> Events;
     TSharedPtr<IShipAIIntentProvider> IntentProvider;
     void ShutdownDirector();
-    uint64 BeginDirectorRequest(const FString &Input);
+    uint64 BeginDirectorRequest(const FString &Input, bool PlayerInput = true);
     bool ReceiveDirectorProposal(FShipAIDirective Directive, bool Fallback = false);
     void ServiceDirector(double Now = -1);
     bool ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds = 2, const FString &Model = TEXT(""));
@@ -578,6 +584,14 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     FVector ToSetWorld(int32 Room, FVector2D Position) const;
     static FCompartmentSetTransform DefaultSetTransform(int32 Room);
     static FVector MapSimulationToSet(int32 Room, FVector2D Position);
+    // One opt-in operational episode. Two episode anchors plus sixty-two prioritized records.
+    TArray<FCausalContextRecord> CausalContext;
+    uint64 NextCausalId = 1, CausalIncident = 0, CausalDecision = 0, CausalNextObservation = 0;
+    bool bCausalIncidentActive = false;
+    void StartContinuityIncident();
+    uint64 CausalRequestParent(uint64 Request) const;
+    uint64 RetainCausal(const FString &Kind, const FString &Provenance, const FString &Text, uint64 Parent = 0,
+                        uint64 Request = 0, bool Visible = false);
     TArray<FDirectorCommandRecord> CommandRecords;
     TArray<FCinematicCue> CinematicCues;
     TArray<FDirectorMenuOption> DirectorOptions;
