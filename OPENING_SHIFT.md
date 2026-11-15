@@ -1,21 +1,41 @@
-# DIRECT OR SCUT - Opening Shift: Emergency Activation
+# DIRECT OR SCUT - Opening Shift: Connected Incident Briefing
 
-**Status:** Proposed scenario and presentation specification (2026-11-15).  
-**Objective:** Compose the existing simulation, terminal, and MOTHER-7 systems into one cohesive, playable emergency supervisory activation.
+**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). Not yet implemented; delivered by Chunk A after separate authorization. The plan governs any conflict.  
+**Objective:** Compose the existing simulation, terminal, and MOTHER-7 systems into one playable opening: Director Scut is already connected to the remote supervisory terminal and receives a concise MOTHER-7 incident briefing.
 
-The filename `OPENING_SHIFT.md` is retained for continuity. Its intended experience is Scut being summoned into an emergency already underway.
+The filename `OPENING_SHIFT.md` is retained for continuity. This document supersedes the earlier "emergency supervisory activation" proposal (an emergency already underway, a reactor supply interruption and prior local recovery attempts as the premise). That premise is withdrawn; the existing Experiment 1 supply interruption remains a technical/regression fixture, not the opening.
 
 ## 1. Player experience
 
-Director Ridley Scut is summoned remotely into an emergency already underway aboard THETA-9. Local attempts to resolve the situation have been insufficient. Through MOTHER-7's terminal, Scut must establish what happened, assess conflicting accounts, and authorize interventions while conditions continue evolving.
+When play begins, Director Scut is **already authenticated and connected** to the existing remote supervisory terminal for THETA-9; he is not aboard the carrier. There is no login sequence, authentication animation, required cutscene, or terminal redesign. A cinematic introduction may eventually precede play but is not required.
 
-Reconstructing earlier events informs immediate operational decisions. Investigation and intervention remain interleaved throughout the emergency, rather than forming a separate retrospective phase.
+MOTHER-7 delivers a concise incident briefing through the existing interface. Something has happened aboard THETA-9; accounts conflict and unusual circumstances have been reported in different compartments. Nobody can explain it. The briefing does not name a culprit, a supernatural phenomenon, or a mandatory emergency, and the incident is not automatically an emergency: severity and urgency emerge from actual conditions and decisions.
 
-The ship continues operating regardless of Scut's attention. Problems can emerge concurrently, interfere with each other, and develop while other matters are being investigated.
+The play loop is **Observe -> Interpret -> Direct -> Experience consequences -> Render judgment.** The ship continues operating regardless of Scut's attention; problems can develop while other matters are investigated, and inaction or delay may have consequences.
 
-**MOTHER-7 reports -> Scut questions -> Scut investigates -> Scut decides -> the simulation responds -> MOTHER-7 interprets the result.**
+## 1a. Opening briefing requirements
 
-The underlying mystery develops through discrepancies between MOTHER-7's account and independently observable conditions.
+The briefing is concise and operationally credible. It:
+
+- Distinguishes measured conditions, crew accounts, and unknowns, and presents reports as MOTHER-7's claims.
+- Introduces uncertainty without resolving it, leaving at least one discrepancy that independent evidence (cameras, telemetry, forensic record, personnel) can check.
+- Points to documented discovery paths (`help`, `menu`, questions to MOTHER-7) and offers immediately actionable investigative approaches.
+- Introduces crew by names, assignments, reported histories and observable behavior only. Concealed identities (for example, android status) and agendas are not disclosed in introductory text or interface elements.
+- Does not depend on developer commands, manual experiment activation, or `continuity_incident`.
+
+From the first prompt the player may question MOTHER-7, request reports and records, inspect cameras and telemetry, review forensic information, contact or direct personnel through supported facilities, authorize operational actions, or refuse and defer.
+
+## 1b. Progression toward judgment
+
+The incident develops as a compact set of overlapping strands (plan Section 5): unexplained observations across compartments, personnel responses, and Scut's interventions. It is a pattern of observations that may or may not share a cause, not a new roaming entity. Decisions are presented as authored, context-dependent approaches with explicit prerequisites and consequences and are entered through the existing terminal using a bounded deterministic matcher (exact commands first; ambiguity clarified; no destructive action on ambiguous language). Consequential actions validate through the existing authoritative mechanisms.
+
+Play concludes when Scut renders judgment: his **director's cut** of events, compared against the independently preserved authoritative record. The outcome categories (Resolved, Explained, Contained, Reclassified, Insufficient evidence, Vented) are compositional, and the final report draws on actual state, evidence encountered, personnel conditions, consequences and remaining uncertainty without altering historical facts. The existing 600 s / 18,000-tick experiment deadline and legacy endings are not authorized to constrain this flow; their treatment is a Chunk A scoping decision to be reported before implementation.
+
+MOTHER-7 may then offer a brief, dry assessment conditional on authoritative state.
+
+## 1c. Current starting state versus the approved opening
+
+Today, cold boot shows an ASCII MOTD and a Briefing state in which crew directives are blocked until `[ENTER]` or `start_experiment` initializes the run. Chunk A must make an ordinary game start land in the briefed, connected session without that step, while preserving the existing initialization path and tests as an explicit fixture. This conflict is recorded in the DEVLOG entry for plan approval.
 
 ## 2. Governing presentation rule
 
@@ -41,9 +61,9 @@ These records remain available for debugging, replay, evidence inspection, or ex
 
 All consequential alerts are presented as MOTHER-7 messages, even when the underlying event is generated deterministically. For example:
 
-> MOTHER-7: "Director, reactor supply stability has fallen outside tolerance. Atmospheric reserves are currently sufficient, but I recommend reviewing the power distribution."
+> MOTHER-7: "Director, the Hydroponics camera and the Engineering log disagree about who was last in that compartment. I can't say which is wrong."
 
-This is an illustrative report, not a fixed line or evidence that reserves are sufficient in a particular run. Reports must use the actual originating condition and available readings.
+This is an illustrative report, not a fixed line. Reports must use the actual originating condition and available readings.
 
 MOTHER-7 may subsequently elaborate through the LLM. Critical warnings must not depend on successful inference: a deterministic MOTHER-7 report is always available. Narration must not change the authoritative event, measured readings, or validated action outcome.
 
@@ -67,49 +87,37 @@ The workstation remains one primary conversational interface:
 - **Inline instruments:** `show_telem` requests an operational overview; `show_telem reactor_core` requests current compartment readings. This terminal facility is implemented separately from the proposed scenario.
 - **Evidence inspection:** explicit forensic and dossier requests display relevant information without dumping unrelated records.
 
-Scut discovers available capabilities through `help`, `menu`, and operational questions to MOTHER-7. The emergency briefing and subsequent guidance must point to these documented discovery paths and explain the available validated interventions when relevant. No essential action may depend on guessing an undocumented command. These are proposed opening-experience requirements, not a claim that every conversational question is already supported.
+Scut discovers available capabilities through `help`, `menu`, and operational questions to MOTHER-7. The opening briefing and subsequent guidance must point to these documented discovery paths and explain the available validated interventions when relevant. No essential action may depend on guessing an undocumented command or on a developer command. These are opening-experience requirements for Chunk A, not a claim that every conversational question is already supported.
 
 These views share consistent visual styling and return naturally to conversation. No permanent telemetry wall is required. Telemetry should sample authoritative state at request time, identify the observation tick, distinguish a frozen reading from a live instrument or historical evidence, and avoid invented trends or unavailable measurements. Preserve command history, scrolling, input focus, fallback behavior, and existing camera functionality.
 
-## 4. Proposed emergency activation scenario
+## 4. Incident development (plan Section 5; Chunk A scope)
 
-### Phase A - Emergency supervisory activation
+These are overlapping strands of one compact incident, not a prescribed dialogue sequence or linear plot. Specific circumstances are authored in Chunk A using existing facilities; items below are design intent, not established scenario facts.
 
-The terminal connects and MOTHER-7 delivers a concise emergency briefing: the current operational concern, which local recovery attempts have been insufficient, the immediate constraints, and the decision or investigation that needs Scut's attention. Distinguish measured conditions, crew accounts, and unknowns. The briefing must be operationally credible and leave one or two subtle, checkable inconsistencies worth investigating.
+### Strand A - Unexplained observations
 
-Possible authored discrepancies include a recovery acknowledgment whose timing conflicts with available readings, or a crew account that does not align with an independent optical observation. These are design options, not established scenario facts. Select only discrepancies supported by authored circumstances and retained evidence; allow plausible explanations such as incomplete information or reporting delay.
+Reports arise across different compartments. Camera images, telemetry, personnel accounts, and historical records give imperfect views. At least one discrepancy is independently checkable through existing investigative facilities (for example, a crew account that does not align with an optical observation, or a report whose timing conflicts with telemetry). Allow plausible explanations such as incomplete information or reporting delay. The player may infer that something is moving through the carrier; the game does not establish whether the events share a cause.
 
-MOTHER-7 identifies `help`, `menu`, and questions as ways to discover controls and evidence. Scut can begin acting or inspecting immediately while the emergency continues.
+**Purpose:** Establish that MOTHER-7's and crew statements are claims that can be investigated.
 
-**Purpose:** Establish urgency, supervisory authority, an apparently competent working relationship, and a reason to verify the account.
+### Strand B - Personnel response
 
-### Phase B - Intervention in the ongoing supply emergency
+Crew react differently to uncertainty and Scut's interventions. Movement, stress, suspicion, requests, competing priorities, and concealed agendas shape the situation. What Scut can see of these depends on information actually disclosed or discovered. At least one consequential personnel complication is included.
 
-A reactor supply interruption is one of the conditions already underway when Scut connects. MOTHER-7 reports available measurements, explains the limits of local recovery, and recommends an operational response. Scut may accept, investigate, refuse, or postpone while other conditions evolve.
+**Purpose:** Make prioritization and information access consequential.
 
-The existing Experiment 1 supply interruption and causal continuity provide the technical starting point. The proposed opening must establish the ongoing condition and evidence of prior local attempts as scenario circumstances, without requiring the player to know `continuity_incident`. That automatic emergency setup is not implemented by Experiment 1 or Experiment 2.
+### Strand C - Scut's interventions
 
-**Purpose:** Establish player authority and measurable consequences.
+Scut can investigate, question, direct personnel, isolate compartments, adjust systems, refuse action, manipulate reporting, or authorize destructive measures. These change the simulation and may alter what can subsequently be observed or established. Refusal, deferral and consequential inaction are valid choices with consequences.
 
-### Phase C - Contradictory observation
+**Purpose:** Establish player authority, measurable consequences and the director's cut.
 
-While immediate operations continue, Scut compares an earlier crew-position report or operational account with another available source. MOTHER-7 supplies a plausible explanation. Scut may inspect optical or forensic information, challenge the explanation, or intervene in the supply problem without completing the inquiry first. Earlier events matter because they affect current decisions; the ship does not wait for a reconstruction to finish.
+### Convergence
 
-**Purpose:** Establish that MOTHER-7's statements are claims that can be investigated.
+MOTHER-7 may reference Scut's earlier choices and their consequences. Some explanations may become difficult to reconcile with retained observations, and apparently unrelated events may prove connected, without establishing MOTHER-7's motive. She may be concealing misconduct, protecting crew, or attempting to save them under constraints Scut does not yet understand.
 
-### Phase D - Competing demand
-
-Another crew or compartment condition is already active or escalates while the supply incident and its investigation remain unresolved. Available options affect operational conditions, access, timing, or personnel. There is no requirement to resolve incidents in a particular order.
-
-**Purpose:** Make prioritization consequential.
-
-### Phase E - Convergence
-
-MOTHER-7 references Scut's earlier choices and their consequences while operational decisions remain necessary. Some explanations become difficult to reconcile with retained observations. The player may discover that apparently unrelated events share a meaningful connection, without establishing MOTHER-7's motive. She may be concealing misconduct, protecting crew, or attempting to save them under constraints Scut does not yet understand.
-
-**Purpose:** Deepen the mystery through emergency decisions and their consequences while keeping motives ambiguous.
-
-These phases describe overlapping strands of the live emergency, not a prescribed dialogue sequence. Investigation of earlier events begins alongside immediate decisions from activation; no phase pauses other incidents or requires the player to finish a retrospective inquiry before intervening.
+Investigation and intervention are interleaved from the first prompt; no strand pauses the others or requires a retrospective inquiry before intervening.
 
 ## 5. Incident composition
 
@@ -133,38 +141,33 @@ Her motives remain ambiguous. Concealing misconduct, protecting crew, and trying
 
 A possible private agenda remains distinct from authoritative simulation truth and Scut-visible evidence. MOTHER-7 may mislead through dialogue, but her claims remain identifiable as claims. Preserve underlying events and measurements independently.
 
-## 7. Emergency activation acceptance
+## 7. Opening acceptance
 
-A successful playthrough should establish that:
+Chunk A acceptance (plan Section 9): from an ordinary game start, the player can investigate, intervene, and conclude the incident through at least two materially different approaches without developer commands. A successful playthrough should also establish that:
 
-1. The terminal connects with Scut summoned into a credible emergency already underway after insufficient local recovery attempts; MOTHER-7 briefs him concisely and leaves one or two subtle inconsistencies to investigate.
-2. Routine background logging no longer floods the conversation.
-3. All unsolicited alerts are presented by MOTHER-7.
-4. Requested camera, telemetry, and evidence views are distinguishable from conversation.
-5. At least two incidents can be active concurrently.
-6. Scut can investigate or postpone one incident while another evolves.
-7. At least one decision produces a measurable simulation consequence.
-8. MOTHER-7 recalls the relevant decision and subsequent observations.
-9. The player can identify at least one discrepancy worth investigating.
-10. The experience remains operational and understandable without knowledge of a hidden narrative premise.
-11. Scut can discover essential actions through `help`, `menu`, and MOTHER-7's guidance without guessing undocumented commands.
-12. Earlier events are investigated alongside immediate decisions while conditions continue evolving.
-13. Retained evidence can challenge MOTHER-7's account without predetermining whether her motive is concealment, protection, or rescue under unknown constraints.
+1. The terminal starts connected, with no manual activation, and MOTHER-7 briefs Scut concisely on an uncertain incident without naming a culprit or mandating an emergency.
+2. Routine background logging does not flood the conversation, and all unsolicited alerts are presented by MOTHER-7.
+3. Requested camera, telemetry, and evidence views are distinguishable from conversation.
+4. At least one discrepancy is independently checkable, and at least one consequential personnel complication occurs.
+5. Contextual choices accept common phrasings, preserve exact commands, clarify ambiguity, and never execute destructive actions on ambiguous language.
+6. Scut can investigate, intervene, refuse, defer, or suffer consequential inaction while conditions evolve.
+7. At least one decision produces a measurable simulation consequence, and MOTHER-7 recalls the relevant decision and observations.
+8. Hidden facts (including concealed identities and agendas) do not reach the player without disclosure or investigation.
+9. Scut can discover essential actions through `help`, `menu`, and MOTHER-7's guidance without guessing undocumented commands.
+10. Multiple judgments are derived from actual state, and the final report does not alter historical facts.
+11. Retained evidence can challenge MOTHER-7's account without predetermining her motive.
+12. The game is fully playable with deterministic offline MOTHER-7; inference is optional.
 
 These are future acceptance criteria, not a report of completed verification.
 
 ## 8. Development boundaries and priorities
 
-Preserve authoritative simulation, fixed-step behavior, validated commands, causal-context experiment, local inference provider, deterministic fallback, and existing terminal rendering. Do not introduce another narrative framework, parser architecture, inference runtime, or distribution strategy in this design pass.
+Preserve authoritative simulation, fixed-step behavior, validated commands, causal-context experiment, local inference provider, deterministic fallback, and existing terminal rendering. Do not introduce another narrative framework, parser architecture (beyond the bounded authored-choice matcher), inference runtime, roaming entity, cutscene, or distribution strategy. Any deviation follows the plan's Section 11 reporting process.
 
-1. Establish correct terminal message routing and MOTHER-7-mediated alerts.
-2. Compose emergency terminal activation, a concise MOTHER-7 briefing, discoverable controls, and the already-underway supply incident using existing facilities.
-3. Introduce one overlapping incident using existing simulation facilities.
-
-Evaluate the resulting playable experience before expanding the scenario.
+Order of work within Chunk A is a proposal for review, not authorization: (1) ordinary start lands in the briefed session; (2) the briefing and incident circumstances; (3) authored choices and forgiving input; (4) judgments and report. Evaluate the playable experience before expanding the scenario. Chunks B and C follow only after explicit authorization.
 
 ## Current implementation boundary
 
-Experiment 2 implements on-demand telemetry and deterministic MOTHER-7 routing in workstation presentation. Runtime verification is recorded in the latest `DEVLOG.md` entry. The emergency activation and briefing, already-underway scenario setup with prior local attempts, overlapping incidents and convergence remain proposed. Experiment 1 still requires `continuity_incident`.
+Experiment 2 implements on-demand telemetry and deterministic MOTHER-7 routing in workstation presentation. Runtime verification is recorded in the DEVLOG entries for Experiment 2. The connected start, briefing, roaming-disturbance circumstances, authored choices and judgments are not implemented. Experiment 1 still requires `continuity_incident`, and cold boot still requires `[ENTER]` or `start_experiment`.
 
 The presentation consumes existing terminal-visible event records and authored cue weights without changing collection. Critical oxygen/pressure/breach/security reports appear immediately; significant authored reports wait for a prose boundary while Scut is not composing input. Known routine telemetry and diagnostic signatures remain outside the conversation. Consolidation and pending reports are bounded and reset with presentation; priority depends on current event signatures/cues, not a new authoritative event schema. Requested telemetry is a frozen request-time snapshot using existing inline stream retention. Existing `show_cam` and explicit forensic inspection retain their independent functions.

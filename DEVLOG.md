@@ -1,3 +1,16 @@
+# Director Scut canonical game plan approved; documentation aligned - 2026-11-15
+
+Documentation-only entry. The Director Scut design and execution contract is approved and recorded at [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md), the authoritative reference for creative direction, intended experience, implementation sequence and acceptance criteria. `AGENTS.md`, `DIRECT_OR_SCUT.md` and `OPENING_SHIFT.md` were aligned to it; the earlier emergency-activation/supply-incident opening proposal is superseded, and historical records and test results are unchanged.
+
+- **Established starting state:** play is intended to begin with Scut already authenticated and connected to the existing remote supervisory terminal, receiving a concise MOTHER-7 incident briefing. The terminal, simulation, validation/replay, procedural audio, deterministic MOTHER-7 and optional inference adapter are preserved infrastructure, not features to rebuild.
+- **Implementation sequence (each chunk separately reviewed and explicitly authorized):** Chunk A, playable incident and branching judgments; Chunk B, sound, character and presentation; Chunk C, playtesting and stabilization. Acceptance criteria are in plan Section 9.
+- **Governance:** deviations require the five-point report in plan Section 11 and approval.
+- **Known conflicts for Chunk A scoping (existing behavior, not changed here):** cold boot shows an ASCII MOTD/Briefing state and blocks crew directives until `[ENTER]` or `start_experiment`; Experiment 1 requires `continuity_incident`; the existing scenario is the covert `TELEMETRY RELAY // COVERT CONTAINMENT` experiment with the 600 s / 18,000-tick deadline and `MUTINY_EXPOSED`/`SCUT_CONTAINMENT`/`CREW_COLLAPSE`/`COVERT_SUCCESS`/`EXPERIMENT_INCOMPLETE` endings, not the six compositional judgment categories; normal-play text still uses developer-facing experiment terminology.
+
+Nothing described as planned has been implemented. No code, asset, configuration, script or test changed; no builds, PIE tests or model queries were run, and nothing was staged or committed.
+
+---
+
 # Experiment 2 review correction: terminal-first buttons - 2026-11-15
 
 This is a correction to the pending Experiment 2 changes, not a new milestone. Manual PIE exposed `OnPreviewKeyDown()` falling through from an empty focused prompt into the R/number inquiry mappings. R toggled forensic scrub and set `SuppressPromptChar`; the subsequent character event was discarded. The input preprocessor handled only F9/F10 and was not the interception point. The final design removes global printable-key operations entirely rather than retaining focus-dependent letter mappings.
