@@ -121,6 +121,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     int32 PaintTerminalInstrument(FSlateWindowElementList &Elements, int32 Layer, const FGeometry &Geometry,
                                   ETerminalInstrument Kind, int32 Subject) const;
     int32 ActiveFeed = 1;
+    int32 EvidenceSubject = -1, EvidenceRoom = -1, EvidenceProbe = -1;
     int32 SelectedCameraIndex = 0;
     void ExpandSelected();
     bool bGrid = false, bFullscreen = false;

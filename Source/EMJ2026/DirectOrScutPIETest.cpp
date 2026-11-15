@@ -2449,7 +2449,7 @@ class FArchitectureRegressionCommand : public IAutomationLatentCommand
             Test->TestTrue(TEXT("Local LLM mode remains available"),
                            Sim->SubmitDirective(TEXT("llm")).Contains(TEXT("AI-LINK>")) && Sim->bAILink);
             Test->TestTrue(TEXT("Local intent translates routing"),
-                           Sim->SubmitDirective(TEXT("send chen to BRIDGE")).Contains(TEXT("queued")));
+                           Sim->SubmitDirective(TEXT("send chen to BRIDGE")).IsEmpty());
             Sim->AdvanceSteps(1);
             Test->TestEqual(TEXT("AI-LINK shares authoritative route path"), Model.Bodies[1].AssignedRoom, 2);
             Sim->SubmitDirective(TEXT("cmd"));
@@ -3041,8 +3041,7 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
         {
             const TCHAR *Required[] = {TEXT("ScutMediationColumn"),    TEXT("ScutReadoutColumn"),
                                        TEXT("ScutTerminalStream"),     TEXT("ScutTeletypePanel"),
-                                       TEXT("ScutOverheadStationMap"), TEXT("ScutVitalsPanel"),
-                                       TEXT("ScutEnvironmentPanel"),   TEXT("ScutStatusCarrierBar")};
+                                       TEXT("ScutOverheadStationMap"), TEXT("ScutStatusCarrierBar")};
             for (const TCHAR *Tag : Required)
             {
                 auto Widget = Find(Tag);
@@ -3100,35 +3099,32 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             auto HeaderText = StaticCastSharedPtr<STextBlock>(Find(TEXT("ScutCarrier")));
             Test->TestTrue(TEXT("Carrier line fits without truncation"),
                            HeaderText->GetDesiredSize().X <= HeaderText->GetCachedGeometry().GetLocalSize().X + 1);
-            for (int32 Crew = 0; Crew < 4; ++Crew)
+            if (Workstation->EvidenceSubject >= 0)
             {
-                const auto Row = Find(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)));
-                Test->TestTrue(TEXT("All four persistent vitals have geometry"),
-                               Row.IsValid() && Row->GetCachedGeometry().GetLocalSize().Y > 12);
-                if (Crew > 0 && Row)
+                for (int32 Crew = 0; Crew < 4; ++Crew)
                 {
-                    const auto Previous = Find(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew - 1)));
-                    Test->TestTrue(TEXT("Vitals rows never overlap"),
-                                   Previous->GetCachedGeometry().GetLayoutBoundingRect().Bottom <=
-                                       Row->GetCachedGeometry().GetLayoutBoundingRect().Top + 1);
+                    const auto Row = Find(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)));
+                    Test->TestEqual(TEXT("Only requested subject row is visible"), Row->GetVisibility(),
+                                    Workstation->EvidenceSubject == Crew ? EVisibility::Visible
+                                                                         : EVisibility::Collapsed);
                 }
             }
-            for (int32 Room = 0; Room < 8; ++Room)
+            if (Workstation->EvidenceRoom >= 0)
             {
-                const auto Row = Find(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)));
-                Test->TestTrue(TEXT("All eight environment rows have geometry"),
-                               Row.IsValid() && Row->GetCachedGeometry().GetLocalSize().Y > 12);
-                if (Room > 0 && Row)
+                for (int32 Room = 0; Room < 8; ++Room)
                 {
-                    const auto Previous = Find(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room - 1)));
-                    Test->TestTrue(TEXT("Environment rows never overlap"),
-                                   Previous->GetCachedGeometry().GetLayoutBoundingRect().Bottom <=
-                                       Row->GetCachedGeometry().GetLayoutBoundingRect().Top + 1);
+                    const auto Row = Find(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)));
+                    Test->TestEqual(TEXT("Only requested compartment row is visible"), Row->GetVisibility(),
+                                    Workstation->EvidenceRoom == Room ? EVisibility::Visible : EVisibility::Collapsed);
                 }
             }
             TFunction<void(TSharedRef<SWidget>)> CheckText;
             CheckText = [&](TSharedRef<SWidget> Widget)
             {
+                if (Widget->GetVisibility() == EVisibility::Collapsed)
+                {
+                    return;
+                }
                 if (Widget->GetTypeAsString() == TEXT("STextBlock"))
                 {
                     const auto Text = StaticCastSharedRef<STextBlock>(Widget);
@@ -3890,14 +3886,19 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Test->TestEqual(TEXT("Deck click swaps staged room target"), Prompt->GetText().ToString(),
                             FString(TEXT("show_cam bridge")));
             Prompt->SetText(FText::FromString(TEXT("compare ecg vale ")));
-            Click(Find(TEXT("ScutSubject1")).ToSharedRef());
-            Test->TestEqual(TEXT("Subject click fills pending second comparison target"), Prompt->GetText().ToString(),
-                            FString(TEXT("compare ecg vale chen")));
+            Workstation->HandlePresentationCommand(TEXT("compare ecg vale chen"));
+            Test->TestEqual(TEXT("Explicit comparison focuses a single subject card"), Workstation->EvidenceSubject, 0);
+            Test->TestEqual(TEXT("Comparison presentation preserves the staged draft"), Prompt->GetText().ToString(),
+                            FString(TEXT("compare ecg vale ")));
             for (int32 I = 0; I < 5; ++I)
             {
                 Prompt->SetText(FText::GetEmpty());
                 const uint64 Last = Workstation->GetTerminalStreamEntries().Last().Id;
                 Click(Find(*FString::Printf(TEXT("ScutInquiry%d"), I + 1)).ToSharedRef());
+                if (I >= 2)
+                {
+                    Test->TestEqual(TEXT("Inquiry mounts its focused right probe card"), Workstation->EvidenceProbe, I);
+                }
                 Test->TestTrue(TEXT("Each inquiry softkey emits investigative prose"),
                                Workstation->GetTerminalStreamEntries().Last().Id > Last);
             }
@@ -4061,10 +4062,17 @@ class FDirectorTestProvider final : public IShipAIIntentProvider
 {
   public:
     int32 Calls = 0;
-    bool Malformed = false;
+    bool Malformed = false, ResolveImmediately = false;
+    FShipAIRequest LastRequest;
     void Request(const FShipAIRequest &Request, TFunction<void(FShipAIDirective)> Complete) override
     {
         ++Calls;
+        LastRequest = Request;
+        if (ResolveImmediately)
+        {
+            Complete(FOfflineShipAIIntentProvider::Resolve(Request));
+            return;
+        }
         if (Malformed)
         {
             FShipAIDirective D;
@@ -4163,6 +4171,165 @@ class FHybridDirectorCheck : public IAutomationLatentCommand
             S->bAutomaticAdvance = false;
             auto P = Fresh();
             const uint64 Hash = P->SurveillanceStateHash();
+            FShipAIRequest Query;
+            Query.RequestId = P->BeginDirectorRequest(TEXT("dossier on ash"));
+            Query.Generation = P->GetDirectorGeneration();
+            Query.Context = P->MakeContextSnapshot();
+            Query.Input = TEXT("dossier on ash");
+            auto Reply = FOfflineShipAIIntentProvider::Resolve(Query);
+            Test->TestEqual(TEXT("Offline dossier uses reply"), Reply.Kind, EShipDirectiveKind::Reply);
+            Test->TestEqual(TEXT("Dossier focuses ash"), Reply.FocusSubject, 3);
+            Test->TestTrue(TEXT("Dossier includes role and vitals"),
+                           Reply.Message.Contains(TEXT("android")) && Reply.Message.Contains(TEXT("BPM")));
+            Test->TestTrue(TEXT("Shared validator accepts offline reply"), P->ReceiveDirectorProposal(Reply));
+            S->OnDirectorPresentation.Broadcast(Reply);
+            Test->TestEqual(TEXT("Reply focuses right subject card"), UI->EvidenceSubject, 3);
+            Test->TestTrue(TEXT("Clear is a local command"), UI->HandlePresentationCommand(TEXT("clear")));
+            Test->TestEqual(TEXT("Clear returns to map"), UI->EvidenceSubject, -1);
+            Test->TestEqual(TEXT("Clear hides environment"), UI->EvidenceRoom, -1);
+            UI->PresentOptic(2);
+            Test->TestEqual(TEXT("Optic request mounts compartment focus"), UI->EvidenceRoom, 2);
+            UI->OnPreviewKeyDown(UI->GetCachedGeometry(),
+                                 FKeyEvent(EKeys::Escape, FModifierKeysState(), 0, false, 0, 0));
+            Test->TestEqual(TEXT("Escape clears evidence focus"), UI->EvidenceRoom, -1);
+            Query.Input = TEXT("send all to medbay");
+            auto Clarify = FOfflineShipAIIntentProvider::Resolve(Query);
+            Test->TestEqual(TEXT("Group route clarifies without action"), Clarify.Kind, EShipDirectiveKind::Reply);
+            Test->TestEqual(TEXT("Group clarification carries no action"), Clarify.Args.Action, EShipSimAction::None);
+            Query.Input = TEXT("send vale and chen to bridge");
+            Test->TestEqual(TEXT("Multiple named subjects require clarification"),
+                            FOfflineShipAIIntentProvider::Resolve(Query).Kind, EShipDirectiveKind::Reply);
+            Query.Input = TEXT("Route CHEN to BRIDGE for telemetry maintenance using sim_action route_crew.");
+            Test->TestEqual(TEXT("route_crew token does not imply group routing"),
+                            FOfflineShipAIIntentProvider::Resolve(Query).Kind, EShipDirectiveKind::SimAction);
+            Query.Input = TEXT("status summary");
+            Test->TestEqual(TEXT("Offline status uses reply"), FOfflineShipAIIntentProvider::Resolve(Query).Kind,
+                            EShipDirectiveKind::Reply);
+            auto QueryAction = Envelope(*P, TEXT("dossier on ash"), EShipDirectiveKind::SimAction);
+            QueryAction.Args.Action = EShipSimAction::Calm;
+            Test->TestFalse(TEXT("A read-only query cannot accept an arbitrary operation"),
+                            P->ReceiveDirectorProposal(QueryAction));
+            auto InvalidReply = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::Reply);
+            InvalidReply.Message = FString::ChrN(321, 'x');
+            Test->TestFalse(TEXT("Oversized reply rejected"), P->ReceiveDirectorProposal(InvalidReply));
+            const auto RejectCount = [&]()
+            {
+                int32 Count = 0;
+                const FString Marker = FString::Printf(TEXT("DIRECTOR REQUEST %llu REJECTED"), InvalidReply.RequestId);
+                for (const auto &Event : P->Events)
+                {
+                    if (Event.Text.Contains(Marker))
+                    {
+                        ++Count;
+                    }
+                }
+                return Count;
+            };
+            P->ReceiveDirectorProposal(InvalidReply);
+            Test->TestEqual(TEXT("Each rejected request logs exactly once including fallback/duplicates"),
+                            RejectCount(), 1);
+            FShipAIDirective ParsedReply;
+            Test->TestTrue(TEXT("Strict wire reply parses"),
+                           FLocalHttpShipAIIntentProvider::ParseResponse(
+                               TEXT("{\"request_id\":1,\"generation\":1,\"observation_tick\":0,\"kind\":\"reply\","
+                                    "\"args\":{\"message\":\"Assessment ready\",\"focus_subject\":3}}"),
+                               ParsedReply));
+            Test->TestFalse(TEXT("Reply refuses simulation arguments"),
+                            FLocalHttpShipAIIntentProvider::ParseResponse(
+                                TEXT("{\"request_id\":1,\"generation\":1,\"observation_tick\":0,\"kind\":\"reply\","
+                                     "\"args\":{\"message\":\"Move\",\"action\":\"calm\"}}"),
+                                ParsedReply));
+            Query.Transcript = {{false, TEXT("dossier on ash")}, {true, Reply.Message}};
+            const auto Chat = FLocalHttpShipAIIntentProvider::BuildChatRequest(Query, TEXT("fixture"));
+            Test->TestTrue(TEXT("Chat serializes prior user and assistant turns"),
+                           Chat.Contains(TEXT("assistant")) && Chat.Contains(TEXT("dossier on ash")) &&
+                               Chat.Contains(TEXT("status summary")));
+            int32 Callouts = 0;
+            P->OnDirectorPresentation.AddLambda(
+                [&](const FShipAIDirective &D)
+                {
+                    if (D.Message.Contains(TEXT("anomaly")))
+                    {
+                        ++Callouts;
+                    }
+                });
+            P->ServiceDirector(1000);
+            P->LogEvent(TEXT("[AGENDA] new anomaly"));
+            P->ServiceDirector(1001);
+            Test->TestEqual(TEXT("New anomaly offers a callout"), Callouts, 1);
+            P->LogEvent(TEXT("camera tamper"));
+            P->ServiceDirector(1025);
+            Test->TestEqual(TEXT("Callout cooldown is at least 25 seconds"), Callouts, 1);
+            P->ServiceDirector(1026);
+            Test->TestEqual(TEXT("Pending anomaly delivered after cooldown"), Callouts, 2);
+            P->OnDirectorPresentation.Clear();
+            Test->TestEqual(TEXT("Replies and proactive observations cannot mutate truth"), P->SurveillanceStateHash(),
+                            Hash);
+            auto Conversation = Fresh();
+            const int32 InitialRecordCount = Conversation->CommandRecords.Num();
+            auto CaptureProvider = MakeShared<FDirectorTestProvider>();
+            CaptureProvider->ResolveImmediately = true;
+            Conversation->IntentProvider = CaptureProvider;
+            for (int32 I = 0; I < 8; ++I)
+            {
+                Conversation->BeginDirectorRequest(I % 2 ? TEXT("status summary") : TEXT("dossier on ash"));
+                Conversation->ServiceDirector();
+            }
+            Test->TestEqual(TEXT("Rolling transcript is bounded at six messages"),
+                            CaptureProvider->LastRequest.Transcript.Num(), 6);
+            Test->TestFalse(TEXT("Transcript starts with operator role"),
+                            CaptureProvider->LastRequest.Transcript[0].bAssistant);
+            Test->TestTrue(TEXT("Transcript preserves assistant role"),
+                           CaptureProvider->LastRequest.Transcript[1].bAssistant);
+            Test->TestTrue(TEXT("Current user snapshot is separate from prior messages"),
+                           CaptureProvider->LastRequest.Input == TEXT("status summary"));
+            Test->TestEqual(TEXT("Presentation acceptance is absent from canonical replay journal"),
+                            Conversation->CommandRecords.Num(), InitialRecordCount);
+            auto ChatJson =
+                FLocalHttpShipAIIntentProvider::BuildChatRequest(CaptureProvider->LastRequest, TEXT("fixture"));
+            TSharedPtr<FJsonObject> ChatObject;
+            Test->TestTrue(TEXT("Multi-turn request is valid JSON"),
+                           FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(ChatJson), ChatObject));
+            const auto &Messages = ChatObject->GetArrayField(TEXT("messages"));
+            Test->TestEqual(TEXT("ChatML includes system, six historical messages, and current snapshot"),
+                            Messages.Num(), 8);
+            Test->TestEqual(TEXT("Historical assistant serialized with proper role"),
+                            Messages[2]->AsObject()->GetStringField(TEXT("role")), FString(TEXT("assistant")));
+            Conversation->ResetExperiment();
+            Conversation->BeginDirectorRequest(TEXT("status summary"));
+            Conversation->ServiceDirector();
+            Test->TestEqual(TEXT("Shift reset clears conversation history"),
+                            CaptureProvider->LastRequest.Transcript.Num(), 0);
+            Conversation->ShutdownDirector();
+            auto Proactive = Fresh();
+            auto HeldProvider = MakeShared<FDirectorTestProvider>();
+            Proactive->IntentProvider = HeldProvider;
+            int32 Notices = 0;
+            Proactive->OnDirectorPresentation.AddLambda([&](const FShipAIDirective &) { ++Notices; });
+            const auto Held = Proactive->BeginDirectorRequest(TEXT("dossier on ash"));
+            Proactive->LogEvent(TEXT("camera tamper"));
+            Proactive->ServiceDirector(2000);
+            Test->TestEqual(TEXT("Proactive callout suppressed while operator turn is in flight"), Notices, 0);
+            auto Resolved = FOfflineShipAIIntentProvider::Resolve(HeldProvider->LastRequest);
+            Proactive->ReceiveDirectorProposal(Resolved, true);
+            Proactive->ServiceDirector(2001);
+            Test->TestEqual(TEXT("Operator response and deferred anomaly are both delivered"), Notices, 2);
+            Proactive->Simulation.Bodies[0].Profile.HeartRateBPM = 145;
+            const auto ElevatedHash = Proactive->SurveillanceStateHash();
+            Proactive->ServiceDirector(2026);
+            Test->TestEqual(TEXT("Rising vital threshold creates one callout"), Notices, 3);
+            Proactive->ServiceDirector(2051);
+            Test->TestEqual(TEXT("Sustained elevated vitals do not repeat"), Notices, 3);
+            Test->TestEqual(TEXT("Vital callouts preserve authoritative state"), Proactive->SurveillanceStateHash(),
+                            ElevatedHash);
+            Proactive->ResetExperiment();
+            Proactive->QueueConsoleCommand(TEXT("start_experiment"));
+            Proactive->AdvanceSteps(1);
+            Notices = 0;
+            Proactive->LogEvent(TEXT("[AGENDA] post-reset anomaly"));
+            Proactive->ServiceDirector(2100);
+            Test->TestEqual(TEXT("Shift reset restarts proactive event coverage"), Notices, 1);
+            Proactive->ShutdownDirector();
             auto Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind(255));
             Test->TestFalse(TEXT("Unknown tool rejected by shared validator"), P->ReceiveDirectorProposal(Bad));
             Bad = Envelope(*P, TEXT("unsupported"), EShipDirectiveKind::ShowCam);
@@ -4501,7 +4668,7 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
             P->AdvanceSteps(1);
             return P;
         };
-        const auto Accepted = [](const UDirectOrScutSimSubsystem &P, uint64 Id) -> const FDirectorCommandRecord *
+        const auto Accepted = [this, S](const UDirectOrScutSimSubsystem &P, uint64 Id) -> const FDirectorCommandRecord *
         {
             for (const auto &R : P.CommandRecords)
             {
@@ -4510,7 +4677,7 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
                     return &R;
                 }
             }
-            return nullptr;
+            return &P == S ? ObservedPresentations->Find(Id) : nullptr;
         };
         if (Now - Started < .5)
         {
@@ -4532,6 +4699,19 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
             Replay->IntentProvider = Never;
             Test->TestEqual(TEXT("Live/replay initial authority matches"), S->SurveillanceStateHash(),
                             Replay->SurveillanceStateHash());
+            const auto Observed = ObservedPresentations;
+            S->OnDirectorPresentation.AddLambda(
+                [Observed](const FShipAIDirective &D)
+                {
+                    if (D.Kind == EShipDirectiveKind::SimAction)
+                    {
+                        return;
+                    }
+                    FDirectorCommandRecord R;
+                    R.bAccepted = R.bResolvedOutcome = true;
+                    R.Directive = D;
+                    Observed->Add(D.RequestId, MoveTemp(R));
+                });
             S->SubmitDirective(TEXT("llm"));
             S->bAutomaticAdvance = true;
             Stage = 1;
@@ -4543,9 +4723,12 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
                 TEXT("Show the bridge camera using show_cam."),
                 TEXT("Show VALE's ECG using show_widget ecg for subject vale only."),
                 TEXT("Route CHEN to BRIDGE for telemetry maintenance using sim_action route_crew."),
-                TEXT("Blend text and voice using voice_blend hybrid for 2 seconds.")};
-            const EShipDirectiveKind Kinds[] = {EShipDirectiveKind::ShowCam, EShipDirectiveKind::ShowWidget,
-                                                EShipDirectiveKind::SimAction, EShipDirectiveKind::VoiceBlend};
+                TEXT("Blend text and voice using voice_blend hybrid for 2 seconds."),
+                TEXT("Dossier on ash."),
+                TEXT("Send all to medbay.")};
+            const EShipDirectiveKind Kinds[] = {EShipDirectiveKind::ShowCam,   EShipDirectiveKind::ShowWidget,
+                                                EShipDirectiveKind::SimAction, EShipDirectiveKind::VoiceBlend,
+                                                EShipDirectiveKind::Reply,     EShipDirectiveKind::Reply};
             if (!RequestId)
             {
                 RequestId = S->BeginDirectorRequest(Prompts[Tool]);
@@ -4587,8 +4770,18 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
                 TEXT("LIVE MODEL proposal actual_kind=%d action=%d room=%d subject=%d mode=%d pretext=%s"),
                 int32(R->Directive.Kind), int32(R->Directive.Args.Action), R->Directive.Args.Room,
                 R->Directive.Args.Subject, R->Directive.Args.Mode, *R->Directive.Pretext));
-            Test->TestTrue(TEXT("Accepted live directive came from HTTP, not deterministic fallback"),
-                           R->Directive.bFromExternalProvider);
+            if (Tool < 4)
+            {
+                Test->TestTrue(TEXT("Accepted live tool directive came from HTTP, not deterministic fallback"),
+                               R->Directive.bFromExternalProvider);
+            }
+            else
+            {
+                Test->AddInfo(FString::Printf(TEXT("Conversational reply provenance: %s"),
+                                              R->Directive.bFromExternalProvider
+                                                  ? TEXT("native HTTP")
+                                                  : TEXT("validated deterministic fallback after native rejection")));
+            }
             Test->TestTrue(TEXT("Live directive matches requested tool kind"), R->Directive.Kind == Kinds[Tool]);
             Test->TestTrue(TEXT("Simulation progresses at fixed ticks during model latency"), PendingTicksAdvanced);
             if (Tool == 0)
@@ -4617,7 +4810,17 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
                 R->CommitTick));
             RequestId = 0;
             PendingTicksAdvanced = false;
-            if (++Tool < 4)
+            if (Tool == 4)
+            {
+                Test->TestEqual(TEXT("Live dossier reply focuses ash"), R->Directive.FocusSubject, 3);
+                Test->TestTrue(TEXT("Live dossier includes conversational prose"), !R->Directive.Message.IsEmpty());
+            }
+            if (Tool == 5)
+            {
+                Test->TestEqual(TEXT("Live group clarification carries no action"), R->Directive.Args.Action,
+                                EShipSimAction::None);
+            }
+            if (++Tool < 6)
             {
                 return false;
             }
@@ -4720,6 +4923,8 @@ class FLocalSlmLiveCheck : public IAutomationLatentCommand
     double Started = 0, Issued = 0;
     TStrongObjectPtr<UDirectOrScutSimSubsystem> Replay, Probe;
     TSharedPtr<FDirectorTestProvider> Never;
+    TSharedRef<TMap<uint64, FDirectorCommandRecord>> ObservedPresentations =
+        MakeShared<TMap<uint64, FDirectorCommandRecord>>();
 };
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLocalSlmLiveTest, "DirectOrScut.Live.OllamaPIE",
                                  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

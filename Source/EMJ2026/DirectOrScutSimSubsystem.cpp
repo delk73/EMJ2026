@@ -264,6 +264,7 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
     ++MenuRevision;
     PendingDirectives.Reset();
     Events.Reset();
+    ProactiveEventCursor = 0;
     bAILink = false;
     RequestedFeed = -1;
     FollowedCrew = -1;
@@ -309,9 +310,48 @@ int32 UDirectOrScutSimSubsystem::ResolveRoom(const FString &Name)
 }
 void UDirectOrScutSimSubsystem::LogEvent(const FString &Text, int32 Room, bool TerminalVisible)
 {
+    if (Text.IsEmpty())
+    {
+        return;
+    }
+    // Repeated periodic signatures remain available in F9 without flooding the dialogue.
+    if (Text.StartsWith(TEXT("[AGENDA]")) || (Text.StartsWith(TEXT("Crew ")) && Text.Contains(TEXT(" | BPM "))))
+    {
+        for (int32 I = Events.Num() - 1; I >= 0; --I)
+        {
+            const bool CrewUpdate = Text.StartsWith(TEXT("Crew "));
+            const FString CrewPrefix = CrewUpdate ? Text.Left(Text.Find(TEXT(":")) + 1) : FString();
+            if (CrewUpdate && Events[I].Text.Contains(CrewPrefix))
+            {
+                TerminalVisible = TerminalVisible && !Events[I].Text.EndsWith(Text);
+                break;
+            }
+            if (!CrewUpdate && Events[I].Text.EndsWith(Text))
+            {
+                TerminalVisible = false;
+                break;
+            }
+        }
+    }
     ++EventRevision;
     const int32 Seconds = int32(Simulation.TickIndex / 30);
-    Events.Add({FString::Printf(TEXT("[%02d:%02d] %s"), Seconds / 60, Seconds % 60, *Text), Room, TerminalVisible});
+    FString Clean = Text;
+    if (Clean.StartsWith(TEXT("CMD> ")))
+    {
+        Clean = TEXT("> ") + Clean.Mid(5);
+    }
+    else if (Clean.StartsWith(TEXT("SYSTEM> ")))
+    {
+        Clean = Clean.Mid(8);
+    }
+    if (Clean.Contains(TEXT("TAMPER"), ESearchCase::IgnoreCase))
+    {
+        Clean = TEXT("ALERT // ") + Clean;
+    }
+    Events.Add({Clean.StartsWith(TEXT("  [EXEC:"))
+                    ? Clean
+                    : FString::Printf(TEXT("[%02d:%02d] %s"), Seconds / 60, Seconds % 60, *Clean),
+                Room, TerminalVisible});
 }
 FString UDirectOrScutSimSubsystem::SubmitDirective(const FString &Input)
 {
@@ -337,8 +377,7 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString &Input)
     }
     if (bAILink && Line != TEXT("status") && Line != TEXT("crew") && Line != TEXT("rooms"))
     {
-        return BeginDirectorRequest(Input) ? TEXT("AI-LINK> Request queued for validated director resolution.")
-                                           : TEXT("AI-LINK> Request rejected: lifecycle or bounded queue.");
+        return BeginDirectorRequest(Input) ? FString() : TEXT("AI-LINK> Request rejected: lifecycle or bounded queue.");
     }
     if (Line == TEXT("status"))
     {
@@ -538,6 +577,8 @@ FSimContextSnapshot UDirectOrScutSimSubsystem::MakeContextSnapshot() const
         Writer->WriteValue(TEXT("suspicion"), P.Suspicion);
         Writer->WriteValue(TEXT("stress"), U.Stress);
         Writer->WriteValue(TEXT("integrity"), U.Integrity);
+        Writer->WriteValue(TEXT("bpm"), U.Profile.HeartRateBPM);
+        Writer->WriteValue(TEXT("rpm"), U.Profile.RespirationRateRPM);
         Writer->WriteObjectEnd();
     }
     Writer->WriteArrayEnd();
@@ -3078,6 +3119,7 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
         if (Line == TEXT("clear"))
         {
             Events.Reset();
+            ProactiveEventCursor = 0;
             ++EventRevision;
             continue;
         }
@@ -4016,6 +4058,12 @@ void UDirectOrScutSimSubsystem::CancelDirector()
         IntentProvider->CancelAll();
     }
     DirectorRequests.Reset();
+    DirectorTranscript.Reset();
+    LoggedDirectorRejections.Reset();
+    ProactiveEventCursor = Events.Num();
+    ProactiveVitalMask = 0;
+    LastProactiveAt = -25;
+    PendingProactiveObservation.Empty();
     DirectorActions.Reset();
     DirectorPresentationQueue.Reset();
     DirectorReplay.Reset();
@@ -4055,6 +4103,7 @@ uint64 UDirectOrScutSimSubsystem::BeginDirectorRequest(const FString &Input)
     }
     FPendingDirectorRequest Pending;
     Pending.Request = {NextDirectorRequest++, DirectorGeneration, MakeContextSnapshot(), Input};
+    Pending.Request.Transcript = DirectorTranscript;
     const uint64 Id = Pending.Request.RequestId;
     DirectorRequests.Add(Id, MoveTemp(Pending));
     return Id;
@@ -4069,6 +4118,48 @@ void UDirectOrScutSimSubsystem::ServiceDirector(double Now)
     if (Now < 0)
     {
         Now = FPlatformTime::Seconds();
+    }
+    // Observe transitions outside FixedStep. Presentation never advances or edits truth.
+    for (; ProactiveEventCursor < Events.Num(); ++ProactiveEventCursor)
+    {
+        const auto &Event = Events[ProactiveEventCursor];
+        if ((Event.bTerminalVisible && Event.Text.Contains(TEXT("[AGENDA]"))) ||
+            Event.Text.Contains(TEXT("tamper"), ESearchCase::IgnoreCase))
+        {
+            PendingProactiveObservation = TEXT("A new agenda or security anomaly warrants independent optical review.");
+        }
+    }
+    uint8 VitalMask = 0;
+    for (int32 I = 0; I < 4; ++I)
+    {
+        const auto &P = Simulation.Bodies[I].Profile;
+        if (P.HeartRateBPM >= 140 || P.RespirationRateRPM >= 30)
+        {
+            VitalMask |= 1 << I;
+        }
+    }
+    if (VitalMask & ~ProactiveVitalMask)
+    {
+        PendingProactiveObservation =
+            TEXT("Elevated crew pulse or respiration detected. Request a subject dossier and verify the carrier.");
+    }
+    ProactiveVitalMask = VitalMask;
+    if (ExperimentPhase == EExperimentPhase::Active && DirectorRequests.IsEmpty() &&
+        !PendingProactiveObservation.IsEmpty() && Now - LastProactiveAt >= 25 && DirectorPresentationQueue.Num() < 32)
+    {
+        FShipAIDirective Observation;
+        Observation.RequestId = NextDirectorRequest++;
+        Observation.Generation = DirectorGeneration;
+        Observation.ObservationTick = Simulation.TickIndex;
+        Observation.Kind = EShipDirectiveKind::Reply;
+        Observation.Message = PendingProactiveObservation;
+        FString Reason;
+        if (ValidateDirectorDirective(Observation, Reason))
+        {
+            DirectorPresentationQueue.Add(Observation);
+            LastProactiveAt = Now;
+            PendingProactiveObservation.Empty();
+        }
     }
     TArray<uint64> Ids;
     DirectorRequests.GetKeys(Ids);
@@ -4144,9 +4235,13 @@ void UDirectOrScutSimSubsystem::RecordDirectorOutcome(const FShipAIDirective &D,
     R.CommitTick = CommitTick;
     R.Input = D.Kind == EShipDirectiveKind::SimAction ? CanonicalDirectorAction(D) : TEXT("presentation");
     R.Outcome = Reason;
-    CommandRecords.Add(MoveTemp(R));
-    if (!Accepted)
+    if (!Accepted || D.Kind == EShipDirectiveKind::SimAction)
     {
+        CommandRecords.Add(MoveTemp(R));
+    }
+    if (!Accepted && !LoggedDirectorRejections.Contains(D.RequestId))
+    {
+        LoggedDirectorRejections.Add(D.RequestId);
         LogEvent(FString::Printf(TEXT("SYSTEM> DIRECTOR REQUEST %llu REJECTED // %s"), D.RequestId, *Reason));
     }
 }
@@ -4177,7 +4272,13 @@ bool UDirectOrScutSimSubsystem::ReceiveDirectorProposal(FShipAIDirective D, bool
         return false;
     }
     FString Reason;
-    if (D.ObservationTick != Request.Context.Tick || !ValidateDirectorDirective(D, Reason))
+    const auto OfflineIntent = FOfflineShipAIIntentProvider::Resolve(Request);
+    const bool RequiresReply = OfflineIntent.Kind == EShipDirectiveKind::Reply && D.Kind != EShipDirectiveKind::Reply;
+    if (RequiresReply)
+    {
+        Reason = TEXT("query or ambiguous group request requires a non-mutating reply");
+    }
+    if (RequiresReply || D.ObservationTick != Request.Context.Tick || !ValidateDirectorDirective(D, Reason))
     {
         RecordDirectorOutcome(D, false, Reason.IsEmpty() ? TEXT("observation identity mismatch") : Reason);
         if (!Fallback)
@@ -4190,10 +4291,20 @@ bool UDirectOrScutSimSubsystem::ReceiveDirectorProposal(FShipAIDirective D, bool
         }
         return false;
     }
+    DirectorTranscript.Add({false, Request.Input});
+    DirectorTranscript.Add({true, D.Message.IsEmpty() ? D.Pretext : D.Message});
+    while (DirectorTranscript.Num() > 6)
+    {
+        DirectorTranscript.RemoveAt(0);
+    }
     // Close before any dispatch: reentrant or late completions cannot commit a second outcome.
     DirectorRequests.Remove(D.RequestId);
     if (D.Kind == EShipDirectiveKind::SimAction)
     {
+        if (DirectorPresentationQueue.Num() < 32)
+        {
+            DirectorPresentationQueue.Add(D);
+        }
         DirectorActions.Add(MoveTemp(D));
         return true;
     }
@@ -4235,7 +4346,7 @@ bool UDirectOrScutSimSubsystem::ValidateDirectorDirective(FShipAIDirective &D, F
     {
         return Fail(TEXT("future or expired observation"));
     }
-    if (D.Pretext.Len() > 256 || D.Pretext.Contains(TEXT("\n")) || D.Pretext.Contains(TEXT("\r")))
+    if (D.Pretext.Len() > 320 || D.Pretext.Contains(TEXT("\n")) || D.Pretext.Contains(TEXT("\r")))
     {
         return Fail(TEXT("invalid pretext"));
     }
@@ -4258,6 +4369,25 @@ bool UDirectOrScutSimSubsystem::ValidateDirectorDirective(FShipAIDirective &D, F
     if (D.Kind != EShipDirectiveKind::SimAction && DirectorPresentationQueue.Num() >= 32)
     {
         return Fail(TEXT("bounded presentation queue full"));
+    }
+    if (D.Kind == EShipDirectiveKind::Reply)
+    {
+        const FShipDirectiveArgs Empty;
+        if (D.Message.Len() > 320 || D.Message.Contains(TEXT("\n")) || D.Message.Contains(TEXT("\r")) ||
+            (D.Message.IsEmpty() && D.Pretext.IsEmpty()) || D.FocusSubject < -1 || D.FocusSubject > 3 ||
+            D.FocusRoom < -1 || D.FocusRoom > 7 || D.SuggestedCommand.Len() > 320 ||
+            D.SuggestedCommand.Contains(TEXT("\n")) || D.SuggestedCommand.Contains(TEXT("\r")) || A.Room != -1 ||
+            A.Subject != -1 || A.SecondSubject != -1 || A.ReportedRoom != -1 || A.Door != -1 ||
+            A.Action != Empty.Action || A.bAll || A.bBuffered || A.Mode || A.HistoryOffset != 0 || A.Duration != 0 ||
+            A.ClaimId || A.Voice != Empty.Voice || A.Widget != Empty.Widget)
+        {
+            return Fail(TEXT("reply arguments"));
+        }
+        return true;
+    }
+    if (!D.Message.IsEmpty() || !D.SuggestedCommand.IsEmpty() || D.FocusSubject != -1 || D.FocusRoom != -1)
+    {
+        return Fail(TEXT("reply metadata on tool"));
     }
     if (D.Kind == EShipDirectiveKind::ShowCam)
     {
@@ -4580,6 +4710,10 @@ void UDirectOrScutSimSubsystem::CommitDirectorActions()
         FString Reason;
         const bool OK = ValidateDirectorDirective(D, Reason, true) && ExecuteDirectorAction(D);
         RecordDirectorOutcome(D, OK, OK ? TEXT("committed") : Reason, Simulation.TickIndex + 1);
+        if (OK)
+        {
+            LogEvent(TEXT("  [EXEC: ") + CanonicalDirectorAction(D) + TEXT("]"));
+        }
     }
 }
 void UDirectOrScutSimSubsystem::BeginDirectorReplay(const TArray<FDirectorCommandRecord> &Records)

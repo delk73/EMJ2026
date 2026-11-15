@@ -127,7 +127,8 @@ enum class EShipDirectiveKind : uint8
     ShowCam,
     ShowWidget,
     SimAction,
-    VoiceBlend
+    VoiceBlend,
+    Reply
 };
 enum class EShipWidgetKind : uint8
 {
@@ -184,16 +185,24 @@ struct FShipAIDirective
     EShipDirectiveKind Kind = EShipDirectiveKind::Unknown;
     FShipDirectiveArgs Args;
     FString Pretext;
+    FString Message, SuggestedCommand;
+    int32 FocusSubject = -1, FocusRoom = -1;
     // Diagnostic provenance set by the HTTP adapter, never accepted from wire arguments.
     bool bFromExternalProvider = false;
 };
 using FDirectorDirectiveEnvelope = FShipAIDirective;
+struct FDirectorChatTurn
+{
+    bool bAssistant = false;
+    FString Text;
+};
 struct FShipAIRequest
 {
     uint64 RequestId = 0;
     uint32 Generation = 0;
     FSimContextSnapshot Context;
     FString Input;
+    TArray<FDirectorChatTurn> Transcript;
 };
 class IShipAIIntentProvider
 {
@@ -519,6 +528,12 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     float DirectorTimeout = 2;
     FString DirectorModel;
     TMap<uint64, FPendingDirectorRequest> DirectorRequests;
+    TArray<FDirectorChatTurn> DirectorTranscript;
+    int32 ProactiveEventCursor = 0;
+    uint8 ProactiveVitalMask = 0;
+    double LastProactiveAt = -25;
+    FString PendingProactiveObservation;
+    TSet<uint64> LoggedDirectorRejections;
     TArray<FShipAIDirective> DirectorActions, DirectorPresentationQueue;
     TArray<FDirectorCommandRecord> DirectorReplay;
     TArray<FDirectorClaim> DirectorClaims;

@@ -900,7 +900,7 @@ void SDirectOrScutWorkstationWidget::RefreshLog()
         {
             if (Sim->Events[UnifiedEventCursor].bTerminalVisible)
             {
-                AppendTerminalProse(TEXT("SYSTEM> ") + Sim->Events[UnifiedEventCursor].Text);
+                AppendTerminalProse(Sim->Events[UnifiedEventCursor].Text);
             }
         }
         SeenEvents = Sim->EventRevision;
@@ -910,7 +910,6 @@ void SDirectOrScutWorkstationWidget::RefreshLog()
     Log->ClearChildren();
     for (const auto &E : Sim->Events)
     {
-        if (E.bTerminalVisible)
         {
             Log->AddSlot().AutoHeight().Padding(0, 2)[SNew(STextBlock)
                                                           .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
@@ -958,7 +957,7 @@ TArray<FString> SDirectOrScutWorkstationWidget::CompletionCandidates(const FStri
         Tokens = {
             TEXT("show_cam"),   TEXT("show_widget"), TEXT("compare"),       TEXT("status"), TEXT("start_experiment"),
             TEXT("debug_grid"), TEXT("help"),        TEXT("override"),      TEXT("flag"),   TEXT("findings"),
-            TEXT("subjects"),   TEXT("blindspots"),  TEXT("cross_examine"), TEXT("scrub")};
+            TEXT("subjects"),   TEXT("blindspots"),  TEXT("cross_examine"), TEXT("scrub"),  TEXT("clear")};
     }
     else if (Argument == 1 && (Words[0] == TEXT("show_widget") || Words[0] == TEXT("compare")))
     {
@@ -1096,6 +1095,10 @@ void SDirectOrScutWorkstationWidget::RefreshParameterGuide()
     }
     ParameterGuide->ClearChildren();
     const FString Input = Prompt->GetText().ToString();
+    if (Input.IsEmpty())
+    {
+        return;
+    }
     TArray<FString> Words;
     Input.ToLower().ParseIntoArrayWS(Words);
     const bool TrailingSpace = !Input.IsEmpty() && FChar::IsWhitespace(Input[Input.Len() - 1]);
@@ -1118,6 +1121,10 @@ void SDirectOrScutWorkstationWidget::RefreshParameterGuide()
             --Start;
         }
         const FString Token = Candidate.Mid(Start);
+        if (Token == TEXT("debug_grid") || Token == TEXT("start_experiment"))
+        {
+            continue;
+        }
         ParameterGuide->AddSlot().AutoWidth().Padding(
             0, 0, 7, 0)[PhosphorSoftkey(FName(*(FString(TEXT("ScutGuide_")) + Token)), FText::FromString(Token),
                                         FSimpleDelegate::CreateLambda([this, Token]() { InsertArgument(Token); }))];
@@ -1176,26 +1183,27 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
         SetDebugEightCamGrid(!bDebugEightCamGrid);
         return FReply::Handled();
     }
+    if (!bDebugEightCamGrid && Key == EKeys::Escape)
+    {
+        EvidenceSubject = EvidenceRoom = EvidenceProbe = -1;
+        if (bForensicScrub)
+        {
+            bForensicScrub = false;
+            bScrubPlaying = false;
+        }
+        else
+        {
+            Prompt->SetText(FText::GetEmpty());
+        }
+        SetConsoleOpen(true);
+        return FReply::Handled();
+    }
     if (Sim->ExperimentPhase == EExperimentPhase::Resolved)
     {
         return FReply::Unhandled();
     }
     if (!bDebugEightCamGrid)
     {
-        if (Key == EKeys::Escape)
-        {
-            if (bForensicScrub)
-            {
-                bForensicScrub = false;
-                bScrubPlaying = false;
-            }
-            else
-            {
-                Prompt->SetText(FText::GetEmpty());
-            }
-            SetConsoleOpen(true);
-            return FReply::Handled();
-        }
         if ((Key == EKeys::Tilde || Key == EKeys::Slash) && !IsPromptFocused())
         {
             SuppressPromptChar = Key == EKeys::Tilde ? '`' : '/';
@@ -2372,6 +2380,11 @@ bool SDirectOrScutWorkstationWidget::AppendOpticReference(int32 Room, bool Focus
 }
 bool SDirectOrScutWorkstationWidget::PresentOptic(int32 Room, EInlinePresentationIntent Intent)
 {
+    if (Room >= 0 && Room < 8 && Intent == EInlinePresentationIntent::Intentional)
+    {
+        EvidenceRoom = Room;
+        EvidenceSubject = EvidenceProbe = -1;
+    }
     return AppendOpticReference(Room, true, Intent);
 }
 bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind, int32 Subject,
@@ -2381,6 +2394,12 @@ bool SDirectOrScutWorkstationWidget::PresentInstrument(ETerminalInstrument Kind,
         Subject >= (Kind == ETerminalInstrument::ECG ? 4 : 8))
     {
         return false;
+    }
+    if (Intent == EInlinePresentationIntent::Intentional)
+    {
+        EvidenceProbe = -1;
+        EvidenceSubject = Kind == ETerminalInstrument::ECG ? Subject : -1;
+        EvidenceRoom = Kind == ETerminalInstrument::Schematic ? Subject : -1;
     }
     const TCHAR *Crew[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"), TEXT("ASH")};
     FTerminalStreamEntry Entry;
@@ -2402,6 +2421,12 @@ bool SDirectOrScutWorkstationWidget::PresentAttachment(EInlineAttachmentKind Kin
         return false;
     }
     const bool Crew = Kind == EInlineAttachmentKind::PulseStrip || Kind == EInlineAttachmentKind::OcularScan;
+    if (Intent == EInlinePresentationIntent::Intentional)
+    {
+        EvidenceProbe = -1;
+        EvidenceSubject = Crew ? First : -1;
+        EvidenceRoom = Crew ? -1 : First;
+    }
     const int32 Limit = Crew ? 4 : 8;
     if (!Sim.IsValid() || !Rig.IsValid() || First < 0 || First >= Limit || Second < -1 || Second >= Limit ||
         Second == First || (Kind == EInlineAttachmentKind::OcularScan && Second != -1))
@@ -2548,8 +2573,24 @@ FString SDirectOrScutWorkstationWidget::ForensicReadout() const
 void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirective &D)
 {
     const auto &A = D.Args;
+    if (D.Kind != EShipDirectiveKind::Reply || D.FocusSubject >= 0 || D.FocusRoom >= 0)
+    {
+        EvidenceProbe = -1;
+    }
+    if (D.Kind == EShipDirectiveKind::Reply)
+    {
+        if (D.FocusSubject >= 0 || D.FocusRoom >= 0)
+        {
+            EvidenceSubject = D.FocusSubject;
+            EvidenceRoom = D.FocusSubject >= 0 ? -1 : D.FocusRoom;
+        }
+        AppendTerminalProse(TEXT("MOTHER-7> ") + (D.Message.IsEmpty() ? D.Pretext : D.Message));
+        return;
+    }
     if (D.Kind == EShipDirectiveKind::ShowCam)
     {
+        EvidenceRoom = A.Room;
+        EvidenceSubject = -1;
         if (A.bBuffered)
         {
             bForensicScrub = true;
@@ -2565,6 +2606,8 @@ void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirec
     }
     else if (D.Kind == EShipDirectiveKind::ShowWidget)
     {
+        EvidenceSubject = A.Subject;
+        EvidenceRoom = A.Room;
         if (A.Widget == EShipWidgetKind::Schematic)
         {
             PresentInstrument(ETerminalInstrument::Schematic, A.Room);
@@ -2607,6 +2650,11 @@ void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirec
         AppendTerminalProse(TEXT("SYSTEM> Voice presentation state validated; acoustic delivery remains a separate "
                                  "presentation capability."));
     }
+    if (D.Kind == EShipDirectiveKind::SimAction && D.Pretext.IsEmpty())
+    {
+        AppendTerminalProse(
+            TEXT("MOTHER-7> Reviewing the requested operation; execution remains subject to fixed-tick checks."));
+    }
     if (!D.Pretext.IsEmpty() && (A.ReportedRoom < 0 || A.ClaimId != 0))
     {
         AppendTerminalProse(TEXT("MOTHER-7> ") + D.Pretext);
@@ -2614,6 +2662,11 @@ void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirec
 }
 void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
 {
+    if (Index >= 2 && Index <= 4)
+    {
+        EvidenceSubject = EvidenceRoom = -1;
+        EvidenceProbe = Index;
+    }
     const int32 Room = ACompartmentCameraRig::RoomForFeed(ActiveFeed);
     switch (Index)
     {
@@ -2669,6 +2722,11 @@ void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
 bool SDirectOrScutWorkstationWidget::HandlePresentationCommand(const FString &Input)
 {
     const FString Command = Input.TrimStartAndEnd().ToLower();
+    if (Command == TEXT("clear"))
+    {
+        EvidenceSubject = EvidenceRoom = EvidenceProbe = -1;
+        return true;
+    }
     if (Command == TEXT("debug_grid") || Command == TEXT("/debug"))
     {
         SetDebugEightCamGrid(!bDebugEightCamGrid);
@@ -3017,13 +3075,6 @@ int32 SDirectOrScutWorkstationWidget::PaintTerminalInstrument(FSlateWindowElemen
                 RoomTint = FLinearColor(.95f, .52f, .12f);
             }
             DrawTerminalLines(Elements, Layer, Geometry, Points, I == Subject ? RoomTint : RoomTint * .7f);
-            if (Kind == ETerminalInstrument::StationMap)
-            {
-                const FVector2f P = Project(DirectOrScut::RoomWaypoint(I)) + FVector2f(-4, -15);
-                FSlateDrawElement::MakeText(
-                    Elements, Layer + 2, Geometry.ToPaintGeometry(FVector2f(24, 16), FSlateLayoutTransform(P)),
-                    FString::FromInt(I), FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, RoomTint);
-            }
         }
         for (const auto &Door : DirectOrScut::DoorSites())
         {
@@ -3181,48 +3232,53 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
                                                               .Kind(ETerminalInstrument::StationMap)
                                                               .Subject(0)
                                                               .Clipping(EWidgetClipping::ClipToBounds)]];
-    auto Legend = SNew(SVerticalBox);
+    auto MapOverlay = SNew(SOverlay);
+    MapOverlay->AddSlot()[Map];
     for (int32 Room = 0; Room < 8; ++Room)
     {
-        Legend->AddSlot().FillHeight(
-            1)[SNew(SButton)
-                   .IsFocusable(false)
-                   .ButtonStyle(FCoreStyle::Get(), "NoBorder")
-                   .Tag(FName(*FString::Printf(TEXT("ScutStationRoom%d"), Room)))
-                   .OnClicked_Lambda(
-                       [this, Room]()
-                       {
-                           bLogAutoScroll = true;
-                           if (!StageTarget(FString(DirectOrScut::RoomName(Room)).ToLower(), false))
-                           {
-                               PresentOptic(Room);
-                           }
-                           return FReply::Handled();
-                       })[SNew(STextBlock)
-                              .Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-                              .Clipping(EWidgetClipping::ClipToBounds)
-                              .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })
-                              .Text_Lambda(
-                                  [this, Room]()
-                                  {
-                                      return FText::FromString(FString::Printf(
-                                          TEXT("%s%d  %s"),
-                                          ACompartmentCameraRig::RoomForFeed(ActiveFeed) == Room ? TEXT(">")
-                                                                                                 : TEXT(" "),
-                                          Room, DirectOrScut::RoomName(Room)));
-                                  })]];
+        MapOverlay->AddSlot()
+            .HAlign(HAlign_Left)
+            .VAlign(VAlign_Top)
+            .Padding(TAttribute<FMargin>::CreateLambda(
+                [Map, Room]()
+                {
+                    const FVector2D Size = Map->GetCachedGeometry().GetLocalSize();
+                    const float Scale = FMath::Max(0.f, FMath::Min((Size.X - 24) / 5200.f, (Size.Y - 24) / 5200.f));
+                    const auto P = DirectOrScut::RoomWaypoint(Room);
+                    return FMargin((Size.X - 5200 * Scale) * .5f + (2600 + P.X) * Scale - 12,
+                                   (Size.Y - 5200 * Scale) * .5f + (2600 - P.Y) * Scale - 12, 0, 0);
+                }))[SNew(SBox).WidthOverride(24).HeightOverride(24)
+                        [SNew(SButton)
+                             .Tag(FName(*FString::Printf(TEXT("ScutStationRoom%d"), Room)))
+                             .IsFocusable(false)
+                             .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                             .ToolTipText(FText::FromString(DirectOrScut::RoomName(Room)))
+                             .OnClicked_Lambda(
+                                 [this, Room]()
+                                 {
+                                     if (!StageTarget(FString(DirectOrScut::RoomName(Room)).ToLower(), false))
+                                     {
+                                         PresentOptic(Room);
+                                     }
+                                     return FReply::Handled();
+                                 })[SNew(STextBlock)
+                                        .Text(FText::FromString(FString::FromInt(Room)))
+                                        .ColorAndOpacity_Lambda([this, Room]() { return TerminalTint(Room); })]]];
     }
-    Map->AddSlot().FillWidth(.36f).Padding(4, 4, 0, 0)[Legend];
     Deck->AddSlot().FillHeight(.43f).Padding(
         0, 0, 0,
-        8)[TerminalDeckPanel(TEXT("ScutStationPanel"), TEXT("STATION OVERHEAD // AI-REPORTED CREW FIXES"), Map)];
+        8)[TerminalDeckPanel(TEXT("ScutStationPanel"), TEXT("STATION OVERHEAD // AI-REPORTED CREW FIXES"), MapOverlay)];
     auto Vitals = SNew(SVerticalBox).Tag(TEXT("ScutVitalsArray"));
+    Vitals->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+        [this]() { return EvidenceSubject >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }));
     const TCHAR *Names[] = {TEXT("VALE"), TEXT("CHEN"), TEXT("ORTIZ"), TEXT("ASH")};
     for (int32 Crew = 0; Crew < 4; ++Crew)
     {
         auto Row =
             SNew(SHorizontalBox)
-                .Tag(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)))
+                .Visibility_Lambda([this, Crew]()
+                                   { return EvidenceSubject == Crew ? EVisibility::Visible : EVisibility::Collapsed; })
+                .Tag(FName(*FString::Printf(TEXT("ScutVitalsContents%d"), Crew)))
                 .Clipping(EWidgetClipping::ClipToBounds) +
             SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                 [SNew(SButton)
@@ -3250,6 +3306,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
             SHorizontalBox::Slot().FillWidth(.72f).VAlign(
                 VAlign_Center)[SNew(STextBlock)
                                    .Tag(FName(*FString::Printf(TEXT("ScutVitalsReadout%d"), Crew)))
+                                   .AutoWrapText(true)
                                    .Clipping(EWidgetClipping::ClipToBounds)
                                    .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
                                    .ColorAndOpacity(EvaluatePhosphorColor(.9f))
@@ -3258,29 +3315,41 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
                                        {
                                            const auto P = Sim->TerminalBiometrics(Crew);
                                            const int32 Room = GetReportedCrewRoom(Crew);
+                                           const TCHAR *Roles[] = {TEXT("ENGINEER"), TEXT("MEDIC"), TEXT("TECHNICIAN"),
+                                                                   TEXT("ANDROID")};
                                            return FText::FromString(FString::Printf(
-                                               TEXT("%3.0f BPM / %2.0f RPM / %s"), P.HeartRateBPM, P.RespirationRateRPM,
+                                               TEXT("%s // %.0f BPM / %.0f RPM / %.1f mm\n%s"), Roles[Crew],
+                                               P.HeartRateBPM, P.RespirationRateRPM, P.PupilDilationMM,
                                                Room < 0 ? TEXT("NO FIX") : DirectOrScut::RoomName(Room)));
                                        })];
-        Vitals->AddSlot().FillHeight(1).Padding(0, 2)[SNew(SButton)
-                                                          .IsFocusable(false)
-                                                          .ButtonStyle(FCoreStyle::Get(), "NoBorder")
-                                                          .ContentPadding(0)
-                                                          .OnClicked_Lambda(
-                                                              [this, Crew]()
-                                                              {
-                                                                  const TCHAR *Tokens[] = {TEXT("vale"), TEXT("chen"),
-                                                                                           TEXT("ortiz"), TEXT("ash")};
-                                                                  if (!StageTarget(Tokens[Crew], true))
-                                                                  {
-                                                                      PresentInstrument(ETerminalInstrument::ECG, Crew);
-                                                                  }
-                                                                  return FReply::Handled();
-                                                              })[Row]];
+        Vitals->AddSlot().AutoHeight().Padding(
+            0, 2)[SNew(SButton)
+                      .Tag(FName(*FString::Printf(TEXT("ScutVitalsRow%d"), Crew)))
+                      .Visibility_Lambda(
+                          [this, Crew]()
+                          { return EvidenceSubject == Crew ? EVisibility::Visible : EVisibility::Collapsed; })
+                      .IsFocusable(false)
+                      .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                      .ContentPadding(0)
+                      .OnClicked_Lambda(
+                          [this, Crew]()
+                          {
+                              const TCHAR *Tokens[] = {TEXT("vale"), TEXT("chen"), TEXT("ortiz"), TEXT("ash")};
+                              if (!StageTarget(Tokens[Crew], true))
+                              {
+                                  PresentInstrument(ETerminalInstrument::ECG, Crew);
+                              }
+                              return FReply::Handled();
+                          })[Row]];
     }
-    Deck->AddSlot().FillHeight(.25f).Padding(
-        0, 0, 0, 8)[TerminalDeckPanel(TEXT("ScutVitalsPanel"), TEXT("SUBJECT VITALS // AI-REPORTED LOCATION"), Vitals)];
+    auto VitalsPanel =
+        TerminalDeckPanel(TEXT("ScutVitalsPanel"), TEXT("SUBJECT DOSSIER // AI-REPORTED LOCATION"), Vitals);
+    VitalsPanel->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+        [this]() { return EvidenceSubject >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }));
+    Deck->AddSlot().AutoHeight()[VitalsPanel];
     auto Matrix = SNew(SVerticalBox).Tag(TEXT("ScutEnvironmentMatrix"));
+    Matrix->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+        [this]() { return EvidenceRoom >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }));
     auto Head = SNew(SHorizontalBox);
     const TCHAR *Columns[] = {TEXT("ID / COMPARTMENT"), TEXT("O2"), TEXT("%"), TEXT("PWR"), TEXT("SEAL")};
     const float Widths[] = {.42f, .18f, .1f, .11f, .19f};
@@ -3296,7 +3365,9 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
     {
         auto Row =
             SNew(SHorizontalBox)
-                .Tag(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)))
+                .Visibility_Lambda([this, Room]()
+                                   { return EvidenceRoom == Room ? EVisibility::Visible : EVisibility::Collapsed; })
+                .Tag(FName(*FString::Printf(TEXT("ScutEnvironmentContents%d"), Room)))
                 .Clipping(EWidgetClipping::ClipToBounds) +
             SHorizontalBox::Slot().FillWidth(Widths[0]).VAlign(
                 VAlign_Center)[SNew(STextBlock)
@@ -3344,23 +3415,92 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTelemetryDeck()
                                            return FText::FromString(Sim->IsRoomSealed(Room) ? TEXT("SEALED")
                                                                                             : TEXT("OPEN"));
                                        })];
-        Matrix->AddSlot().FillHeight(1).Padding(
-            0, 1)[SNew(SButton)
-                      .IsFocusable(false)
-                      .ButtonStyle(FCoreStyle::Get(), "NoBorder")
-                      .ContentPadding(0)
-                      .OnClicked_Lambda(
-                          [this, Room]()
-                          {
-                              if (!StageTarget(FString(DirectOrScut::RoomName(Room)).ToLower(), false))
-                              {
-                                  PresentOptic(Room);
-                              }
-                              return FReply::Handled();
-                          })[Row]];
+        Matrix->AddSlot().AutoHeight().Padding(
+            0,
+            1)[SNew(SButton)
+                   .Tag(FName(*FString::Printf(TEXT("ScutEnvironmentRow%d"), Room)))
+                   .Visibility_Lambda([this, Room]()
+                                      { return EvidenceRoom == Room ? EVisibility::Visible : EVisibility::Collapsed; })
+                   .IsFocusable(false)
+                   .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                   .ContentPadding(0)
+                   .OnClicked_Lambda(
+                       [this, Room]()
+                       {
+                           if (!StageTarget(FString(DirectOrScut::RoomName(Room)).ToLower(), false))
+                           {
+                               PresentOptic(Room);
+                           }
+                           return FReply::Handled();
+                       })[Row]];
     }
-    Deck->AddSlot().FillHeight(
-        .32f)[TerminalDeckPanel(TEXT("ScutEnvironmentPanel"), TEXT("COMPARTMENT ENVIRONMENT // STATION BUS"), Matrix)];
+    auto EnvironmentPanel =
+        TerminalDeckPanel(TEXT("ScutEnvironmentPanel"), TEXT("COMPARTMENT ENVIRONMENT // STATION BUS"), Matrix);
+    EnvironmentPanel->SetVisibility(TAttribute<EVisibility>::CreateLambda(
+        [this]() { return EvidenceRoom >= 0 ? EVisibility::Visible : EVisibility::Collapsed; }));
+    Deck->AddSlot().AutoHeight()[EnvironmentPanel];
+    Deck->AddSlot().AutoHeight()
+        [SNew(SBox)
+             .Tag(TEXT("ScutContextProbe"))
+             .Visibility_Lambda([this]() { return EvidenceProbe >= 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+                 [SNew(STextBlock)
+                      .AutoWrapText(true)
+                      .Font(FCoreStyle::GetDefaultFontStyle("Mono", 12))
+                      .ColorAndOpacity(EvaluatePhosphorColor(.8f))
+                      .Text_Lambda(
+                          [this]()
+                          {
+                              if (EvidenceProbe == 2)
+                              {
+                                  FString Text = TEXT("[3] BLINDSPOTS // LIVE CARRIER STATUS\n");
+                                  for (int32 R = 0; R < 8; ++R)
+                                  {
+                                      Text += FString::Printf(
+                                          TEXT("%s // %s\n"), DirectOrScut::RoomName(R),
+                                          UDirectOrScutSimSubsystem::CameraStateName(Sim->CameraFeedState(R)));
+                                  }
+                                  return FText::FromString(Text);
+                              }
+                              return FText::FromString(
+                                  EvidenceProbe == 3
+                                      ? TEXT("[4] CROSS-EXAMINE // Stage two independent evidence targets. Recorded "
+                                             "schematic coverage is read-only.")
+                                      : TEXT("[5] OVERRIDE // Stage a single explicit operation. Submission uses "
+                                             "normal validation and the next fixed tick."));
+                          })]];
+    Deck->AddSlot().AutoHeight()
+        [SNew(SBox)
+             .Tag(TEXT("ScutContextOptic"))
+             .Visibility_Lambda(
+                 [this]()
+                 {
+                     if (EvidenceRoom >= 0 && !bForensicScrub)
+                     {
+                         for (const auto &Slot : LiveInlineOptics)
+                         {
+                             const auto *Entry = FindTerminalEntry(Slot->EntryId);
+                             if (Entry && Entry->Attachment.IsSet() && Entry->Attachment->Subject == EvidenceRoom)
+                             {
+                                 return EVisibility::Visible;
+                             }
+                         }
+                     }
+                     return EVisibility::Collapsed;
+                 })
+             .HeightOverride(200)[SNew(SScaleBox).Stretch(
+                 EStretch::ScaleToFit)[SNew(SBox).WidthOverride(512).HeightOverride(288)[SNew(SImage).Image_Lambda(
+                 [this]() -> const FSlateBrush *
+                 {
+                     for (const auto &Slot : LiveInlineOptics)
+                     {
+                         const auto *Entry = FindTerminalEntry(Slot->EntryId);
+                         if (Entry && Entry->Attachment.IsSet() && Entry->Attachment->Subject == EvidenceRoom)
+                         {
+                             return &Slot->Brush;
+                         }
+                     }
+                     return FCoreStyle::Get().GetBrush("NoBrush");
+                 })]]]];
     return Deck;
 }
 TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const FText &Draft)
@@ -3560,7 +3700,7 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
         const uint64 Id = Entry.Id;
         const bool bMOTD = !Entry.Attachment.IsSet() && Entry.Text.StartsWith(TEXT("+---"));
         Row->AddSlot().AutoHeight().Padding(
-            0, 2, 0, 5)[SNew(STextBlock)
+            0, 1, 0, 1)[SNew(STextBlock)
                             .Tag(TEXT("ScutTeletypeLine"))
                             .Font(FCoreStyle::GetDefaultFontStyle(bMOTD ? "Mono" : "Regular", 13))
                             .AutoWrapText(!bMOTD)
@@ -3727,7 +3867,7 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
                                                                        : TEXT("ScutZoomedRoomSchematic"))]];
             }
         }
-        Log->AddSlot().AutoHeight().Padding(0, 2, 0, 10)[Row];
+        Log->AddSlot().AutoHeight().Padding(0, 1, 0, 7)[Row];
     }
     if (bLogAutoScroll)
     {

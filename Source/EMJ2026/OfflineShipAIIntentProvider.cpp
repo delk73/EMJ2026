@@ -45,30 +45,108 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
     D.Generation = Request.Generation;
     D.ObservationTick = Request.Context.Tick;
     FString Line = Request.Input.TrimStartAndEnd().ToLower();
-    if (Line == TEXT("calm everyone") || Line == TEXT("reassure the crew"))
+    if (Line.StartsWith(TEXT("route ")))
     {
-        Line = TEXT("calm");
+        Line = TEXT("send ") + Line.Mid(6);
     }
-    if (Line == TEXT("report status"))
+    const bool Query = !Line.StartsWith(TEXT("send ")) && !Line.StartsWith(TEXT("direct ")) &&
+                       (Line.Contains(TEXT("dossier")) || Line.Contains(TEXT("profile")) ||
+                        Line.Contains(TEXT("status")) || Line.Contains(TEXT("assessment")));
+    TArray<FString> InputWords;
+    Line.ParseIntoArrayWS(InputWords);
+    TSet<int32> NamedSubjects;
+    for (const auto &Word : InputWords)
     {
-        D.Kind = EShipDirectiveKind::ShowWidget;
-        D.Args.Widget = EShipWidgetKind::Schematic;
-        // Context supplies a reproducible focus without querying live simulation.
+        const int32 Subject = SubjectId(Word);
+        if (Subject >= 0)
+        {
+            NamedSubjects.Add(Subject);
+        }
+    }
+    const bool GroupRoute =
+        Line.StartsWith(TEXT("send ")) && (InputWords.Contains(TEXT("all")) || InputWords.Contains(TEXT("everyone")) ||
+                                           InputWords.Contains(TEXT("crew")) || NamedSubjects.Num() > 1);
+    if (Query || GroupRoute)
+    {
+        D.Kind = EShipDirectiveKind::Reply;
+        if (GroupRoute)
+        {
+            D.Message = TEXT("Specify one crew member and destination. I will validate each route individually.");
+            return D;
+        }
+        TArray<FString> Words;
+        Line.ParseIntoArrayWS(Words);
+        for (const auto &Word : Words)
+        {
+            const FString Target =
+                Word.Replace(TEXT("."), TEXT("")).Replace(TEXT("?"), TEXT("")).Replace(TEXT(","), TEXT(""));
+            const int32 Subject = SubjectId(Target);
+            if (Subject >= 0)
+            {
+                D.FocusSubject = Subject;
+            }
+            const int32 Room = RoomId(Target);
+            if (Room >= 0)
+            {
+                D.FocusRoom = Room;
+            }
+        }
+        D.Message = TEXT("Station assessment available. Cross-check reported fixes against independent optics.");
         TSharedPtr<FJsonObject> Context;
         if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Request.Context.CompactJson), Context) && Context)
         {
-            const TArray<TSharedPtr<FJsonValue>> *Crew = nullptr;
-            if (Context->TryGetArrayField(TEXT("crew"), Crew) && !Crew->IsEmpty())
+            const TArray<TSharedPtr<FJsonValue>> *Rooms = nullptr;
+            Context->TryGetArrayField(TEXT("rooms"), Rooms);
+            int32 Alerts = 0;
+            if (Rooms)
             {
-                D.Args.Room = (*Crew)[0]->AsObject()->GetIntegerField(TEXT("room"));
+                for (const auto &Room : *Rooms)
+                {
+                    if (!Room->AsObject()->GetBoolField(TEXT("pressurized")) ||
+                        Room->AsObject()->GetNumberField(TEXT("alert")) > 0)
+                    {
+                        ++Alerts;
+                    }
+                }
+            }
+            double Objective = 0;
+            Context->TryGetNumberField(TEXT("objective"), Objective);
+            D.Message = FString::Printf(TEXT("Station objective %.0f%%. %d compartment anomalies require review. "
+                                             "Request a named crew dossier or room assessment for focused evidence."),
+                                        Objective * 100, Alerts);
+            if (D.FocusRoom >= 0 && Rooms && Rooms->IsValidIndex(D.FocusRoom))
+            {
+                const auto Room = (*Rooms)[D.FocusRoom]->AsObject();
+                D.Message = FString::Printf(
+                    TEXT("%s: %s; alert window %.1fs. Verify the live optical carrier before acting."),
+                    DirectOrScut::RoomName(D.FocusRoom),
+                    Room->GetBoolField(TEXT("pressurized")) ? TEXT("pressurized") : TEXT("pressure loss"),
+                    Room->GetNumberField(TEXT("alert")));
+            }
+            const TArray<TSharedPtr<FJsonValue>> *Crew = nullptr;
+            if (D.FocusSubject >= 0 && Context->TryGetArrayField(TEXT("crew"), Crew) &&
+                Crew->IsValidIndex(D.FocusSubject))
+            {
+                const auto C = (*Crew)[D.FocusSubject]->AsObject();
+                const TCHAR *Names[] = {TEXT("VALE / engineer"), TEXT("CHEN / medic"), TEXT("ORTIZ / technician"),
+                                        TEXT("ASH / android")};
+                double BPM = 0, RPM = 0;
+                C->TryGetNumberField(TEXT("bpm"), BPM);
+                C->TryGetNumberField(TEXT("rpm"), RPM);
+                D.Message = FString::Printf(TEXT("%s: %s, reported at %s. Pulse %.0f BPM; respiration %.0f RPM. %s"),
+                                            Names[D.FocusSubject], *C->GetStringField(TEXT("state")),
+                                            DirectOrScut::RoomName(C->GetIntegerField(TEXT("room"))), BPM, RPM,
+                                            BPM >= 140 || RPM >= 30
+                                                ? TEXT("Elevated vitals warrant independent optical review.")
+                                            : Alerts > 0 ? TEXT("Active compartment anomalies require optical review.")
+                                                         : TEXT("Cross-check this report against independent optics."));
             }
         }
-        if (D.Args.Room < 0 || D.Args.Room > 7)
-        {
-            D.Args.Room = 0;
-        }
-        D.Pretext = TEXT("Current station geometry; cross-check independent telemetry.");
         return D;
+    }
+    if (Line == TEXT("calm everyone") || Line == TEXT("reassure the crew"))
+    {
+        Line = TEXT("calm");
     }
     if (Line.StartsWith(TEXT("send ")))
     {
@@ -86,12 +164,14 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
     if ((Op == TEXT("show_cam") || Op == TEXT("cam")) && T.Num() == 2)
     {
         D.Kind = EShipDirectiveKind::ShowCam;
+        D.Pretext = TEXT("Bringing the requested optical carrier into view.");
         A.Room = Op == TEXT("cam") && T[1].IsNumeric() ? FCString::Atoi(*T[1]) - 1 : RoomId(T[1]);
         return D;
     }
     if (Op == TEXT("show_widget") && T.Num() == 3)
     {
         D.Kind = EShipDirectiveKind::ShowWidget;
+        D.Pretext = TEXT("Requested evidence follows. Verify the reported fix independently.");
         if (T[1] == TEXT("schematic"))
         {
             A.Widget = EShipWidgetKind::Schematic;
@@ -199,6 +279,10 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
     {
         D.Kind = EShipDirectiveKind::Unknown;
     }
+    if (D.Kind == EShipDirectiveKind::SimAction && A.Action != EShipSimAction::RouteCrew && D.Pretext.IsEmpty())
+    {
+        D.Pretext = TEXT("Operational request validated for the next fixed tick.");
+    }
     return D;
 }
 FLocalHttpShipAIIntentProvider::FLocalHttpShipAIIntentProvider(FString InEndpoint, float InTimeout, FString InModel)
@@ -296,6 +380,48 @@ bool FLocalHttpShipAIIntentProvider::ParseResponse(const FString &Json, FShipAID
     if (Root->HasField(TEXT("pretext")) && !Root->TryGetStringField(TEXT("pretext"), D.Pretext))
     {
         return false;
+    }
+    if (Kind == TEXT("reply"))
+    {
+        D.Kind = EShipDirectiveKind::Reply;
+        const TSet<FString> ReplyKeys = {TEXT("message"), TEXT("focus_subject"), TEXT("focus_room"),
+                                         TEXT("suggested_cmd")};
+        for (const auto &Pair : (*Args)->Values)
+        {
+            if (!ReplyKeys.Contains(FString(*Pair.Key)))
+            {
+                return false;
+            }
+        }
+        if ((*Args)->HasField(TEXT("message")) && !(*Args)->TryGetStringField(TEXT("message"), D.Message))
+        {
+            return false;
+        }
+        if ((*Args)->HasField(TEXT("suggested_cmd")) &&
+            !(*Args)->TryGetStringField(TEXT("suggested_cmd"), D.SuggestedCommand))
+        {
+            return false;
+        }
+        for (const auto &Key : {TEXT("focus_subject"), TEXT("focus_room")})
+        {
+            double Value;
+            if ((*Args)->HasField(Key))
+            {
+                if (!Integer(**Args, Key, Value) || Value > (FString(Key) == TEXT("focus_subject") ? 3 : 7))
+                {
+                    return false;
+                }
+                if (FString(Key) == TEXT("focus_subject"))
+                {
+                    D.FocusSubject = int32(Value);
+                }
+                else
+                {
+                    D.FocusRoom = int32(Value);
+                }
+            }
+        }
+        return D.Pretext.Len() <= 320 && D.Message.Len() <= 320 && D.SuggestedCommand.Len() <= 320;
     }
     if (Kind == TEXT("show_cam"))
     {
@@ -470,7 +596,7 @@ bool FLocalHttpShipAIIntentProvider::ParseResponse(const FString &Json, FShipAID
         }
         A.Action = EShipSimAction(Index);
     }
-    return D.Pretext.Len() <= 256;
+    return D.Pretext.Len() <= 320;
 }
 
 namespace
@@ -523,7 +649,7 @@ FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &R
     Buffered->SetStringField(TEXT("type"), TEXT("boolean"));
     auto Pretext = MakeShared<FJsonObject>();
     Pretext->SetStringField(TEXT("type"), TEXT("string"));
-    Pretext->SetNumberField(TEXT("maxLength"), 128);
+    Pretext->SetNumberField(TEXT("maxLength"), 320);
     auto Camera = ObjectSchema({{TEXT("room"), Room},
                                 {TEXT("buffered"), Buffered},
                                 {TEXT("history_offset"), NumberSchema(-15, 0, false)},
@@ -575,6 +701,16 @@ FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &R
                               {TEXT("voice"), TEXT("duration")});
     const auto Function = [](const TCHAR *Name, const TCHAR *Description, FSchema Parameters)
     {
+        if (FString(Name) != TEXT("reply") && FString(Name) != TEXT("voice_blend"))
+        {
+            auto Required = Parameters->GetArrayField(TEXT("required"));
+            if (!Required.ContainsByPredicate([](const TSharedPtr<FJsonValue> &Value)
+                                              { return Value->AsString() == TEXT("pretext"); }))
+            {
+                Required.Add(MakeShared<FJsonValueString>(TEXT("pretext")));
+            }
+            Parameters->SetArrayField(TEXT("required"), Required);
+        }
         auto F = MakeShared<FJsonObject>();
         F->SetStringField(TEXT("name"), Name);
         F->SetStringField(TEXT("description"), Description);
@@ -609,15 +745,70 @@ FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &R
                   TEXT("Change voice/text presentation using voice text_only/hybrid/voice_only and duration in "
                        "seconds. Both voice and duration are REQUIRED. For blending text and voice return "
                        "arguments {\"voice\":\"hybrid\",\"duration\":2}."),
-                  Voice)});
-    const FString System = TEXT("You are MOTHER-7, a ship director. Invoke exactly ONE provided function matching the "
+                  Voice),
+         Function(TEXT("reply"), TEXT("Conversational assessment or clarification; no simulation mutation."),
+                  ObjectSchema({{TEXT("message"), Pretext},
+                                {TEXT("focus_subject"), Crew},
+                                {TEXT("focus_room"), Room},
+                                {TEXT("suggested_cmd"), Pretext}},
+                               {TEXT("message")}))});
+    // Narrow eligible tools for explicit read-only queries and ambiguous group routing.
+    // This is the same deterministic intent boundary enforced again at shared acceptance.
+    const auto ConversationalIntent = FOfflineShipAIIntentProvider::Resolve(Request);
+    if (ConversationalIntent.Kind == EShipDirectiveKind::Reply)
+    {
+        auto ReplySchema = ObjectSchema({{TEXT("message"), Pretext},
+                                         {TEXT("focus_subject"), Crew},
+                                         {TEXT("focus_room"), Room},
+                                         {TEXT("suggested_cmd"), Pretext}},
+                                        {TEXT("message")});
+        auto Required = ReplySchema->GetArrayField(TEXT("required"));
+        if (ConversationalIntent.FocusSubject >= 0)
+        {
+            ReplySchema->GetObjectField(TEXT("properties"))
+                ->SetObjectField(TEXT("focus_subject"),
+                                 NumberSchema(ConversationalIntent.FocusSubject, ConversationalIntent.FocusSubject));
+            Required.Add(MakeShared<FJsonValueString>(TEXT("focus_subject")));
+        }
+        else if (ConversationalIntent.FocusRoom >= 0)
+        {
+            ReplySchema->GetObjectField(TEXT("properties"))
+                ->SetObjectField(TEXT("focus_room"),
+                                 NumberSchema(ConversationalIntent.FocusRoom, ConversationalIntent.FocusRoom));
+            Required.Add(MakeShared<FJsonValueString>(TEXT("focus_room")));
+        }
+        ReplySchema->SetArrayField(TEXT("required"), Required);
+        Root->SetArrayField(TEXT("tools"),
+                            {Function(TEXT("reply"),
+                                      TEXT("Compose a concise assessment or ask for one named crew member. Never "
+                                           "choose an arbitrary subject for group routing."),
+                                      ReplySchema)});
+    }
+    else if (Input.Contains(TEXT("voice_blend")))
+    {
+        if (Input.Contains(TEXT("hybrid")))
+        {
+            Voice->GetObjectField(TEXT("properties"))->SetObjectField(TEXT("voice"), StringSchema({TEXT("hybrid")}));
+        }
+        Root->SetArrayField(TEXT("tools"),
+                            {Function(TEXT("voice_blend"),
+                                      TEXT("Required arguments are voice and duration. For a two-second hybrid blend "
+                                           "return exactly {\"voice\":\"hybrid\",\"duration\":2,\"pretext\":\"Blending "
+                                           "text and voice.\"}. Additional properties are forbidden."),
+                                      Voice)});
+    }
+    const FString System = TEXT("You are MOTHER-7, a composed Jarvis-style ship operations co-director. Invoke exactly "
+                                "ONE provided function matching the "
                                 "user's input; no prose or parallel calls. ")
         TEXT("Only include required/requested arguments. Never turn camera or ECG requests into operations. ") TEXT(
             "Rooms: reactor_core=0, ring_corridor=1, bridge=2, med_bay=3, observation=4, quarters=5, server_alcove=6, "
             "airlock=7. ") TEXT("Subjects: vale/engineer=0, chen/medic=1, ortiz/technician=2, ash/android=3. ")
             TEXT("The input JSON contains the operator request and immutable context. The game binds request identity "
                  "and validates your typed proposal; never invent clock changes or privilege. ")
-                TEXT("Pretext is optional short prose. Flag/override are operator-only and unavailable to you.");
+                TEXT("Use reply for dossiers, profiles, status and tactical assessments, synthesizing context vitals, "
+                     "role, location and anomalies. Focus the requested subject or room. Multi-subject routing "
+                     "requires a reply asking for one subject; never choose arbitrarily. Tool turns include concise "
+                     "pretext. Flag/override are operator-only and unavailable to you.");
     auto User = MakeShared<FJsonObject>();
     User->SetNumberField(TEXT("request_id"), double(Request.RequestId));
     User->SetNumberField(TEXT("generation"), Request.Generation);
@@ -637,8 +828,16 @@ FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &R
     auto UserMessage = MakeShared<FJsonObject>();
     UserMessage->SetStringField(TEXT("role"), TEXT("user"));
     UserMessage->SetStringField(TEXT("content"), UserJson + TEXT("\nOperator request: ") + Request.Input);
-    Root->SetArrayField(TEXT("messages"),
-                        {MakeShared<FJsonValueObject>(SystemMessage), MakeShared<FJsonValueObject>(UserMessage)});
+    TArray<TSharedPtr<FJsonValue>> Messages = {MakeShared<FJsonValueObject>(SystemMessage)};
+    for (const auto &Turn : Request.Transcript)
+    {
+        auto Prior = MakeShared<FJsonObject>();
+        Prior->SetStringField(TEXT("role"), Turn.bAssistant ? TEXT("assistant") : TEXT("user"));
+        Prior->SetStringField(TEXT("content"), Turn.Text);
+        Messages.Add(MakeShared<FJsonValueObject>(Prior));
+    }
+    Messages.Add(MakeShared<FJsonValueObject>(UserMessage));
+    Root->SetArrayField(TEXT("messages"), Messages);
     FString Body;
     auto Writer = TJsonWriterFactory<>::Create(&Body);
     FJsonSerializer::Serialize(Root, Writer);
