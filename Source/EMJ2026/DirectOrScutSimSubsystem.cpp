@@ -48,6 +48,7 @@ const TCHAR *PublicVerbs[] = {TEXT("help"),
                               TEXT("fx"),
                               TEXT("view"),
                               TEXT("scenario"),
+                              TEXT("new_session"),
                               TEXT("reset_experiment"),
                               TEXT("start_experiment"),
                               TEXT("continuity_incident"),
@@ -109,6 +110,10 @@ TStatId UDirectOrScutSimSubsystem::GetStatId() const
 }
 void UDirectOrScutSimSubsystem::Tick(float Delta)
 {
+    if (!bLegacyExperiment && bTerminalReady && Simulation.bReady && ExperimentPhase == EExperimentPhase::Briefing)
+    {
+        StartExperiment(); // Reuse the established session transition after both owners are ready.
+    }
     ServiceDirector();
     if (!FMath::IsFinite(Delta) || Delta <= 0)
     {
@@ -284,7 +289,7 @@ void UDirectOrScutSimSubsystem::ResetSimulation()
     CinematicCues.Reset();
     ConfigureScenario(bMedicalScenario);
     Simulation.ResetRuntime();
-    Simulation.Scenario.ShiftDuration = 600;
+    Simulation.Scenario.ShiftDuration = bLegacyExperiment ? 600.f : TNumericLimits<float>::Max();
     for (int32 I = 0; I < 9; ++I)
     {
         if (auto *Door = DoorActors[I].Get())
@@ -1165,7 +1170,7 @@ bool UDirectOrScutSimSubsystem::BeginScut(int32 Room)
 }
 void UDirectOrScutSimSubsystem::EvaluateExperimentEnding()
 {
-    if (ExperimentPhase != EExperimentPhase::Active)
+    if (!bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active)
     {
         return;
     }
@@ -1219,7 +1224,7 @@ void UDirectOrScutSimSubsystem::EvaluateExperimentEnding()
 
 void UDirectOrScutSimSubsystem::ResolveExperiment(EExperimentEnding Result)
 {
-    if (ExperimentPhase != EExperimentPhase::Active || Result == EExperimentEnding::None)
+    if (!bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active || Result == EExperimentEnding::None)
     {
         return;
     }
@@ -1264,12 +1269,28 @@ void UDirectOrScutSimSubsystem::StartExperiment()
         return;
     }
     ExperimentPhase = EExperimentPhase::Active;
+    Simulation.Scenario.ShiftDuration = bLegacyExperiment ? 600.f : TNumericLimits<float>::Max();
     RecordForensicSample(); // Tick-zero evidence at the fixed control boundary.
     Simulation.Accumulator = 0;
     ResolvedCommandAccumulator = 0;
     PeakSuspicion = Simulation.CollectiveSuspicion();
     ++MenuRevision;
-    RecordCue(2, .5f, TEXT("Experiment initialized // surveillance control active"));
+    if (bLegacyExperiment)
+    {
+        RecordCue(2, .5f, TEXT("Experiment initialized // surveillance control active"));
+    }
+    else
+    {
+        RecordCue(2, .5f,
+                  TEXT("MOTHER-7> Good morning, Director Scut. Thank you for making yourself available.\n\n")
+                  TEXT("We have received several reports of unusual activity aboard THETA-9. Unfortunately, the "
+                       "accounts are not entirely consistent. Some concern different compartments; others may concern "
+                       "the same occurrence. I have not established a common cause.\n\n")
+                  TEXT("Operations are continuing. Certain members of the crew have requested guidance, and I thought "
+                       "it prudent to refer the matter to someone with your particular authority.\n\n")
+                  TEXT("I can provide the reports, telemetry, camera feeds, and personnel communications. "
+                       "How would you like to proceed?"));
+    }
 }
 FString UDirectOrScutSimSubsystem::BriefingObjective() const
 {
@@ -3001,8 +3022,8 @@ bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString &Input)
         return false;
     }
     const FString Lower = Line.ToLower();
-    const bool Lifecycle =
-        Lower == TEXT("reset_experiment") || Lower == TEXT("scenario behavioral") || Lower == TEXT("scenario medical");
+    const bool Lifecycle = Lower == TEXT("new_session") || Lower == TEXT("reset_experiment") ||
+                           Lower == TEXT("scenario behavioral") || Lower == TEXT("scenario medical");
     if (ExperimentPhase == EExperimentPhase::Resolved && !Lifecycle && !Lower.StartsWith(TEXT("incident_reel")))
     {
         return false;
@@ -3059,6 +3080,12 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
             StartContinuityIncident();
             continue;
         }
+        if (Line == TEXT("new_session"))
+        {
+            bLegacyExperiment = false;
+            ResetSimulation();
+            return;
+        }
         if (Line == TEXT("start_experiment"))
         {
             StartExperiment();
@@ -3089,7 +3116,8 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
             }
             continue;
         }
-        if (ExperimentPhase == EExperimentPhase::Briefing && T[0] != TEXT("reset_experiment") &&
+        if (ExperimentPhase == EExperimentPhase::Briefing && T[0] != TEXT("new_session") &&
+            T[0] != TEXT("reset_experiment") &&
             T[0] != TEXT("scenario") && T[0] != TEXT("help") && T[0] != TEXT("?") && T[0] != TEXT("clear") &&
             T[0] != TEXT("status") && T[0] != TEXT("crew") && T[0] != TEXT("rooms") && T[0] != TEXT("menu") &&
             T[0] != TEXT("choose") && T[0] != TEXT("cam") && T[0] != TEXT("fx") && T[0] != TEXT("view") &&
@@ -3244,7 +3272,8 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString &Topic) const
             "SYSTEM\nhelp / ? : command reference; help command : exact syntax\nclear : wipe scrollback\nstatus : "
             "hidden objective, shift clock and suspicion\ncrew : crew weights, room and condition\nrooms : pressure "
             "and sensor alerts\n\n"
-            "CAMERAS\ncam 1-8 : select compartment feed\nstart_experiment : initialize the briefing and start the "
+            "new_session : restart ordinary remote supervision automatically\nCAMERAS\ncam 1-8 : select compartment "
+            "feed\nstart_experiment : initialize the briefing and start the "
             "clock\nrepair_cam room : restore a looped/offline feed using a diagnostic override\nArrows select; "
             "camera tiles / INSPECT buttons select and inspect; GRID / Esc returns to grid\n"
             "show_cam room : requested inline optics; show_telem [room] : request-time telemetry\n"
@@ -3278,6 +3307,10 @@ FString UDirectOrScutSimSubsystem::HelpReference(const FString &Topic) const
     else if (Topic == TEXT("clear"))
     {
         Syntax = TEXT("clear\nErase scrollback; command history is preserved.");
+    }
+    else if (Topic == TEXT("new_session"))
+    {
+        Syntax = TEXT("new_session\nReset ordinary remote supervision and automatically start a fresh session.");
     }
     else if (Topic == TEXT("start_experiment"))
     {

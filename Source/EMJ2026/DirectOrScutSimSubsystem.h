@@ -437,8 +437,12 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     void ResolveExperiment(EExperimentEnding Ending);
     bool BeginScut(int32 Room);
     static const TCHAR *EndingName(EExperimentEnding Ending);
+    // Session mode is separate from the model's existing experiment psychology flag.
+    bool bLegacyExperiment = false;
+    bool bTerminalReady = false;
     void ResetExperiment()
     {
+        bLegacyExperiment = true;
         ResetSimulation();
     }
     void SwitchScenario(bool Medical)

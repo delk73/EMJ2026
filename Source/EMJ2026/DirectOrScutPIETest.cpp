@@ -304,6 +304,7 @@ class FBriefingSurveillanceCheck : public IAutomationLatentCommand
         case 0:
         {
             S->bAutomaticAdvance = false;
+            S->ResetExperiment();
             Test->TestTrue(TEXT("Cold start is Briefing"), S->ExperimentPhase == EExperimentPhase::Briefing);
             Test->TestEqual(TEXT("Cold clock zero"), M.TickIndex, uint64(0));
             const uint64 Hash = S->SurveillanceStateHash();
@@ -613,6 +614,134 @@ bool FBriefingSurveillanceTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FBriefingSurveillanceCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+// Ordinary launch deliberately uses no reset/start command before observing the session.
+class FNormalSessionStartupCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FNormalSessionStartupCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+    bool Update() override
+    {
+        if (!Started)
+        {
+            Started = FPlatformTime::Seconds();
+        }
+        if (FPlatformTime::Seconds() - Started > 60)
+        {
+            Test->AddError(TEXT("Normal session startup timed out"));
+            return true;
+        }
+        UWorld *World = GEditor ? GEditor->PlayWorld : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        auto UI = HUD ? HUD->GetWorkstation() : nullptr;
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        if (!UI.IsValid() || !S || S->ExperimentPhase != EExperimentPhase::Active)
+        {
+            return false;
+        }
+        const FString MOTD = TEXT("THETA-9 // INDUSTRIAL CARRIER\n")
+                             TEXT("MOTHER-7 REMOTE SUPERVISORY INTERFACE\n")
+                             TEXT("DIRECTOR SCUT // SESSION ESTABLISHED\n")
+                             TEXT("COMMUNICATIONS: ACTIVE\n")
+                             TEXT("INCIDENT STATUS: OPEN");
+        const FString Greeting =
+            TEXT("MOTHER-7> Good morning, Director Scut. Thank you for making yourself available.\n\n")
+            TEXT("We have received several reports of unusual activity aboard THETA-9. Unfortunately, the accounts "
+                 "are not entirely consistent. Some concern different compartments; others may concern the same "
+                 "occurrence. I have not established a common cause.\n\n")
+            TEXT("Operations are continuing. Certain members of the crew have requested guidance, and I thought it "
+                 "prudent to refer the matter to someone with your particular authority.\n\n")
+            TEXT("I can provide the reports, telemetry, camera feeds, and personnel communications. "
+                 "How would you like to proceed?");
+        int32 Briefings = 0, MOTDs = 0, MOTDIndex = -1, GreetingIndex = -1;
+        bool FullyRevealed = false;
+        const auto &Entries = UI->GetTerminalStreamEntries();
+        for (int32 Index = 0; Index < Entries.Num(); ++Index)
+        {
+            const auto &Entry = Entries[Index];
+            if (Entry.Text == MOTD)
+            {
+                ++MOTDs;
+                MOTDIndex = Index;
+            }
+            if (Entry.Text.Contains(TEXT("MOTHER-7> Good morning, Director Scut.")))
+            {
+                ++Briefings;
+                GreetingIndex = Index;
+                const int32 Prefix = Entry.Text.Find(TEXT("MOTHER-7>"));
+                Test->TestEqual(TEXT("Complete approved greeting and paragraph breaks"), Entry.Text.Mid(Prefix), Greeting);
+                FullyRevealed = Entry.Characters >= Entry.Text.Len();
+            }
+            Test->TestFalse(TEXT("Ordinary opening has no activation prompt"),
+                            Entry.Text.Contains(TEXT("TO INITIALIZE")));
+        }
+        if (!Briefings || !FullyRevealed)
+        {
+            return false; // Exercise actual typewriter delivery on launch and after new_session.
+        }
+        Test->TestEqual(TEXT("One system MOTD per session"), MOTDs, 1);
+        Test->TestTrue(TEXT("System MOTD precedes personal greeting"), MOTDIndex >= 0 && MOTDIndex < GreetingIndex);
+        S->bAutomaticAdvance = false;
+        Test->TestFalse(TEXT("Ordinary session is distinct from legacy experiment"), S->bLegacyExperiment);
+        Test->TestEqual(TEXT("One visible deterministic briefing"), Briefings, 1);
+        Test->TestFalse(TEXT("Opening requires no AI link"), S->bAILink);
+        Test->TestFalse(TEXT("Opening requires no continuity episode"), S->bCausalIncidentActive);
+        Test->TestTrue(TEXT("Operational commands available immediately"), S->SetDoorOpen(0, true));
+        Test->TestTrue(TEXT("Telemetry command available"), UI->PresentTelemetry(-1));
+        S->AdvanceSteps(1);
+        S->Simulation.TickIndex = S->ExperimentTicks;
+        S->Simulation.ObjectiveProgress = 1;
+        S->AdvanceSteps(1);
+        Test->TestFalse(TEXT("Ordinary session has no expired legacy shift timer"), S->Simulation.bShiftComplete);
+        S->EvaluateExperimentEnding();
+        S->ResolveExperiment(EExperimentEnding::MUTINY_EXPOSED);
+        Test->TestTrue(TEXT("Legacy completion/deadline/breach cannot resolve ordinary session"),
+                       S->ExperimentPhase == EExperimentPhase::Active &&
+                           S->ExperimentEnding == EExperimentEnding::None);
+        if (Stage++ == 0)
+        {
+            S->QueueConsoleCommand(TEXT("continuity_incident"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Seeded episode before restart"), S->bCausalIncidentActive);
+            Test->TestTrue(TEXT("Ordinary restart command accepted"), S->QueueConsoleCommand(TEXT("new_session")));
+            S->AdvanceSteps(1);
+            S->Tick(.04f);
+            return false; // Verify opening survives the presentation revision reset too.
+        }
+        Test->TestTrue(TEXT("Restart clears causal records"), S->CausalContext.IsEmpty());
+        Test->TestTrue(TEXT("Restart clears old incident cues"),
+                       !S->Events.ContainsByPredicate([](const auto &E)
+                       { return E.Text.Contains(TEXT("supply interruption")); }));
+        Test->TestTrue(TEXT("Help exposes ordinary restart"), S->HelpReference().Contains(TEXT("new_session")));
+        S->ResetExperiment();
+        Test->TestTrue(TEXT("Explicit legacy reset restores activation gate"),
+                       S->bLegacyExperiment && S->ExperimentPhase == EExperimentPhase::Briefing);
+        S->Tick(1);
+        Test->TestTrue(TEXT("Legacy startup never auto activates"), S->ExperimentPhase == EExperimentPhase::Briefing);
+        S->QueueConsoleCommand(TEXT("start_experiment"));
+        S->AdvanceSteps(1);
+        S->Simulation.TickIndex = S->ExperimentTicks;
+        S->EvaluateExperimentEnding();
+        Test->TestTrue(TEXT("Legacy deadline retains ending"),
+                       S->ExperimentEnding == EExperimentEnding::EXPERIMENT_INCOMPLETE);
+        return true;
+    }
+  private:
+    FAutomationTestBase *Test;
+    double Started = 0;
+    int32 Stage = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNormalSessionStartupTest, "DirectOrScut.PIE.NormalSessionStartup",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FNormalSessionStartupTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FNormalSessionStartupCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }
@@ -3008,6 +3137,14 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
         }
         if (Workstation->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
         {
+            return false;
+        }
+        if (!Sim->bLegacyExperiment)
+        {
+            // This regression exercises the retained activation MOTD and experiment controls.
+            Sim->bAutomaticAdvance = false;
+            Sim->ResetExperiment();
+            Ready = Now + .2;
             return false;
         }
         SawCursorOn |= Workstation->IsBlockCursorVisible();

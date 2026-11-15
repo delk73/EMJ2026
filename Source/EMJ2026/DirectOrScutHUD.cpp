@@ -31,6 +31,7 @@ void ADirectOrScutHUD::BeginPlay()
         .Sim(GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>())
         .Rig(Rig);
     GetWorld()->GetGameViewport()->AddViewportWidgetContent(Workstation.ToSharedRef(), 10);
+    GetWorld()->GetSubsystem<UDirectOrScutSimSubsystem>()->bTerminalReady = true;
     if (FParse::Param(FCommandLine::Get(), TEXT("ScutCapture")))
     {
         int32 Feed = 1;

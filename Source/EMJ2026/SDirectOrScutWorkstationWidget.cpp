@@ -2556,6 +2556,24 @@ void SDirectOrScutWorkstationWidget::ResetTerminalPresentation()
     PendingReports.Reset();
     ActiveFeed = ACompartmentCameraRig::FeedForRoom(0);
     SelectedCameraIndex = ActiveFeed - 1;
+    if (!Sim->bLegacyExperiment)
+    {
+        AppendTerminalProse(TEXT("THETA-9 // INDUSTRIAL CARRIER\n")
+                                TEXT("MOTHER-7 REMOTE SUPERVISORY INTERFACE\n")
+                                    TEXT("DIRECTOR SCUT // SESSION ESTABLISHED\n")
+                                        TEXT("COMMUNICATIONS: ACTIVE\n")
+                                            TEXT("INCIDENT STATUS: OPEN"));
+        // A reset/reconstructed widget must retain the deterministic opening, without replaying old reports.
+        for (const auto &Event : Sim->Events)
+        {
+            if (Event.Text.Contains(TEXT("MOTHER-7> Good morning, Director Scut.")))
+            {
+                RouteConversationEvent(Event.Text, Event.Room);
+                break;
+            }
+        }
+        return;
+    }
     AppendTerminalProse(TEXT("+----------------------------------------------+\n")
                             TEXT("|CARRIER: THETA-9 // MOTHER-7                  |\n")
                                 TEXT("|STATION OPERATIONS / PRIVATE TTY              |\n")
@@ -3789,6 +3807,10 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                              [this]()
                              {
                                  const auto &M = Sim->Simulation;
+                                 if (!Sim->bLegacyExperiment)
+                                 {
+                                     return FText::FromString(TEXT("CARRIER: THETA-9 // REMOTE SUPERVISION | MOTHER-7"));
+                                 }
                                  const int32 T = FMath::Max(0, 600 - int32(M.TickIndex / 30));
                                  return FText::FromString(FString::Printf(
                                      TEXT("CARRIER: THETA-9 // PROJECT: GLASS HOUSE | T-%02d:%02d | OBJ "
