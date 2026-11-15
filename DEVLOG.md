@@ -1,3 +1,66 @@
+# Experiment 2 review correction: terminal-first buttons - 2026-11-15
+
+This is a correction to the pending Experiment 2 changes, not a new milestone. Manual PIE exposed `OnPreviewKeyDown()` falling through from an empty focused prompt into the R/number inquiry mappings. R toggled forensic scrub and set `SuppressPromptChar`; the subsequent character event was discarded. The input preprocessor handled only F9/F10 and was not the interception point. The final design removes global printable-key operations entirely rather than retaining focus-dependent letter mappings.
+
+Removed mappings and access retained:
+
+| Former printable mapping | Button / existing command access |
+| --- | --- |
+| 1-5 inquiries | FINDINGS, SUBJECTS, BLINDSPOTS, CROSS-EXAMINE, OVERRIDE buttons; existing inquiry commands |
+| R forensic scrub | SCRUB 15S button and `scrub` |
+| 1-8 diagnostic camera selection | Camera tiles/INSPECT buttons and `cam` / `show_cam` |
+| F inspect; G grid | INSPECT and GRID controls; Enter/Escape navigation remains |
+| Q lure; E power cycle; B seal/unseal; X log spoof | Existing room-action buttons and their unchanged validated commands |
+| Slash / backtick / tilde prompt accelerators | CMD control and ordinary text entry |
+
+The compact common control strip reuses phosphor styling and existing callbacks in both terminal and diagnostic views. Removed obsolete accelerator labels and all shortcut-driven character suppression. Text-edit focus is protected across prompt and other Slate editors; ordinary Ctrl+W editing and nonprintable Enter/Tab/history/Escape/arrows remain. Existing F9/F10 function-key behavior remains, with a visible DIAGNOSTICS toggle. No replacement modifier combinations, parser changes, fuzzy matching, scenarios, telemetry/alert-routing architecture, causal memory, inference or physical behavior changes were introduced. `DirectOrScutSimSubsystem.cpp` changes are restricted to help-reference strings describing the actual controls.
+
+`EditableKeyboardInput` sends Slate key-down, character and key-up events without SetText-based command injection. It types `continuity_incident` and `refuse recommendation`, verifies the exact refusal at the existing provider boundary, checks formerly mapped characters in text and as the first character of an empty draft, and exercises another editable control. It verifies no scrub/probe/camera/physical side effects during typing; history, completion, Escape and submission; and hit-tested inquiry, scrub, CMD, inspection, grid and diagnostic buttons. Existing tactile tests invoke the room-action buttons and retain their original fixed-tick physical assertions. Legacy camera/menu/inquiry tests now use buttons rather than removed shortcuts.
+
+Final-source verification:
+
+- `preflight.ps1`: source architecture, Development Editor compile/link and headless smoke passed without an editor-open skip. Existing Fab/ToolsetRegistry dependency and unavailable non-Windows SDK warnings remain.
+- `Scripts/Test-DirectOrScut.ps1 -Tests DirectOrScut.PIE -ReportName TerminalFirstControlsReview`: **13 succeeded, 0 succeededWithWarnings, 0 failed, 0 notRun, 0 inProcess**. This is the complete current PIE suite, including the expanded empty-draft `EditableKeyboardInput`, existing telemetry, camera, history, completion, scrolling, simulation, causal continuity, fallback and replay coverage. `TerminalFirstControlsVerified` also passed all 13 before the added per-character empty-draft assertions.
+- Source audit passed: no global printable-key dispatch remains in preview/bubbled handlers or the input preprocessor. W appears only as the existing Ctrl+W text-edit command. See `Saved/DirectOrScut/TerminalKeyboardAudit.txt`.
+- Evidence: `Saved/Logs/TerminalFirstControlsReview.log`, `Saved/DirectOrScut/TerminalFirstControlsReviewReport/index.json`, `Saved/Logs/PreflightBuild.log`, `PreflightSmoke.log`. No new live-inference or manual OS-keyboard verification is claimed.
+- `git diff --check` passed. Review artifacts: `Saved/DirectOrScut/Experiment2TerminalButtonsCorrection.diff` (unstaged correction against the existing index), and `Experiment2PendingReview.diff` (all pending changes against HEAD). No staging or commit was performed.
+
+Intermediate evidence is retained: `TerminalButtonsAcceptance` passed 12 tests but failed the adapted TerminalDesk fixture because it clicked immediately after rebuilding the camera wall. `TerminalFirstControlsFinal` then passed 12 tests but exposed the fixture's assumption that the diagnostic menu remained closed after the added layout frame. The corrected fixture waits for layout and explicitly closes that initial menu before testing next-tick dispatch. These are preserved failures, not final passes. No staging or commit was performed; pre-existing staged work is preserved.
+
+---
+
+# Experiment 2: on-demand telemetry and MOTHER-7 routing - 2026-11-15
+
+Implemented the authorized terminal subset of Opening Shift; the scenario remains proposed. Runtime changes are confined to `SDirectOrScutWorkstationWidget.h/.cpp`, with coverage in `DirectOrScutPIETest.cpp`. No simulation/subsystem, inference, causal-memory, incident or packaging code changed.
+
+Added `show_telem` and `show_telem <room>` as local read-only presentation commands, with shared room completion/targeting, command history, and `help show_telem`. Each request samples authoritative compartment power/O2/binary pressure/alert duration and available crew vitals/integrity at its current simulation tick. Value-only panels use the existing 128-entry terminal stream, reset/eviction and scrolling path. Old panels remain frozen; repeated requests create new observations. Numeric pressure and trends are explicitly unavailable. Telemetry does not call inference or commit an action.
+
+The unified conversation now suppresses known routine telemetry/environment samples, automatic forensic/debug output and agenda/alliance/spoof diagnostics while preserving original events, cues and explicit diagnostic/evidence access. Visible significant crew condition cues become concise MOTHER-7 reports instead of raw vital dumps. Existing source signatures and cue weights determine presentation priority: critical oxygen/pressure/breach/security reports and high-weight cues bypass prose animation; significant authored reports wait for completed prose and an empty input draft. MOTHER-7 delivers deterministic reports without waiting for inference. Commands, direct dialogue and direct results stay readable. Repeated condition reports are consolidated in a bounded 64-signature presentation cache; significant pending reports have a 16-entry limit. Source records remain available even if an old pending presentation is evicted. No provider output is promoted into simulation authority.
+
+The PIE test uses the real workstation prompt to start Experiment 1, refuse restoration, request station/reactor telemetry, then authorize nominal reactor power through the unchanged validated action path and request fresh readings. It checks source-event preservation during 150 routine/debug events, deterministic critical-report consolidation, deferred significant reports, current observation ticks/values, immutable old panels, no authority/causal-journal mutation from telemetry, completion/history/focus, scrolled history, invalid-room usage, camera optics and explicit forensic inspection. `Saved/DirectOrScut/OnDemandTelemetry.png` was captured and visually inspected: the compact frozen telemetry panel and inline camera are legible together.
+
+Final verification:
+
+- `preflight.ps1`: source architecture, Development Editor compile/link and headless editor smoke passed on the final source. No editor-open skip is counted as a pass. Existing Fab/ToolsetRegistry and non-Windows SDK warnings remain.
+- `Scripts/Test-DirectOrScut.ps1 -Tests DirectOrScut.PIE -ReportName TelemetryRoutingFinal`: **12 succeeded, 0 succeededWithWarnings, 0 failed, 0 notRun, 0 inProcess**. This includes the new `OnDemandTelemetry` test and all eleven existing current PIE regressions, including `HybridDirector` causal continuity/fallback/replay coverage, `TerminalDeskPIE` scrolling/history/input, and `UnifiedPhosphorTerminal` optics/ghost/CRT checks.
+- The request-time snapshot in the reactor test reflected OFFLINE supply after Scut's refusal, then NOMINAL supply and approximately 71.5% measured oxygen at tick 93 after validated restoration. Old panels retained earlier measurements. These are measured test readings, not promised scenario constants.
+- Final screenshot: `Saved/DirectOrScut/OnDemandTelemetry.png`; captured through Slate in PIE and visually inspected. Evidence: `Saved/Logs/TelemetryRoutingFinal.log`, `Saved/DirectOrScut/TelemetryRoutingFinalReport/index.json`, `PreflightBuild.log`, `PreflightSmoke.log`.
+- `git diff --check` passed. Runtime source changes remain confined to the workstation pair and domain test file; no inference/subsystem/model source or assets changed. No staging or commit was performed.
+
+Preserved initial evidence: `TelemetryInitialBuild.log` records a corrected private-member access in the first boundary check; the router now uses only workstation presentation state. `OnDemandTelemetry.log` records an initial test-fixture assertion from looking up the legacy debug scroll widget; the fixture now uses `ScutTerminalStream`, guards its lookup and exercises mouse-wheel scrolling. The intervening `OnDemandTelemetryAcceptance` run passed 11 tests but failed `UnifiedPhosphorTerminal` because telemetry had been placed first in verb completion. Appending it after the established verbs restored camera ghost/Tab ordering without weakening the regression assertions. These intermediate logs/reports are retained and are not counted as final passes.
+
+Limits: priority routing recognizes current event signatures/cue weights, not a new typed event schema or semantic classifier. Unclassified non-cue results remain visible in MOTHER-7's voice to avoid losing direct feedback; future event types need deliberate routing policy. Consolidation is presentation-only and bounded. No new live-model inference or manual interactive playthrough is claimed for this presentation experiment. The opening handover, automatic supply-incident onset, overlapping scenario and convergence remain proposed in `OPENING_SHIFT.md`; Experiment 1 still starts with `continuity_incident`. Earlier legacy Chunk2 failures remain documented separately.
+
+---
+
+# Opening Shift design direction - 2026-11-15
+
+Recorded the proposed scenario and presentation specification in `OPENING_SHIFT.md` and linked it from the active design and agent contract. Priorities: correct conversation routing and deterministic MOTHER-7-mediated alerts; normal-play handover and Experiment 1 supply onset; then one overlapping incident. The phases are intended experience, not a prescribed dialogue sequence. Preserve simulation authority, independent evidence, validated actions, causal context, local inference and fallback.
+
+Inspected the current workstation: `RefreshLog()` still appends terminal-visible events directly; `show_cam` and explicit forensic inspection exist; `show_telem` is absent. The interrupted Experiment 2 source/test edits are no longer in the working tree and were not reinstated in this design pass. No runtime code, inference, incident mechanics, or assets changed. Proposed acceptance criteria are not completed verification. Documentation consistency and `git diff --check` are the applicable checks; no new PIE or live-inference result is claimed. A build that completed for transient interrupted edits is not evidence that those features are present in current source.
+
+---
+
 # Experiment 1: simulation-grounded narrative continuity ? 2026-11-14
 
 Implemented one opt-in REACTOR_CORE supply interruption using existing authoritative power/O2 overlays and `StepCrisis()` consequences. Start a shift, enter `continuity_incident`, then choose `power reactor_core nominal`, `refuse recommendation`, or `investigate incident`; ask `incident status` later. The incident enables AI-link and reports/recommends through the existing terminal/cue path. Restoration queues a validated typed action for the next fixed tick. Refusal records a choice without an action. Investigation emits read-only measured evidence without diagnosing an unauthored cause. Restored supply recovers oxygen through existing simulation rates; refusal leaves supply offline.

@@ -47,6 +47,12 @@ struct FInlineAttachmentRef
     int32 SubjectCount = 1;
     bool bSideBySide = false;
 };
+struct FTerminalTelemetrySnapshot
+{
+    uint64 Tick = 0;
+    int32 Room = -1;
+    FString Readings;
+};
 struct FTerminalStreamEntry
 {
     uint64 Id = 0, ClaimId = 0;
@@ -54,6 +60,7 @@ struct FTerminalStreamEntry
     float Characters = 0;
     float PresentedAt = 0;
     TOptional<FInlineAttachmentRef> Attachment;
+    TOptional<FTerminalTelemetrySnapshot> Telemetry;
 };
 struct FInlineOpticSlot;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
@@ -85,6 +92,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     bool HandlePresentationCommand(const FString &Input);
     bool PresentOptic(int32 Room, EInlinePresentationIntent Intent = EInlinePresentationIntent::Intentional);
     bool PresentSecondaryOptic(int32 Room);
+    bool PresentTelemetry(int32 Room = -1);
     bool SetReportedCrewRoom(int32 Crew, int32 Room);
     int32 GetReportedCrewRoom(int32 Crew) const;
     bool PresentInstrument(ETerminalInstrument Kind, int32 Subject,
@@ -150,11 +158,17 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
                                          const FVector2f &PixelSize, float Time, float Wipe, float Deception) const;
 
   private:
+    bool IsTextEditingFocused() const;
     bool bDebugEightCamGrid = false;
     float ScrubTrackingNoise = 0, VoiceBleedIntensity = 0;
     float PresentationSeconds = 0;
     float LastPassiveAttachmentAt = -1;
     int32 UnifiedEventCursor = 0;
+    // Presentation-only consolidation and boundary queue; source events/cues are never edited.
+    TMap<FString, FString> ReportedConditions;
+    TArray<TPair<FString, FString>> PendingReports;
+    void RouteConversationEvent(const FString &Text, int32 Room);
+    void FlushOperationalReports();
     TArray<FTerminalStreamEntry> TerminalStream;
     TArray<TSharedPtr<FInlineOpticSlot>> LiveInlineOptics, InlineOpticPool;
     uint64 NextTerminalEntryId = 1, ActiveOpticEntryId = 0;
@@ -213,8 +227,9 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void RefreshLog();
     FReply CopyLog();
     TSharedRef<SWidget> BuildTerminal(const FText &Draft);
+    TSharedRef<SWidget> BuildWorkstationControls();
     TSharedRef<SWidget> BuildRoomQuickActions();
-    void ExecuteRoomQuickAction(FKey Key);
+    void ExecuteRoomQuickAction(int32 Action);
     FSlateBrush Brushes[9];
     TSharedPtr<class SImage> OpticImages[9];
     int32 LastFeed = -1;
@@ -222,7 +237,6 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     uint64 SeenFollowRevision = MAX_uint64;
     uint64 SeenEvents = MAX_uint64;
     double LastTap = -1;
-    TCHAR SuppressPromptChar = 0;
     float MenuRefreshClock = 0;
     uint64 SeenMenuRevision = MAX_uint64;
     TArray<FString> History, Completions, MenuLabels;

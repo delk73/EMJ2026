@@ -18,6 +18,7 @@
 #include "SDirectOrScutWorkstationWidget.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Images/SImage.h"
 #include "Fonts/FontMeasure.h"
 #include "Rendering/SlateRenderer.h"
@@ -1738,7 +1739,6 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
         switch (Stage++)
         {
         case 0:
-        {
             FPlatformApplicationMisc::ClipboardPaste(OriginalClipboard);
             S->bAutomaticAdvance = false;
             S->ResetExperiment();
@@ -1747,32 +1747,37 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             UI->SetConsoleOpen(false);
             UI->ShowGrid();
             App.SetKeyboardFocus(UI);
+            break; // Let the rebuilt camera controls receive Slate layout before hit-tested clicks.
+        case 1:
+        {
             Key(EKeys::Right);
             Key(EKeys::Down);
             Test->TestEqual(TEXT("Arrow selection preserves column"), UI->SelectedCameraIndex, 5);
-            Key(EKeys::Eight);
-            Test->TestEqual(TEXT("Number selects feed"), UI->ActiveFeed, 8);
+            Click(TEXT("ScutInspect8"));
+            Test->TestEqual(TEXT("Inspect button selects feed"), UI->ActiveFeed, 8);
             Key(EKeys::Enter);
             Test->TestTrue(TEXT("Enter inspects upper wall"), UI->bFullscreen);
-            Key(EKeys::G);
-            Test->TestTrue(TEXT("G restores grid"), UI->bGrid);
+            Click(TEXT("ScutControlGrid"));
+            Test->TestTrue(TEXT("GRID button restores grid"), UI->bGrid);
             S->AdvanceSteps(1);
             Test->TestFalse(TEXT("Routine movement excluded from terminal"),
                             S->TerminalBuffer().Contains(TEXT("MovingToRoom")));
             Test->TestTrue(TEXT("Routine movement retained in cinematic history"), S->CinematicCues.Num() > 0);
             Test->TestTrue(TEXT("Console permanent before prompt focus"),
                            Find(Root, TEXT("ScutTUIConsole"))->GetVisibility() == EVisibility::Visible);
+            // The diagnostic view may open its default menu during the layout frame.
+            S->QueueConsoleCommand(TEXT("menu close"));
+            S->AdvanceSteps(1);
             S->QueueConsoleCommand(TEXT("menu ai"));
             Test->TestTrue(TEXT("Menu waits for fixed tick"), S->ActiveMenu == EShipAIScreenMenu::None);
             S->AdvanceSteps(1);
-            Key(EKeys::Slash);
-            App.ProcessKeyCharEvent(FCharacterEvent('/', FModifierKeysState(), 0, false));
-            Test->TestTrue(TEXT("Slash focuses prompt without inserting slash"),
+            Click(TEXT("ScutCommandFocus"));
+            Test->TestTrue(TEXT("CMD button focuses prompt without inserting text"),
                            UI->IsPromptFocused() && Prompt->GetText().IsEmpty());
             Key(EKeys::Escape);
             break;
         }
-        case 1:
+        case 2:
         {
             auto Console = StaticCastSharedPtr<SBorder>(Find(Root, TEXT("ScutTUIConsole")));
             auto Bezel = Find(Root, TEXT("ScutConsoleBezel"));
@@ -1830,22 +1835,22 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             }
             break;
         }
-        case 2:
+        case 3:
         {
             auto OriginalPrompt = Prompt;
-            Key(EKeys::F);
-            Test->TestTrue(TEXT("F expands upper tier"), UI->bFullscreen);
+            Click(TEXT("ScutControlInspect"));
+            Test->TestTrue(TEXT("INSPECT button expands upper tier"), UI->bFullscreen);
             Test->TestTrue(TEXT("Camera expansion preserves terminal instance"),
                            OriginalPrompt == Find(Root, TEXT("ScutPrompt")));
-            Key(EKeys::Slash);
+            Click(TEXT("ScutCommandFocus"));
             Test->TestTrue(TEXT("Prompt focus retains expanded camera"), UI->bFullscreen && UI->IsPromptFocused());
-            Key(EKeys::Tilde);
-            Test->TestTrue(TEXT("Backtick focuses rather than toggles console"), UI->IsPromptFocused());
+            Click(TEXT("ScutCommandFocus"));
+            Test->TestTrue(TEXT("CMD button focuses rather than toggles console"), UI->IsPromptFocused());
             Command(TEXT("status"));
             S->AdvanceSteps(1);
             break;
         }
-        case 3:
+        case 4:
         {
             auto Image = Find(Root, TEXT("ScutFeedImage8"));
             auto Wall = Find(Root, TEXT("ScutCameraWall"));
@@ -1860,11 +1865,11 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
                            UI->bGrid && !UI->IsPromptFocused() && !UI->bConsoleOpen);
             break;
         }
-        case 4:
+        case 5:
             Click(TEXT("ScutInspect3"));
             Test->TestTrue(TEXT("Mouse INSPECT expands only upper wall"), UI->bFullscreen && UI->ActiveFeed == 3);
             break;
-        case 5:
+        case 6:
         {
             TArray<FColor> Pixels;
             FIntVector Size;
@@ -1885,7 +1890,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             S->AdvanceSteps(1);
             break;
         }
-        case 6:
+        case 7:
             Key(EKeys::Down);
             Key(EKeys::Enter);
             Test->TestTrue(TEXT("Keyboard choice deferred"), S->ActiveMenu == EShipAIScreenMenu::AI);
@@ -1893,7 +1898,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             Test->TestTrue(TEXT("Keyboard choice enters alert-room subtree"),
                            S->ActiveMenu == EShipAIScreenMenu::AlertRoom);
             break;
-        case 7:
+        case 8:
             Click(TEXT("ScutMenuBack"));
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Back returns to parent"), S->ActiveMenu == EShipAIScreenMenu::AI);
@@ -1901,23 +1906,23 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Tab cycles category"), S->ActiveMenu == EShipAIScreenMenu::Events);
             break;
-        case 8:
+        case 9:
             Click(TEXT("ScutCategory2"));
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Crew category available"), S->ActiveMenu == EShipAIScreenMenu::Crew);
             Test->TestTrue(TEXT("Crew values queried by subsystem"),
                            S->ScreenMenuChoices()[0].Detail.Contains(TEXT("Compliance")));
             break;
-        case 9:
+        case 10:
             Click(TEXT("ScutCategory3"));
             S->AdvanceSteps(1);
             break;
-        case 10:
+        case 11:
             Click(TEXT("ScutMenuChoice3"));
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Bulkhead submenu unified"), S->ActiveMenu == EShipAIScreenMenu::DoorAction);
             break;
-        case 11:
+        case 12:
         {
             Click(TEXT("ScutMenuChoice1"));
             S->AdvanceSteps(1);
@@ -1936,11 +1941,11 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             Test->TestEqual(TEXT("Prompt Tab completion"), Prompt->GetText().ToString(), FString(TEXT("unseal ")));
             break;
         }
-        case 12:
+        case 13:
             Click(TEXT("ScutCategory4"));
             S->AdvanceSteps(1);
             break;
-        case 13:
+        case 14:
         {
             const auto Revision = S->RuntimeRevision;
             Click(TEXT("ScutMenuChoice1"));
@@ -1959,7 +1964,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             S->RecordCue(3, .9f, TEXT("Medical review requires operator attention"));
             break;
         }
-        case 14:
+        case 15:
             S->AdvanceSteps(1);
             Click(TEXT("ScutCopyLog"));
             Test->TestEqual(TEXT("Copy feedback flashes COPIED"),
@@ -1978,22 +1983,22 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             }
             Wheel(8);
             break;
-        case 15:
+        case 16:
             PausedOffset = Scroll->GetScrollOffset();
             Test->TestTrue(TEXT("Manual wheel moves away from bottom"),
                            PausedOffset < Scroll->GetScrollOffsetOfEnd() - 2);
             S->LogEvent(TEXT("New incident while operator reads older output"));
             break;
-        case 16:
+        case 17:
             Test->TestTrue(TEXT("New output preserves manual scroll position"),
                            FMath::IsNearlyEqual(Scroll->GetScrollOffset(), PausedOffset, 2));
             Scroll->ScrollToEnd();
             break;
-        case 17:
+        case 18:
             Wheel(-2);
             S->LogEvent(TEXT("Tail tracking resumed"));
             break;
-        case 18:
+        case 19:
             Test->TestTrue(TEXT("Auto-scroll resumes at bottom"),
                            FMath::Abs(Scroll->GetScrollOffset() - Scroll->GetScrollOffsetOfEnd()) < 3);
             {
@@ -2016,7 +2021,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
                 Wheel(100);
                 break;
             }
-        case 19:
+        case 20:
         {
             TArray<FColor> Pixels;
             FIntVector Size;
@@ -2034,10 +2039,10 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
             Test->TestTrue(TEXT("Escape leaves permanent console visible"),
                            Find(Root, TEXT("ScutTUIConsole"))->GetVisibility() == EVisibility::Visible &&
                                !UI->bConsoleOpen);
-            Key(EKeys::Tilde);
-            Test->TestTrue(TEXT("Backtick focuses prompt"), UI->IsPromptFocused());
-            Key(EKeys::Tilde);
-            Test->TestTrue(TEXT("Repeated backtick never hides console"),
+            Click(TEXT("ScutCommandFocus"));
+            Test->TestTrue(TEXT("CMD button focuses prompt"), UI->IsPromptFocused());
+            Click(TEXT("ScutCommandFocus"));
+            Test->TestTrue(TEXT("Repeated CMD clicks never hide console"),
                            UI->IsPromptFocused() &&
                                Find(Root, TEXT("ScutTUIConsole"))->GetVisibility() == EVisibility::Visible);
             FPlatformApplicationMisc::ClipboardCopy(*OriginalClipboard);
@@ -2640,6 +2645,15 @@ class FTactileSurveillanceCheck : public IAutomationLatentCommand
             App.ProcessKeyDownEvent(FKeyEvent(Value, FModifierKeysState(), 0, false, 0, 0));
             App.ProcessKeyUpEvent(FKeyEvent(Value, FModifierKeysState(), 0, false, 0, 0));
         };
+        auto Button = [&](FName Tag)
+        {
+            auto Widget = Find(UI->GetContentRoot(), Tag);
+            Test->TestTrue(TEXT("Workstation action button exists"), Widget.IsValid());
+            if (Widget)
+            {
+                StaticCastSharedPtr<SButton>(Widget)->SimulateClick();
+            }
+        };
         if (Stage == 0)
         {
             ++Stage;
@@ -2778,41 +2792,43 @@ class FTactileSurveillanceCheck : public IAutomationLatentCommand
             UI->SetConsoleOpen(false);
             UI->ShowGrid();
             FSlateApplication::Get().SetKeyboardFocus(UI);
-            const FKey FeedKeys[] = {EKeys::One,  EKeys::Two, EKeys::Three, EKeys::Four,
-                                     EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight};
             for (int32 Feed = 0; Feed < 8; ++Feed)
             {
-                Key(FeedKeys[Feed]);
-                Test->TestEqual(TEXT("One-key feed selection remains intact"), UI->ActiveFeed, Feed + 1);
+                Button(TEXT("ScutControlGrid"));
+                Button(FName(*FString::Printf(TEXT("ScutInspect%d"), Feed + 1)));
+                Test->TestEqual(TEXT("Camera buttons select every feed"), UI->ActiveFeed, Feed + 1);
             }
-            Key(EKeys::Four);
-            Key(EKeys::E);
+            Button(TEXT("ScutControlGrid"));
+            Button(TEXT("ScutInspect4"));
+            Button(TEXT("ScutQuickAction1"));
             Test->TestTrue(TEXT("Power quick-action is queued until the next fixed step"),
                            Sim->StationRooms[4].Power == EPowerState::Nominal);
             Sim->AdvanceSteps(1);
-            Test->TestTrue(TEXT("E switches selected room to low power"),
+            Test->TestTrue(TEXT("Power button switches selected room to low power"),
                            Sim->StationRooms[4].Power == EPowerState::Low);
-            Key(EKeys::E);
+            Button(TEXT("ScutQuickAction1"));
             Sim->AdvanceSteps(1);
-            Test->TestTrue(TEXT("E cycles low to offline"), Sim->StationRooms[4].Power == EPowerState::Offline);
-            Key(EKeys::E);
+            Test->TestTrue(TEXT("Power button cycles low to offline"),
+                           Sim->StationRooms[4].Power == EPowerState::Offline);
+            Button(TEXT("ScutQuickAction1"));
             Sim->AdvanceSteps(1);
-            Test->TestTrue(TEXT("E restores nominal power"), Sim->StationRooms[4].Power == EPowerState::Nominal);
+            Test->TestTrue(TEXT("Power button restores nominal power"),
+                           Sim->StationRooms[4].Power == EPowerState::Nominal);
             Sim->UplinkHeatPct = 0;
-            Key(EKeys::B);
+            Button(TEXT("ScutQuickAction2"));
             Sim->AdvanceSteps(1);
-            Test->TestTrue(TEXT("B seals selected room"), Sim->IsRoomSealed(4));
-            Key(EKeys::B);
+            Test->TestTrue(TEXT("Seal button seals selected room"), Sim->IsRoomSealed(4));
+            Button(TEXT("ScutQuickAction2"));
             Sim->AdvanceSteps(1);
-            Test->TestFalse(TEXT("B unseals selected room"), Sim->IsRoomSealed(4));
+            Test->TestFalse(TEXT("Seal button unseals selected room"), Sim->IsRoomSealed(4));
             Sim->UplinkHeatPct = 0;
-            Key(EKeys::Q);
+            Button(TEXT("ScutQuickAction0"));
             Sim->AdvanceSteps(1);
-            Test->TestEqual(TEXT("Q lures crew into the selected feed room"), Sim->VoiceSpoof.Room, 4);
+            Test->TestEqual(TEXT("Lure button routes crew into the selected feed room"), Sim->VoiceSpoof.Room, 4);
             Sim->SecretAgendas[2].Progress = 50;
-            Key(EKeys::X);
+            Button(TEXT("ScutQuickAction3"));
             Sim->AdvanceSteps(1);
-            Test->TestTrue(TEXT("X uses authoritative log-spoof path"), Sim->SecretAgendas[2].Progress <= 1);
+            Test->TestTrue(TEXT("Spoof button uses authoritative log-spoof path"), Sim->SecretAgendas[2].Progress <= 1);
             auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(UI->GetContentRoot(), TEXT("ScutPrompt")));
             FSlateApplication::Get().SetKeyboardFocus(Prompt);
             const auto Power = Sim->StationRooms[4].Power;
@@ -3843,24 +3859,19 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             Press(EKeys::Escape);
             Test->TestTrue(TEXT("Escape clears draft and retains focus"),
                            Prompt->GetText().IsEmpty() && Workstation->IsPromptFocused());
-            for (FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five})
+            for (int32 I = 0; I < 5; ++I)
             {
                 Prompt->SetText(FText::GetEmpty());
                 const uint64 Last = Workstation->GetTerminalStreamEntries().Last().Id;
-                Press(K);
-                App.ProcessKeyCharEvent(FCharacterEvent(TCHAR('1' + (K == EKeys::One     ? 0
-                                                                     : K == EKeys::Two   ? 1
-                                                                     : K == EKeys::Three ? 2
-                                                                     : K == EKeys::Four  ? 3
-                                                                                         : 4)),
-                                                        FModifierKeysState(), 0, false));
-                Test->TestTrue(TEXT("Empty prompt inquiry hotkey appends investigative prose"),
+                Click(Find(FName(*FString::Printf(TEXT("ScutInquiry%d"), I + 1))).ToSharedRef());
+                Test->TestTrue(TEXT("Inquiry button appends investigative prose"),
                                Workstation->GetTerminalStreamEntries().Last().Id > Last);
             }
             Test->TestEqual(TEXT("Override probe stages actionable draft"), Prompt->GetText().ToString(),
                             FString(TEXT("override ")));
             Prompt->SetText(FText::GetEmpty());
-            Press(EKeys::Four);
+            Workstation->SetConsoleOpen(false);
+            Click(Find(TEXT("ScutInquiry4")).ToSharedRef());
             Test->TestEqual(TEXT("Cross examination stages comparison"), Prompt->GetText().ToString(),
                             FString(TEXT("compare ecg vale ")));
             Test->TestEqual(TEXT("Typing, completion, history and inquiry remain read only"),
@@ -3904,8 +3915,9 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
             }
             Test->TestEqual(TEXT("Guide, deck and softkey clicks preserve hash"), Sim->SurveillanceStateHash(), Before);
             Prompt->SetText(FText::GetEmpty());
-            Key(EKeys::R);
-            Test->TestTrue(TEXT("R enters read only forensic mode"), Workstation->IsForensicScrubbing());
+            Workstation->SetConsoleOpen(false);
+            Click(Find(TEXT("ScutInquiry6")).ToSharedRef());
+            Test->TestTrue(TEXT("SCRUB button enters read only forensic mode"), Workstation->IsForensicScrubbing());
             Ready = Now + .2;
             break;
         }
@@ -3951,7 +3963,8 @@ class FUnifiedPhosphorTerminalCheck : public IAutomationLatentCommand
                                 Before);
                 Hash = Before;
             }
-            Key(EKeys::R);
+            Workstation->SetConsoleOpen(false);
+            Click(Find(TEXT("ScutInquiry6")).ToSharedRef());
             Ready = Now + .2;
             break;
         case 29:
@@ -5175,6 +5188,522 @@ bool FNarrativeContinuityLiveTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FNarrativeContinuityLiveCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FOnDemandTelemetryCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FOnDemandTelemetryCheck(FAutomationTestBase *In) : Test(In) {}
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 60)
+        {
+            Test->AddError(TEXT("Telemetry PIE readiness timeout"));
+            return true;
+        }
+        auto *World = GEditor->PlayWorld.Get();
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        if (!S || !S->Simulation.bReady || !HUD || !HUD->GetWorkstation())
+        {
+            return false;
+        }
+        auto UI = HUD->GetWorkstation();
+        if (UI->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
+        {
+            return false;
+        }
+        auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), Tag); };
+        auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+        auto Key = [&](FKey K)
+        {
+            FSlateApplication::Get().ProcessKeyDownEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+            FSlateApplication::Get().ProcessKeyUpEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+        };
+        auto Command = [&](const TCHAR *Text)
+        {
+            UI->SetConsoleOpen(true);
+            FSlateApplication::Get().SetKeyboardFocus(Prompt);
+            Prompt->SetText(FText::FromString(Text));
+            Key(EKeys::Enter);
+        };
+        switch (Stage++)
+        {
+        case 0:
+            S->bAutomaticAdvance = false;
+            S->ResetExperiment();
+            S->ConfigureDirectorEndpoint(TEXT(""), 2);
+            S->QueueConsoleCommand(TEXT("start_experiment"));
+            S->AdvanceSteps(1);
+            break;
+        case 1:
+            Command(TEXT("continuity_incident"));
+            S->AdvanceSteps(1);
+            break;
+        case 2:
+            Command(TEXT("refuse recommendation"));
+            S->AdvanceSteps(1);
+            S->ServiceDirector();
+            EventCount = S->Events.Num();
+            for (int32 I = 0; I < 50; ++I)
+            {
+                S->LogEvent(TEXT("[ENV] periodic oxygen sample"));
+                S->LogEvent(TEXT("[FORENSIC] automatic ring sample"));
+                S->LogEvent(TEXT("[DEBUG] diagnostic sample"));
+            }
+            Prompt->SetText(FText::FromString(TEXT("unfinished question")));
+            S->RecordCue(0, .7f, TEXT("Operational review ready"));
+            S->RecordCue(0, .7f, TEXT("Crew 0: Working | BPM 90 RPM 18 pupil 3.0 mm"));
+            S->RecordCue(0, .9f, TEXT("[O2WARN] REACTOR_CORE O2 64.0%"));
+            S->RecordCue(0, .9f, TEXT("[O2WARN] REACTOR_CORE O2 63.9%"));
+            break;
+        case 3:
+        {
+            FString Conversation;
+            int32 OxygenReports = 0;
+            for (const auto &Entry : UI->GetTerminalStreamEntries())
+            {
+                Conversation += Entry.Text;
+                if (Entry.Text.Contains(TEXT("oxygen is below the warning threshold")))
+                {
+                    ++OxygenReports;
+                    Test->TestTrue(TEXT("Critical deterministic report bypasses teletype backlog"),
+                                   Entry.Characters >= Entry.Text.Len());
+                    Test->TestTrue(TEXT("Operational warning is voiced by MOTHER"),
+                                   Entry.Text.Contains(TEXT("MOTHER-7>")));
+                }
+            }
+            Test->TestEqual(TEXT("Repeated unresolved oxygen warning consolidated"), OxygenReports, 1);
+            Test->TestFalse(TEXT("Significant report waits while Scut composes a question"),
+                            Conversation.Contains(TEXT("Operational review ready")));
+            Test->TestTrue(TEXT("Incident recommendation remains in conversation"),
+                           Conversation.Contains(TEXT("Recommend `power reactor_core nominal`")));
+            Test->TestTrue(TEXT("Refusal remains in conversation"), Conversation.Contains(TEXT("Scut refused")));
+            Test->TestFalse(TEXT("Routine telemetry stays out of conversation"),
+                            Conversation.Contains(TEXT("periodic oxygen sample")));
+            Test->TestFalse(TEXT("Automatic forensics stays out of conversation"),
+                            Conversation.Contains(TEXT("automatic ring sample")));
+            Test->TestTrue(TEXT("Suppression preserves source records"), S->Events.Num() >= EventCount + 150);
+            const uint64 Hash = S->SurveillanceStateHash();
+            const int32 Causal = S->CausalContext.Num();
+            Prompt->SetText(FText::FromString(TEXT("show_telem rea")));
+            Test->TestTrue(TEXT("Telemetry shares room completion"),
+                           FString(TEXT("show_telem rea")) + UI->GetGhostCompletion() ==
+                               TEXT("show_telem reactor_core"));
+            Command(TEXT("show_telem"));
+            const auto Station = UI->GetTerminalStreamEntries().Last().Telemetry;
+            Test->TestTrue(TEXT("Station panel has reactor and airlock measurements"),
+                           Station.IsSet() && Station->Readings.Contains(DirectOrScut::RoomName(0)) &&
+                               Station->Readings.Contains(DirectOrScut::RoomName(7)));
+            Command(TEXT("show_telem reactor_core"));
+            const auto Snapshot = UI->GetTerminalStreamEntries().Last().Telemetry;
+            Test->TestTrue(TEXT("Compartment telemetry captures current supply"),
+                           Snapshot.IsSet() && Snapshot->Room == 0 &&
+                               Snapshot->Readings.Contains(TEXT("POWER OFFLINE")));
+            if (Snapshot.IsSet())
+            {
+                Frozen = Snapshot->Readings;
+                Test->TestEqual(TEXT("Observation tick is request time"), Snapshot->Tick, S->Simulation.TickIndex);
+                Test->TestTrue(TEXT("Oxygen is authoritative current measurement"),
+                               Frozen.Contains(FString::Printf(TEXT("O2 %.1f%%"), S->StationRooms[0].OxygenPct)));
+                Test->TestTrue(
+                    TEXT("Pressure uses available binary state"),
+                    Frozen.Contains(S->Simulation.Rooms[0].bIsPressurized ? TEXT("PRESSURIZED") : TEXT("VACUUM")));
+            }
+            Test->TestEqual(TEXT("Telemetry cannot mutate authority"), S->SurveillanceStateHash(), Hash);
+            Test->TestEqual(TEXT("Telemetry cannot mutate causal journal"), S->CausalContext.Num(), Causal);
+            Test->TestTrue(TEXT("Request preserves prompt focus"), UI->IsPromptFocused());
+            Key(EKeys::Up);
+            Test->TestEqual(TEXT("Request enters existing history"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_telem reactor_core")));
+            Command(TEXT("power reactor_core nominal"));
+            S->AdvanceSteps(91);
+            S->ServiceDirector();
+            break;
+        }
+        case 4:
+        {
+            Test->TestEqual(TEXT("Validated incident restoration intact"), S->StationRooms[0].Power,
+                            EPowerState::Nominal);
+            bool FoundFrozen = false;
+            for (const auto &Entry : UI->GetTerminalStreamEntries())
+            {
+                FoundFrozen |= Entry.Telemetry.IsSet() && Entry.Telemetry->Readings == Frozen;
+            }
+            Test->TestTrue(TEXT("Old panel retains historical values"), FoundFrozen);
+            Command(TEXT("show_telem reactor_core"));
+            const auto Snapshot = UI->GetTerminalStreamEntries().Last().Telemetry;
+            Test->TestTrue(
+                TEXT("Repeat request samples changed state"),
+                Snapshot.IsSet() && Snapshot->Readings != Frozen &&
+                    Snapshot->Readings.Contains(TEXT("POWER NOMINAL")) &&
+                    Snapshot->Readings.Contains(FString::Printf(TEXT("O2 %.1f%%"), S->StationRooms[0].OxygenPct)));
+            Test->TestTrue(TEXT("Inline panel is rendered"), Find(TEXT("ScutInlineTelemetryPanel")).IsValid());
+            auto Scroll = StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")));
+            if (!Scroll.IsValid())
+            {
+                Test->AddError(TEXT("Unified stream scroll widget missing"));
+                return true;
+            }
+            Scroll->SetScrollOffset(Scroll->GetScrollOffsetOfEnd());
+            const auto &ScrollGeometry = Scroll->GetCachedGeometry();
+            const FVector2D Point = ScrollGeometry.LocalToAbsolute(ScrollGeometry.GetLocalSize() * .5);
+            Scroll->OnMouseWheel(ScrollGeometry,
+                                 FPointerEvent(0, Point, Point, TSet<FKey>{}, EKeys::Invalid, 8, FModifierKeysState()));
+            const float Offset = Scroll->GetScrollOffset();
+            Command(TEXT("show_telem reactor_core"));
+            Test->TestEqual(TEXT("Request preserves scrolled history"), Scroll->GetScrollOffset(), Offset);
+            Command(TEXT("show_telem nowhere"));
+            Test->TestTrue(TEXT("Invalid room gives usage"),
+                           UI->GetTerminalStreamEntries().Last().Text.Contains(TEXT("Usage: show_telem")));
+            const uint64 Hash = S->SurveillanceStateHash();
+            Command(TEXT("show_cam reactor_core"));
+            Test->TestTrue(TEXT("Camera still opens an inline optic"), UI->GetLiveInlineOpticCount() > 0);
+            Command(TEXT("scrub"));
+            Test->TestTrue(TEXT("Explicit forensic inspection survives"), UI->IsForensicScrubbing());
+            Test->TestEqual(TEXT("Inspection remains read-only"), S->SurveillanceStateHash(), Hash);
+            Command(TEXT("scrub"));
+            Command(TEXT("show_telem reactor_core"));
+            Ready = Now + 12;
+            return false;
+        }
+        default:
+        {
+            bool ReviewDelivered = false;
+            for (const auto &Entry : UI->GetTerminalStreamEntries())
+            {
+                ReviewDelivered |= Entry.Text.Contains(TEXT("MOTHER-7> Operational review ready"));
+            }
+            if (!ReviewDelivered && Now - Started < 50)
+            {
+                Ready = Now + .3;
+                return false;
+            }
+            Test->TestTrue(TEXT("Significant report delivers at a later conversation boundary"), ReviewDelivered);
+            if (!CaptureReady)
+            {
+                CaptureReady = true;
+                StaticCastSharedPtr<SScrollBox>(Find(TEXT("ScutTerminalStream")))->ScrollToEnd();
+                Ready = Now + .5;
+                return false;
+            }
+            for (const auto &Entry : UI->GetTerminalStreamEntries())
+            {
+                Test->TestFalse(TEXT("Raw crew vital dumps stay in records"), Entry.Text.Contains(TEXT(" | BPM ")));
+            }
+            TArray<FColor> Pixels;
+            FIntVector Size;
+            const bool Captured = FSlateApplication::Get().TakeScreenshot(UI->GetContentRoot(), Pixels, Size);
+            Test->TestTrue(TEXT("Telemetry verification screenshot captured"), Captured);
+            if (Captured)
+            {
+                TArray64<uint8> Png;
+                FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
+                Test->TestTrue(TEXT("Telemetry verification screenshot saved"),
+                               FFileHelper::SaveArrayToFile(
+                                   Png, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut/OnDemandTelemetry.png"))));
+            }
+            return true;
+        }
+        }
+        Ready = Now + .4;
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0, EventCount = 0;
+    double Started = 0, Ready = 0;
+    FString Frozen;
+    bool CaptureReady = false;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOnDemandTelemetryTest, "DirectOrScut.PIE.OnDemandTelemetry",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FOnDemandTelemetryTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FOnDemandTelemetryCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FEditableKeyboardCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FEditableKeyboardCheck(FAutomationTestBase *In) : Test(In) {}
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 45)
+        {
+            Test->AddError(TEXT("Editable keyboard regression timed out"));
+            return true;
+        }
+        auto *World = GEditor->PlayWorld.Get();
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        if (!S || !S->Simulation.bReady || !HUD || !HUD->GetWorkstation() || Now < Ready)
+        {
+            return false;
+        }
+        auto UI = HUD->GetWorkstation();
+        if (UI->GetCachedGeometry().GetLocalSize().X < 100)
+        {
+            return false;
+        }
+        auto Prompt = StaticCastSharedPtr<SEditableTextBox>(
+            FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), TEXT("ScutPrompt")));
+        if (!Prompt)
+        {
+            return false;
+        }
+        auto &App = FSlateApplication::Get();
+        auto Press = [&](FKey Key, bool Control = false)
+        {
+            const FModifierKeysState Mods(false, false, Control, false, false, false, false, false, false);
+            App.ProcessKeyDownEvent(FKeyEvent(Key, Mods, 0, false, 0, 0));
+            App.ProcessKeyUpEvent(FKeyEvent(Key, Mods, 0, false, 0, 0));
+        };
+        auto Clear = [&]()
+        {
+            Press(EKeys::A, true);
+            Press(EKeys::BackSpace);
+        };
+        auto Type = [&](const FString &Text)
+        {
+            const FKey Digits[] = {EKeys::Zero, EKeys::One, EKeys::Two,   EKeys::Three, EKeys::Four,
+                                   EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine};
+            for (TCHAR C : Text)
+            {
+                const FKey Key = C == ' '                 ? EKeys::SpaceBar
+                                 : C == '_'               ? EKeys::Hyphen
+                                 : C == '/'               ? EKeys::Slash
+                                 : (C == '~' || C == '`') ? EKeys::Tilde
+                                 : FChar::IsDigit(C)      ? Digits[C - '0']
+                                                          : FKey(FName(*FString::Chr(FChar::ToUpper(C))));
+                const bool Shift = C == '_' || C == '~' || FChar::IsUpper(C);
+                const FModifierKeysState Mods(Shift, false, false, false, false, false, false, false, false);
+                App.ProcessKeyDownEvent(FKeyEvent(Key, Mods, 0, false, uint32(C), uint32(FChar::ToUpper(C))));
+                App.ProcessKeyCharEvent(FCharacterEvent(C, Mods, 0, false));
+                App.ProcessKeyUpEvent(FKeyEvent(Key, Mods, 0, false, uint32(C), uint32(FChar::ToUpper(C))));
+            }
+        };
+        auto Click = [&](FName Tag)
+        {
+            auto Widget = FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), Tag);
+            Test->TestTrue(TEXT("Replacement control is present"), Widget.IsValid());
+            if (!Widget)
+            {
+                return;
+            }
+            const auto &G = Widget->GetCachedGeometry();
+            Test->TestTrue(TEXT("Replacement control is visibly arranged"),
+                           G.GetLocalSize().X > 1 && G.GetLocalSize().Y > 1);
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto Window = App.FindWidgetWindow(Widget.ToSharedRef());
+            if (!Window)
+            {
+                Test->AddError(TEXT("Button window missing"));
+                return;
+            }
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseButtonDownEvent(Window->GetNativeWindow(),
+                                            FPointerEvent(0, P, P, TSet<FKey>{EKeys::LeftMouseButton},
+                                                          EKeys::LeftMouseButton, 0, FModifierKeysState()));
+            App.ProcessMouseButtonUpEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
+        };
+        switch (Stage++)
+        {
+        case 0:
+            S->bAutomaticAdvance = false;
+            S->ResetExperiment();
+            S->ConfigureDirectorEndpoint(TEXT(""), 2);
+            Capture = MakeShared<FDirectorTestProvider>();
+            Capture->ResolveImmediately = true;
+            S->IntentProvider = Capture;
+            S->QueueConsoleCommand(TEXT("start_experiment"));
+            S->AdvanceSteps(1);
+            break;
+        case 1:
+            UI->SetConsoleOpen(true);
+            Clear();
+            Type(TEXT("continuity_incident"));
+            Press(EKeys::Enter);
+            S->AdvanceSteps(1);
+            break;
+        case 2:
+        {
+            UI->SetConsoleOpen(true);
+            Clear();
+            const int32 Before = UI->GetTerminalStreamEntries().Num();
+            Type(TEXT("refuse recommendation"));
+            Test->TestEqual(TEXT("Actual key/char events retain the initial r and entire refusal"),
+                            Prompt->GetText().ToString(), FString(TEXT("refuse recommendation")));
+            Test->TestFalse(TEXT("Typing refusal cannot activate forensic scrub"), UI->IsForensicScrubbing());
+            Test->TestEqual(TEXT("Typing does not emit repeated forensic/inquiry prose"),
+                            UI->GetTerminalStreamEntries().Num(), Before);
+            Press(EKeys::Enter);
+            S->AdvanceSteps(1);
+            S->ServiceDirector();
+            Test->TestTrue(TEXT("Enter submits intact refusal to existing provider boundary"),
+                           Capture->Calls >= 2 && Capture->LastRequest.Input == TEXT("refuse recommendation"));
+            Test->TestTrue(TEXT("Submission retains empty focused prompt"),
+                           Prompt->GetText().IsEmpty() && UI->IsPromptFocused());
+            Test->TestEqual(TEXT("Refusal leaves reactor supply offline"), S->StationRooms[0].Power,
+                            EPowerState::Offline);
+            Press(EKeys::Up);
+            Test->TestEqual(TEXT("History recalls intact typed command"), Prompt->GetText().ToString(),
+                            FString(TEXT("refuse recommendation")));
+            Press(EKeys::Down);
+            Test->TestTrue(TEXT("Down restores the empty draft"), Prompt->GetText().IsEmpty());
+            Type(TEXT("sh"));
+            Press(EKeys::Tab);
+            Test->TestEqual(TEXT("Tab completion remains functional"), Prompt->GetText().ToString(),
+                            FString(TEXT("show_cam")));
+            Press(EKeys::Escape);
+            Test->TestTrue(TEXT("Escape clears draft without losing prompt focus"),
+                           Prompt->GetText().IsEmpty() && UI->IsPromptFocused());
+            const uint64 Hash = S->SurveillanceStateHash();
+            const int32 Feed = UI->ActiveFeed;
+            const int32 Probe = UI->EvidenceProbe;
+            const FString Letters = TEXT("rRfFgGqQeEbBxX12345678/`~");
+            Type(Letters);
+            Test->TestEqual(TEXT("Other shortcut letters, digits and punctuation remain editable text"),
+                            Prompt->GetText().ToString(), Letters);
+            Test->TestTrue(TEXT("Typing cannot invoke probes, optics or scrub"),
+                           !UI->IsForensicScrubbing() && UI->ActiveFeed == Feed && UI->EvidenceProbe == Probe);
+            Test->TestEqual(TEXT("Typing cannot invoke operational quick actions"), S->SurveillanceStateHash(), Hash);
+            // Every former shortcut must also be safe as the first character of an empty draft.
+            for (TCHAR C : Letters)
+            {
+                Clear();
+                Type(FString::Chr(C));
+                Test->TestEqual(TEXT("Former shortcut is preserved at an empty prompt"), Prompt->GetText().ToString(),
+                                FString::Chr(C));
+                Test->TestTrue(TEXT("First character cannot invoke a workstation operation"),
+                               !UI->IsForensicScrubbing() && UI->ActiveFeed == Feed && UI->EvidenceProbe == Probe &&
+                                   S->SurveillanceStateHash() == Hash);
+            }
+            Clear();
+            UI->SetConsoleOpen(false);
+            Type(TEXT("r"));
+            Test->TestFalse(TEXT("R is no longer an operation outside the editor either"), UI->IsForensicScrubbing());
+            Test->TestEqual(TEXT("Unfocused printable input starts ordinary terminal entry"),
+                            Prompt->GetText().ToString(), FString(TEXT("r")));
+            Press(EKeys::Escape);
+            Click(TEXT("ScutInquiry6"));
+            Test->TestTrue(TEXT("SCRUB button still activates forensics"), UI->IsForensicScrubbing());
+            Click(TEXT("ScutInquiry6"));
+            Test->TestFalse(TEXT("SCRUB button still exits forensics"), UI->IsForensicScrubbing());
+            break;
+        }
+        case 3:
+        {
+            // A sibling editable control exercises the ancestor preview handler without prompt ownership.
+            auto Overlay = StaticCastSharedPtr<SOverlay>(Prompt->GetParentWidget());
+            if (!Overlay)
+            {
+                Test->AddError(TEXT("Prompt overlay missing"));
+                return true;
+            }
+            auto Other = SNew(SEditableTextBox);
+            Overlay->AddSlot()[Other];
+            App.SetKeyboardFocus(Other);
+            Test->TestFalse(TEXT("Sibling editor does not count as the command prompt"), UI->IsPromptFocused());
+            const uint64 Hash = S->SurveillanceStateHash();
+            Type(TEXT("rRfFgGqQeEbBxX12345678/`~"));
+            Test->TestEqual(TEXT("Other editable controls receive shortcut characters intact"),
+                            Other->GetText().ToString(), FString(TEXT("rRfFgGqQeEbBxX12345678/`~")));
+            Test->TestFalse(TEXT("Sibling editing cannot activate scrub"), UI->IsForensicScrubbing());
+            Test->TestEqual(TEXT("Sibling editing cannot invoke quick actions"), S->SurveillanceStateHash(), Hash);
+            UI->SetConsoleOpen(false);
+            Overlay->RemoveSlot(Other);
+            Click(TEXT("ScutDiagnostics"));
+            break;
+        }
+        case 4:
+        {
+            // Diagnostic camera mode is also button-driven; text entry never selects operations.
+            UI->SetConsoleOpen(true);
+            Clear();
+            const bool Grid = UI->bGrid;
+            const int32 Feed = UI->ActiveFeed;
+            const uint64 Hash = S->SurveillanceStateHash();
+            Type(TEXT("rRfFgGqQeEbBxX12345678/`~"));
+            Test->TestEqual(TEXT("Debug-view prompt also receives printable shortcut keys"),
+                            Prompt->GetText().ToString(), FString(TEXT("rRfFgGqQeEbBxX12345678/`~")));
+            Test->TestTrue(TEXT("Debug typing preserves camera mode and selection"),
+                           UI->IsDebugEightCamGrid() && UI->bGrid == Grid && UI->ActiveFeed == Feed);
+            Test->TestEqual(TEXT("Debug typing cannot execute room actions"), S->SurveillanceStateHash(), Hash);
+            for (TCHAR C : FString(TEXT("rRfFgGqQeEbBxX12345678/`~")))
+            {
+                Clear();
+                Type(FString::Chr(C));
+                Test->TestEqual(TEXT("Diagnostic prompt accepts every former shortcut as its first character"),
+                                Prompt->GetText().ToString(), FString::Chr(C));
+                Test->TestTrue(TEXT("Diagnostic first character cannot change operations or view"),
+                               UI->IsDebugEightCamGrid() && UI->bGrid == Grid && UI->ActiveFeed == Feed &&
+                                   S->SurveillanceStateHash() == Hash);
+            }
+            Press(EKeys::Escape);
+            Test->TestFalse(TEXT("Debug Escape still returns focus to workstation"), UI->IsPromptFocused());
+            Click(TEXT("ScutControlInspect"));
+            Test->TestFalse(TEXT("INSPECT button expands the selected camera"), UI->bGrid);
+            Click(TEXT("ScutControlGrid"));
+            Test->TestTrue(TEXT("GRID button restores the camera wall"), UI->bGrid);
+            Click(TEXT("ScutCommandFocus"));
+            Test->TestTrue(TEXT("CMD button focuses the text editor"), UI->IsPromptFocused());
+            Click(TEXT("ScutDiagnostics"));
+            break;
+        }
+        case 5:
+        {
+            Test->TestFalse(TEXT("Diagnostics button returns to terminal view"), UI->IsDebugEightCamGrid());
+            const uint64 Hash = S->SurveillanceStateHash();
+            for (int32 I = 1; I <= 5; ++I)
+            {
+                const uint64 Last = UI->GetTerminalStreamEntries().Last().Id;
+                Click(FName(*FString::Printf(TEXT("ScutInquiry%d"), I)));
+                Test->TestTrue(TEXT("Former numbered inquiry has a working button"),
+                               UI->GetTerminalStreamEntries().Last().Id > Last);
+            }
+            Test->TestEqual(TEXT("Inquiry buttons preserve simulation authority"), S->SurveillanceStateHash(), Hash);
+            return true;
+        }
+        }
+        Ready = Now + .3;
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    TSharedPtr<FDirectorTestProvider> Capture;
+    int32 Stage = 0;
+    double Started = 0, Ready = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEditableKeyboardTest, "DirectOrScut.PIE.EditableKeyboardInput",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FEditableKeyboardTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FEditableKeyboardCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }
