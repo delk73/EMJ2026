@@ -1,3 +1,49 @@
+# Proposed Windows game-jam distribution — 2026-11-14
+
+Recorded a proposed self-contained Windows target of approximately 2.0 GB installed, including the Unreal game, local inference runtime, and model. Preferred candidate: Qwen2.5-1.5B-Instruct Q4_K_M GGUF served by bundled `llama.cpp` through the existing OpenAI-compatible provider. The current upstream GGUF listing is about 1.12 GB; all other component allocations remain targets, not measured package sizes.
+
+Proposed lifecycle: one game-instance-owned local server, loopback-only, started with bounded readiness checks and shut down only by its owner. Keep the deterministic fallback playable if the model/runtime or service is unavailable. Package exact license/attribution notices for the model, runtime, Unreal, and shipped dependencies; verify pinned artifact terms before release.
+
+This is a distribution decision only. Bundling, startup/shutdown ownership, clean-machine behavior, package size, latency, memory, and model/provider compatibility have not been implemented or verified. The simulation-grounded storytelling priority is unchanged.
+
+---
+
+# Documentation correction pass — 2026-11-14
+
+Clarified three distinct perspectives: authoritative scenario truth, MOTHER-7's selected knowledge and possible private narrative objective, and Scut's player-visible knowledge. A private MOTHER-7 objective may guide intentional influence but is not automatically disclosed and grants no authority over simulation facts or consequences.
+
+Expanded the proposed causal record beyond simulation mutations to include recommendations, operator acceptance/refusal/challenge, discoveries, and observable consequential inaction. Refusal may change later narrative behavior without creating a simulation action. Clarified that the model owns physical/crew/compartment/door/pressure state while the subsystem owns additional operational/environmental systems; current proactive notices are deterministic and not LLM-generated. `DefaultGame.ini` configures the Ollama endpoint but does not establish a live connection.
+
+Updated the active guidance, design specification, and future acceptance plan to reflect these distinctions. Documentation only; no implementation or runtime verification was performed.
+
+---
+
+# Documentation alignment — 2026-11-14
+
+Established the current creative direction as a simulation-grounded, LLM-assisted systems mystery. Ridley Scut oversees industrial carrier THETA-9 through MOTHER-7; an initially plausible operations shift can accumulate discrepancies and lead to a causally supported revelation. MOTHER-7's possible film/experiment motive is narrative potential, not an opening premise or implemented plot.
+
+Set the primary development objective as the complete feedback loop: authoritative simulation event -> retained causal context -> local LLM interpretation -> player decision -> validated action -> changed simulation -> updated narrative. The simulation owns physical truth; MOTHER-7 mediates evidence and recommendations; Scut's choices materially alter later events.
+
+Repository inspection confirmed the following current extension points and boundaries:
+
+- `FDirectOrScutSimulation` is the authoritative deterministic 30 Hz model. `UDirectOrScutSimSubsystem::FixedStep()` commits queued actions, advances state, evaluates scenario beats, and records consequences.
+- `ConfigureScenario()` and `EvaluateBeatDeck()` provide authored scenario setup and state-triggered beat extension points. `RecordCue()` and `LogEvent()` record cues/events; `CommandRecords` records resolved command/action outcomes.
+- `MakeContextSnapshot()` serializes current tick/scenario/objective/uplink/suspicion, crew and room state. `FShipAIRequest` carries that value snapshot, the input, and up to six chat messages. These structures do not yet provide linked multi-minute causal memory.
+- The typed provider boundary supports deterministic offline inference and optional loopback HTTP/Ollama. Provider output passes shared validation; only accepted `sim_action` proposals enter next-fixed-tick commit. Resolved action replay does not invoke inference.
+- The unified shader-driven terminal, map/dossier views, inline optics, inquiry probes, 451-sample read-only forensic ring, scenario beats, mediated claims, contradiction handling, and action records are existing capabilities. Causal narrative retention across those records is proposed work.
+
+Updated `AGENTS.md` to clarify project responsibilities, trust boundaries, current capabilities, and the next priority. Updated the active design and architecture sections of `DIRECT_OR_SCUT.md` to distinguish implementation from proposed context retention and to preserve historical milestone evidence. Added the explicitly future-facing storytelling acceptance plan to `SIMULATION_TEST.md`, leaving its existing historical procedures intact.
+
+Design decisions recorded: keep authoritative facts, MOTHER-7 claims, retained evidence, hidden scenario circumstances, and Scut's knowledge distinct; select bounded relevant causal context rather than concatenating an unbounded event log; preserve provenance and reset boundaries; do not treat inference prose as authority. The schema, retention horizon, and exact policy for model-visible hidden circumstances remain open implementation questions.
+
+Current limitations: the snapshot emphasizes current state, conversation continuity is limited to six messages, and event/cue/action arrays are per-run records rather than a linked or persisted narrative memory. `Config/DefaultGame.ini` configures the Ollama endpoint/model/timeout, but does not establish a live connection or prove service availability; no model weights are bundled. Voice mode validation exists; TTS, directional acoustics, and the full Act III voice transition remain planned.
+
+**Recommended next implementation milestone:** P2-02 causal context integration: define a bounded, provenance-preserving event/recommendation/decision/discovery/outcome/evidence model that includes observable consequential inaction; select relevant context into immutable inference requests; and add focused tests for continuity, player agency, divergence, reset, replay, and unavailable-inference fallback.
+
+This pass changed documentation only. Source inspection established the architecture described here, but this pass did not implement causal storytelling, run tests, or verify those new acceptance criteria at runtime. Previous implementation and verification evidence remains in the entries below.
+
+---
+
 # P2-02b context evidence viewport and conversational MOTHER-7 - 2026-11-14
 
 Replaced the permanent right-pane table wall with a map-first context evidence deck. Idle shows the station schematic and compact carrier header; room references are now clickable markers on the schematic. Intentional camera/widget requests and focused replies select one subject dossier with ECG/mediated ocular millimeters, or one compartment environment/pooled optical view. Inquiry probes select their contextual evidence or staging guidance. Escape and local clear dismiss evidence without enqueueing a command, including after resolution. Generic replies/callouts preserve existing evidence focus. Developer verbs remain explicit grammar/debug capabilities but are excluded from primary guide hints; the idle guide stays quiet. Existing inline history and the hard two-MID resource pool remain intact; the right optical image shares a pooled brush rather than owning another material or texture.

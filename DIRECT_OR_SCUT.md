@@ -1,6 +1,86 @@
-# Architectural Pivot & Phase II Specification
+# DIRECT OR SCUT — Active Design & Architecture
 
-**2026-11-14 — Active design contract: Unified Shader-Driven Terminal & Unreliable AI Mediation.** The canonical agent rules are in [AGENTS.md](AGENTS.md). This specification supersedes earlier architecture and future-work instructions below, including requirements to preserve the permanent camera wall or forbid feed shaders. Slice 1-14 records the completed multi-tile workstation baseline through Slice 14; those entries and their verification evidence remain historical. P2-00, P2-01, P2-01a, P2-01b and P2-01c implementation and fresh verification are recorded below; P2-02a adds guided typing, active probes and read-only forensic history; P2-02b implements the transport-independent hybrid director contract and optional loopback HTTP adapter; P2-03 acoustics/voice delivery and P2-04 tuning remain planned.
+**Active direction — 2026-11-14.** The project is a simulation-grounded, LLM-assisted systems mystery presented through one shader-driven phosphor terminal. [AGENTS.md](AGENTS.md) is the concise agent contract; this document holds the design, architecture, status, and historical evidence. Slice 1-14 remains the record of the retired multi-tile workstation baseline. P2-00, P2-01, P2-01a-c, and P2-02a-b have implementation and verification records below. The next implementation focus is causal narrative context; it is proposed work, not a delivered capability.
+
+## Current premise and storytelling objective
+
+The player is Director Ridley Scut, a senior remote operations director responsible for industrial carrier THETA-9, interacting exclusively through MOTHER-7's terminal. Scut can direct consequential operations but relies on MOTHER-7 for observations, communications, recommendations, and mediated access to controls. The intended opening is a plausible oversight shift: monitor personnel, investigate anomalies, manage competing demands, and authorize interventions.
+
+The simulation determines physical events and consequences. MOTHER-7 interprets, selects, and may misrepresent what Scut sees. Decisions based on those interpretations alter the simulation, creating new consequences and evidence. Discrepancies may reveal that MOTHER-7 has been arranging circumstances to pursue a different objective. A film, experiment, or other narrative-making motive is a possible deeper revelation, not an established opening premise or an implemented plot. Any revelation should be discoverable and causally supported by the events and choices that precede it.
+
+**Central principle:** The simulation establishes what happens. MOTHER-7 constructs an interpretation of what happens. Scut acts on that interpretation and changes what happens next.
+
+The primary technical objective is to demonstrate this complete loop:
+
+**Simulation event -> causal narrative context -> local LLM interpretation -> player decision -> validated action -> changed simulation -> updated narrative.**
+
+Player decisions must materially influence outcomes. Decisions include accepting, refusing, or challenging a recommendation, making a discovery, or consequential inaction. These can affect subsequent narrative behavior even when no simulation action is committed. The LLM provides contextual expression, interpretation, suggestions, and conversational flexibility; it does not author authoritative state or physical consequences.
+
+## Architecture status: implemented and proposed
+
+| Concern | Existing implementation | Proposed extension / boundary |
+| --- | --- | --- |
+| Authoritative simulation | `FDirectOrScutSimulation` advances deterministic physical crew, compartment, door, and pressure state at 30 Hz. `UDirectOrScutSimSubsystem::FixedStep()` commits queued actions, advances the model, evaluates beats, and coordinates consequences. | Preserve model truth. Inference, rendering, voice timing, and playback never advance or rewrite it. |
+| Scenario and operational orchestration | `UDirectOrScutSimSubsystem` also owns operational/environmental systems such as oxygen and power overlays, cameras, crises, spoofing, staging, and secret agendas. `ConfigureScenario()` defines options and state-triggered beats; `EvaluateBeatDeck()` tests those gates. `RecordCue()` and `LogEvent()` create timestamped records. | Author hidden circumstances and revelations in scenario orchestration. Distinguish deterministic model state from subsystem-owned operational state while keeping both authoritative where applicable. |
+| Current context and records | `MakeContextSnapshot()` serializes current tick, scenario, objective, uplink, suspicion, crew, and room state. `FShipAIRequest` captures that value snapshot plus current input and up to six chat messages. `CommandRecords`, `CinematicCues`, and `Events` retain run-time records and reset with the experiment. | Add bounded causal events for significant recommendations, operator acceptance/refusal/challenge, discoveries, validated outcomes, consequences, evidence, and observable consequential inaction, not only committed simulation actions. Link each to its source, tick, and relevant knowledge perspective. Refusal may change later narrative behavior without mutation. This linked context is not implemented or persisted today. |
+| MOTHER-7 and local inference | `ServiceDirector()` dispatches requests and delivers results outside `FixedStep`. `IShipAIIntentProvider` receives value-only requests; the offline deterministic provider and optional loopback HTTP/Ollama provider return the typed directive envelope. `ValidateDirectorDirective()` is the shared acceptance boundary. `Config/DefaultGame.ini` configures the Ollama endpoint/model/timeout in this checkout, but does not establish a live connection or prove service availability. | MOTHER-7 may receive selected facts and an authored private narrative objective to intentionally influence Scut. Keep this MOTHER-7 knowledge/agenda separate from complete authoritative scenario truth and Scut's player-visible knowledge. The objective and generated prose never grant simulation authority. |
+| Terminal and player commands | `SDirectOrScutWorkstationWidget` provides the unified CRT, terminal stream, map/dossier views, inline optics, inquiry probes, and read-only forensic inspection. | Keep camera feeds as requested optical sources rather than a permanent wall. Player input must remain available during presentation transitions. |
+| Validation and replay | A shared validator checks directive identity, age, bounds, lifecycle, and action eligibility. Accepted `sim_action` directives commit through the bounded next-fixed-tick path with commit-time revalidation. Resolved action records carry commit ticks; replay does not invoke inference. Mediated location claims can be challenged only against independent evidence. | Preserve provenance across context selection and replay. Deterministic fallback must remain safe when local inference is absent, unavailable, late, malformed, or rejected. |
+
+Existing proactive observations assembled by `ServiceDirector()` from agenda/security events and vital thresholds are deterministic and bypass the LLM provider. They are not LLM-grounded narrative responses. The proposed narrative response path should explicitly select causal context and distinguish private MOTHER-7 objectives from player-visible evidence.
+
+### Causal context and evidence model (proposed)
+
+Treat these as three distinct knowledge perspectives, linked rather than collapsed into one prompt:
+
+- **Authoritative scenario truth:** model state and hidden scenario facts, including physical consequences and operational state owned by the subsystem. This is the canonical world record.
+- **MOTHER-7's knowledge and concealed agenda:** only the operational context selected for the director plus any authored private narrative objective. The objective may guide recommendations intended to influence Scut, but is not automatically disclosed and does not change scenario facts or grant the model physical authority.
+- **Scut's player-visible knowledge:** claims and observations actually delivered through the terminal, inspected evidence, discoveries, and the player's own decisions. Do not equate this with the full authoritative record or MOTHER-7's private objective.
+
+Retain significant causal events beyond simulation mutations: recommendations and claims, operator acceptance/refusal/challenge, discoveries, and inaction when its consequences are observable and narratively relevant. A refusal is an event even when it queues no `sim_action`; a subsequent narrative response may change because of that refusal without pretending the simulation changed. Avoid recording every absence of input as a consequential event.
+
+The next layer should make significant causal relationships queryable across several minutes, not merely concatenate the full event log. Context selection must be bounded, relevant to the current request, provenance-preserving, reset-safe, and explicit about stale or missing evidence. The appropriate record schema, retention horizon, and separation of hidden authoring data from model-visible context remain implementation decisions.
+
+## Proposed self-contained Windows inference distribution
+
+**Status: proposed, not implemented or verified.** The game-jam target is a self-contained Windows distribution of approximately **2.0 GB installed**, containing the game, inference runtime, and model. Keep the simulation-grounded storytelling loop and playable deterministic fallback as the product priority; packaging the LLM must not become a prerequisite for starting or playing the game.
+
+### Candidate architecture
+
+Package the Unreal game with a pinned Windows `llama-server.exe` build from [`llama.cpp`](https://github.com/ggml-org/llama.cpp) and the preferred [`Qwen2.5-1.5B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) model at Q4_K_M quantization. Stage the GGUF and runtime dependencies as filesystem files beside the packaged game rather than assuming a third-party process can load a model from inside an Unreal `.pak`. The server exposes the OpenAI-compatible chat-completions API already used by `FLocalHttpShipAIIntentProvider`; typed directive parsing and validation remain the authority boundary.
+
+The host must bind to loopback only. A game-instance-scoped host owner is the proposed lifecycle owner: start one child server for the application, wait for a bounded readiness check, then configure the existing provider to its localhost endpoint. World-level simulation subsystems attach to that endpoint and cancel their own requests on teardown; they must not launch duplicate servers during map changes. Avoid collisions with a user's Ollama or another process, and stop only the child process the game itself started. On application exit, request graceful shutdown, wait for a bounded interval, then terminate the owned child if necessary. If runtime startup, readiness, or inference fails, report it and continue with the deterministic provider without blocking fixed-step simulation. Current `DefaultGame.ini` configures an Ollama endpoint but does not establish a connection; the packaged launch/ownership path does not exist yet.
+
+### Approximate installed-size budget
+
+| Component | Planning allocation |
+| --- | ---: |
+| Qwen2.5-1.5B-Instruct Q4_K_M GGUF | About 1.12 GB (1,117,320,736 bytes in the current upstream file listing) |
+| `llama.cpp` executable and required runtime dependencies | Target 0.10-0.15 GB |
+| Packaged game, content, notices, and remaining headroom | About 0.73-0.78 GB |
+| **Total installed target** | **Approximately 2.0 GB** |
+
+Only the model size is based on the current upstream listing; the other figures are budget targets, not measurements. Pin the exact model revision and hash before distribution. Measure the installed directory and compressed download separately; compression does not change the installed-size target. The Unreal package may exceed its allocation, so feasibility remains unverified.
+
+### Notices and redistribution
+
+The upstream [Qwen GGUF model license](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/main/LICENSE) is Apache-2.0; the current [`llama.cpp` license](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) is MIT (checked 2026-11-14). Bundle the exact model license and attribution/model-card notices, the runtime's copyright and license text, and applicable notices for Unreal and all shipped third-party DLLs. Preserve any required notices and source-offer/modified-component obligations for the exact pinned artifacts and build configuration. Re-check the licenses and redistribution terms at release time; a conversion, backend, or dependency may carry additional terms. This is a packaging checklist, not legal clearance.
+
+### Remaining technical uncertainties
+
+- Whether the OpenAI-compatible request/tool schema used by the existing provider works reliably with the selected model and the pinned `llama.cpp` server; strict validation and deterministic fallback must remain in place.
+- The minimum supported Windows version and CPU instruction set, CPU-only versus optional GPU backend, packaged DLL set, model load time, first-response and steady-state latency, and peak memory including context/KV cache.
+- A safe localhost port-selection/readiness strategy that avoids attaching to an unrelated local server, plus behavior when the port is occupied or the owned process exits.
+- Whether the staged Unreal game/content can fit the remaining size allocation, and the difference between archive/download size and installed footprint.
+- How to stage model/runtime files outside `.pak`, handle paths with spaces and install permissions, and ensure child-process cleanup on normal exit, crash, or forced termination.
+
+## Current creative possibilities and limits
+
+The industrial oversight shift, accumulating operational discrepancies, and player-driven consequences define the intended experience. A revelation that MOTHER-7 is composing a film, experiment, or other narrative from real events is speculative until a scenario is authored and tested. Existing scenario beats, covert manipulation systems, contradictory mediated crew-location claims, forensic evidence, and endings provide extension points; they do not establish that the new revelation already exists.
+
+## Document map
+
+The implementation entries below preserve detailed technical contracts and verification records. The Phase II system specification and file responsibility matrix describe the terminal/director architecture and proposed extensions. `SIMULATION_TEST.md` retains its existing historical procedures and adds separately labeled future acceptance plans for causal storytelling and the proposed Windows inference package.
 
 
 ## P2-02b conversational evidence refinement - 2026-11-14
@@ -190,9 +270,9 @@ One CRT terminal owns the viewport. P2-01b divides it into a full-height scrolli
 
 ### Hybrid 30 Hz Kernel + Small-LLM Tool Schema
 
-`FDirectOrScutSimulation` in `DirectOrScutSimulation` and `UDirectOrScutSimSubsystem` own ground-truth physics, rooms, crew, doors, scenario consequences and rolling 15s optic history. Preserve 30 Hz fixed stepping, retained backlog and bounded command queues. A small-LLM director proposes presentation and actions asynchronously through `AI-LINK>`; a deterministic provider remains available when the model is unavailable, late, malformed or unsupported. Model latency and render frames cannot drive simulation time.
+`FDirectOrScutSimulation` owns the pure deterministic physical, crew, compartment, door, and pressure model. `UDirectOrScutSimSubsystem` owns additional operational/environmental state and orchestration, including oxygen/power overlays, surveillance, spoofing, crisis and agenda systems, validation, bounded queues, value-only request snapshots, and the 451-sample forensic history. The model steps at 30 Hz with retained backlog. Provider dispatch, response delivery, presentation, and model latency run outside `FixedStep`.
 
-The following is the planned tool contract, not a claim of existing APIs. Envelopes carry a directive kind, request identity and observation tick; validate types, bounds, room/subject identifiers, lifecycle and action eligibility before dispatch. Reject unknown tools and malformed arguments without mutation. Prevent duplicate action commits; record accepted/rejected directives and their fixed-tick outcomes for replay.
+The typed tool contract below is implemented in P2-02b. Providers emit directives carrying request identity and observation tick; the shared validator checks types, bounds, identifiers, lifecycle and action eligibility. Invalid or stale proposals are rejected without simulation mutation. Only accepted `sim_action` directives enter the next-fixed-tick path; commit-time eligibility is checked again. Resolved records contain accepted/rejected outcomes and fixed commit ticks. Replay consumes resolved actions without invoking inference. This establishes a safe director boundary, not the proposed multi-minute causal context described above.
 
 | Directive | Structured arguments and ownership |
 | --- | --- |
@@ -203,15 +283,15 @@ The following is the planned tool contract, not a claim of existing APIs. Envelo
 
 ### 15s Buffer Scrub
 
-Maintain a bounded rolling 15 simulated seconds of timestamped optic history with matching authoritative room/crew evidence. At 30 Hz this spans 450 fixed ticks; optical sampling/storage cadence is an implementation decision, not a requirement for 450 full-resolution images per camera. Synchronize captured frames with recorded tick metadata. Scrub is read-only forensic playback: clamp requests to available history, expose missing/warming/unavailable coverage, and never relabel stale footage as live. Clear history at experiment reset so evidence cannot leak between runs. The existing incident reel is sparse historical keyframes, not a substitute for the rolling optic buffer.
+The implemented 451-entry forensic ring stores value-only optic/state samples across the current tick and up to 15 prior simulated seconds. It supports read-only schematic/optic-state playback with explicit coverage checks; it is not a recording of full-resolution video frames. Scrub cannot advance, restore, or mutate the simulation, and reset clears the ring. The incident reel is sparse keyframes and is a separate presentation feature. Future causal context may refer to a sample by tick/provenance, but must not represent it as recorded raster footage.
 
 ### Subtle Shader Deception Tells
 
-Use restrained scanline drift, wipe discontinuities, phosphor persistence or distortion as learnable carrier tells when MOTHER-7 curates deceptive evidence. These are presentation cues rather than blanket glitch overlays or simulation inputs. Preserve internal provenance of live, buffered and mediated material so automation can verify contradictions without relying on subjective visual judgments. Tune tell visibility and audio counterparts in Phase II; do not claim current shader assets or tells have been integrated.
+The project-owned terminal material and its wipe, scanline, distortion, and presentation-tell parameters are implemented. Use restrained, learnable presentation cues when MOTHER-7 curates deceptive evidence; they must never act as simulation inputs or substitute for evidence. Preserve provenance so automation can verify contradictions without subjective visual judgments. The scenario-specific tuning and acoustic counterparts remain planned work; asset presence alone does not establish a complete or readable deception mechanic.
 
 ### TextOnly -> VoiceOnly Act III Progression
 
-Plan `FVoicePresentationState` with modes `TextOnly` -> `HybridTextAndVoice` -> `VoiceOnly`. Begin with teletype-led communication, introduce synchronized voice/text blending, then stage an Act III fourth-wall transition: MOTHER-7 ceases teletype output and communicates solely via voice. Preserve operator input and necessary system/status feedback; this silence applies to MOTHER-7's utterances. Directional room acoustics and deception carrier tells support the transition. Voice playback/blending never advances the kernel or changes action timing; reset returns to `TextOnly`. This state and transition are design requirements, not declarations added to source in this pass.
+`FVoicePresentationState` and validation for `TextOnly`, `HybridTextAndVoice`, and `VoiceOnly` are implemented, including Act III gating and reset. Actual voice synthesis/playback, directional room acoustics, and the fourth-wall transition in which MOTHER-7 stops teletype output remain planned. Preserve operator input and necessary system/status feedback during that transition. Voice playback/blending must never advance the kernel or change action timing.
 
 ## Phase II Roadmap
 
@@ -224,7 +304,7 @@ All upcoming work uses these names. Do not continue Slice numbering or create nu
 | Phase II - Stage 01a (`P2-01a`) - **Complete** | Paneled CRT Terminal Layout, Persistent Overhead Station Schematic, & Compact Telemetry Deck. |
 | Phase II - Stage 01b (`P2-01b`) - **Complete** | Full-Height Scrolling Left Teletype Stream & Bounded Reference-Backed Inline Media. |
 | Phase II - Stage 01c (`P2-01c`) - **Complete** | Seamless Phosphor Glass Surface, Blinking Block Prompt, & Comparative Inline Telemetry Affordances. Verify transparent prompt/flat controls, bounded paired optics, ECG/ocular vectors and header-click simulation-hash purity. |
-| Phase II — Stage 02 (`P2-02`) | Hybrid Small-LLM Tool-Calling Director, `[1]`-`[5]` TUI Inquiry Probes, 15s Forensic Buffer Scrub, & Contradiction/Override Loop. Verify schema rejection, fallback, one action commit, bounded history/reset and replay parity. |
+| Phase II — Stage 02 (`P2-02`) | Director, `[1]`-`[5]` probes, forensic scrub, and contradiction/override loop are implemented in P2-02a/b. Next refinement: causal narrative context linking events, recommendations, acceptance/refusal/challenge, discoveries, outcomes, evidence, and consequential inaction across exchanges. The context layer is proposed and unverified. |
 | Phase II — Stage 03 (`P2-03`) | Directional Room Acoustics, Deception Carrier Tells, & `TextOnly` -> `VoiceOnly` Act III Transition. Verify voice state gates/reset, MOTHER-7 teletype cessation, acoustic behavior and presentation-independent fixed stepping. |
 | Phase II — Stage 04 (`P2-04`) | *PROJECT: GLASS HOUSE* Scenario Tuning, Endings, & Full Automation Verification. Tune contradictions and consequences; exercise endings, lifecycle, integrated terminal/director/voice flows and deterministic replay. |
 
@@ -368,16 +448,17 @@ The following complete folder coverage inventory makes the audit reproducible wi
 
 ## Canonical File Responsibility Matrix
 
-These are existing domain owners and planned extensions, not implementation claims. All runtime owners below use their canonical `.h`/`.cpp` pairs under `Source/EMJ2026/`.
+These are existing domain owners and proposed extensions, not a claim that every Phase II feature is complete. All runtime owners below use their canonical `.h`/`.cpp` pairs under `Source/EMJ2026/`.
 
 | Canonical owner | Phase II responsibility |
 | --- | --- |
-| `DirectOrScutSimulation` | Pure deterministic 30 Hz physical/crew/room model; no LLM, rendering or audio dependencies. |
-| `DirectOrScutSimSubsystem` | Fixed-step orchestration, validation/queue commits, authoritative history metadata, bounded optic-history coordination, contradiction/override consequences, scenario/ending gates and voice-state authority. |
-| `SDirectOrScutWorkstationWidget` | Full-viewport teletype, inline optics/widgets, material-instance bindings, wipe composition, inquiry probes, forensic scrub UI and voice/text presentation. |
-| `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal` (planned owned asset) | Single `MD_UI` base material for optic sampling, aperture, scanlines, wipe and bounded distortion; no Loom dependencies. |
-| `SScutCameraTile` | Reuse/adapt camera-feed presentation for inline optical blocks; no permanent grid requirement. |
-| `OfflineShipAIIntentProvider` | Deterministic fallback/intent behavior and shared validated directive boundary; keep any model-provider integration in canonical domain files, not milestone units. |
+| `DirectOrScutSimulation` | Existing pure deterministic 30 Hz physical/crew/room model; no LLM, rendering or audio dependencies. |
+| `DirectOrScutSimSubsystem` | Existing fixed-step orchestration, validation/queue commits, event/cue/action records, forensic samples, contradiction/override consequences, scenario/ending gates, and voice-state authority. Proposed extension point for bounded causal context. |
+| `FSimContextSnapshot`, `FShipAIRequest`, `CommandRecords`, `CinematicCues`, `Events` | Existing value snapshot and per-run records. Proposed causal-context work should relate and select them without treating current arrays or the six-turn transcript as long-term narrative memory. |
+| `SDirectOrScutWorkstationWidget` | Existing full-viewport teletype, inline optics/widgets, material-instance bindings, wipe composition, inquiry probes, forensic scrub UI, and text/presentation controls. |
+| `/Game/DirectOrScut/Materials/M_DirectOrScut_Terminal` | Existing project-owned `MD_UI` material for terminal/optic presentation; verify parameter changes against source and asset, and keep `Content/Loom/` absent. |
+| `SScutCameraTile` | Existing camera-feed presentation component reused for inline optical blocks; no permanent grid requirement. |
+| `OfflineShipAIIntentProvider` | Existing deterministic provider plus optional local HTTP provider, both behind the typed request/envelope and shared validator; keep provider work outside fixed stepping. |
 | `ScutTacticalInput`, `DirectOrScutPlayerController` | Terminal input/focus and inquiry/scrub/override dispatch; no direct simulation mutation. |
 | `DirectOrScutAudioComponent` | Voice playback/blending, directional room acoustics and audible carrier tells; explicit playback lifecycle cleanup. |
 | `RoomSetBase`, existing room subclass pairs, `DirectOrScutSetAnchor` | Physical sets, optical sources, room acoustics anchors and existing deterministic staging bindings. |
