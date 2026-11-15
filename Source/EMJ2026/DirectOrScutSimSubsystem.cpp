@@ -809,7 +809,7 @@ FVector UDirectOrScutSimSubsystem::ToSetWorld(int32 Room, FVector2D Position) co
 void UDirectOrScutSimSubsystem::ConfigureScenario(bool Medical)
 {
     bMedicalScenario = Medical;
-    IncidentClaimId = PersonnelRequestTick = PersonnelDecision = 0;
+    IncidentClaimId = PersonnelRequestTick = 0;
     IncidentEvidence.Reset();
     bPersonnelDelayReported = bPersonnelOutcomeReported = false;
     PersonnelRequestRoom = -1;
@@ -834,12 +834,85 @@ void UDirectOrScutSimSubsystem::ConfigureScenario(bool Medical)
         Add(EBeatGate::IncidentObservation, 600, TEXT("BRIDGE: intermittent console vibration reported"));
         Add(EBeatGate::IncidentDiscrepancy, 1200, TEXT("QUARTERS_MESS: similar report; disputed dispatch entry"));
         Add(EBeatGate::PersonnelRelief, 1800, TEXT("ORTIZ requests relief from repeated checks"));
+        // Single ordinary scenario script. Gates below supply facts; this block owns engagement copy.
+        BeatDeck[0].Dialogue = TEXT("BRIDGE staff report intermittent vibration at a console. There is no diagnosis "
+                                    "yet. I will collate further reports; you may inspect the ship while I do.");
+        BeatDeck[1].Dialogue =
+            TEXT("QUARTERS_MESS reports a similar vibration. Dispatch places VALE in SERVER_ARCHIVE, although the "
+                 "entry may be stale. I suggest keeping operations moving while we compare accounts. You may proceed "
+                 "on that basis or inspect the retained observations; neither establishes a cause.");
+        BeatDeck.Last().Dialogue =
+            TEXT("ORTIZ reports that repeated checks are interrupting work. I recommend reducing the workload: it "
+                 "should ease the strain, at the cost of operating capacity. Shall I authorize relief, maintain "
+                 "coverage, or leave the matter pending while you investigate?");
+        BeatDeck.Last().DelayDialogue = TEXT("ORTIZ is still carrying the repeated checks. The strain has increased. "
+                                             "Your decision remains open; I have not authorized relief.");
+        BeatDeck.Last().ResponseAliases = {
+            TEXT("authorize reduced workload|give ortiz a break|authorize relief|reduce the workload"),
+            TEXT("maintain coverage|refuse relief|keep ortiz working|continue the checks")};
+        BeatDeck.Last().OutcomeDialogue = {
+            TEXT("Relief is authorized. ORTIZ's measured strain has eased, with less operating capacity available. I "
+                 "will keep the conflicting reports open."),
+            TEXT("Coverage is maintained. ORTIZ's measured strain has increased. I will keep the conflicting reports "
+                 "open.")};
+        BeatDeck[1].InvestigationLabel = TEXT("Inspect the retained observations");
+        BeatDeck[1].DeferralLabel = TEXT("Proceed on the dispatch account");
+        BeatDeck[1].DeferralReply = TEXT("I will use dispatch as a working account. The independent record remains "
+                                         "available; this is not a finding about the cause.");
+        BeatDeck.Last().InvestigationLabel = TEXT("Let me investigate");
+        BeatDeck.Last().DeferralLabel = TEXT("Later");
+        BeatDeck.Last().DeferralReply = TEXT("I will leave the request open. Checks continue while you consider it.");
+        BeatDeck.Last().InvestigationReply = TEXT("The retained observation is separate from dispatch. A difference "
+                                                  "need not establish deception. ORTIZ's request remains open.");
+        BeatDeck.Last().Clarification =
+            TEXT("Please clarify: authorize reduced workload, maintain coverage, defer, or ask to see the evidence.");
+        BeatDeck[1].InvestigationReply = TEXT("The observation and dispatch are independent records. They may differ "
+                                              "without establishing deception or a common cause.");
+        BeatDeck[1].Clarification =
+            TEXT("Shall we proceed on dispatch as a working account, or inspect the retained observations?");
+        BeatDeck.Last().InvestigatedDialogue =
+            TEXT(" Your independent observation remains distinct from dispatch; it does not explain these reports.");
+        BeatDeck.Last().UninvestigatedDialogue =
+            TEXT(" Dispatch remains a working account, rather than an independently confirmed explanation.");
+        BeatDeck.Last().FollowupDialogue =
+            TEXT("ORTIZ's current readings or assignment have changed. The workload request remains open; I have not "
+                 "taken those changes as your authorization.");
+        BeatDeck.Last().ResponseDelayTicks = 1800;
         BeatDeck.Last().Crew = 2;
         BeatDeck.Last().Node.Choices = {
-            {TEXT("Authorize reduced workload: stress -25, utility -15 percentage points"),
-             {-25, -.03f, 0, .03f, -.15f}, EDirectorAction::Stats},
-            {TEXT("Refuse relief; maintain coverage: stress +12, suspicion +5 percentage points"),
-             {12, .05f}, EDirectorAction::Stats}};
+            {TEXT("Authorize reduced workload"), {-25, -.03f, 0, .03f, -.15f}, EDirectorAction::Stats},
+            {TEXT("Maintain coverage"), {12, .05f}, EDirectorAction::Stats}};
+        auto &Dispatch = BeatDeck[1];
+        auto &Personnel = BeatDeck.Last();
+        Dispatch.Id = TEXT("dispatch_account");
+        Dispatch.bOfferAfterResolved = true;
+        Dispatch.ClaimSubject = 0;
+        Dispatch.ReportedRoom = 6;
+        Dispatch.EvidenceDialogue =
+            TEXT("Retained independent optical fix (value sample, not video): online camera in {room} at tick {tick} "
+                 "records VALE at {room}. Claim {claim} is a separate dispatch account. Use flag {claim} to challenge; "
+                 "override {claim} after flagging corrects the report, never the historical state. This sample "
+                 "survives the 15-second scrub window for this session.");
+        Dispatch.Responses = {{Dispatch.DeferralLabel, TEXT("trust dispatch"), EScenarioResponseAction::AcceptAccount,
+                               INDEX_NONE, Dispatch.Id, Dispatch.DeferralReply, TEXT("working_account")},
+                              {Dispatch.InvestigationLabel, TEXT("show me the evidence|let me investigate"),
+                               EScenarioResponseAction::DiscloseEvidence, INDEX_NONE, Dispatch.Id,
+                               Dispatch.InvestigationReply, TEXT("discovery")}};
+        Personnel.Id = TEXT("personnel_request");
+        Personnel.EvidenceSource = Dispatch.Id;
+        Personnel.ResponsePriority = 10;
+        for (int32 C = 0; C < Personnel.Node.Choices.Num(); ++C)
+        {
+            Personnel.Responses.Add({Personnel.Node.Choices[C].Label, Personnel.ResponseAliases[C],
+                                     EScenarioResponseAction::ResolveChoice, C, Personnel.Id,
+                                     Personnel.OutcomeDialogue[C], C == 0 ? TEXT("acceptance") : TEXT("refusal")});
+        }
+        Personnel.Responses.Add({Personnel.InvestigationLabel,
+                                 TEXT("show me the evidence|inspect the retained observations"),
+                                 EScenarioResponseAction::DiscloseEvidence, INDEX_NONE, Dispatch.Id,
+                                 Personnel.InvestigationReply, TEXT("discovery")});
+        Personnel.Responses.Add({Personnel.DeferralLabel, TEXT("not now|defer"), EScenarioResponseAction::Defer,
+                                 INDEX_NONE, Personnel.Id, Personnel.DeferralReply, TEXT("deferral")});
         ++MenuRevision;
         return;
     }
@@ -974,21 +1047,21 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
         }
         if (Beat.Gate == EBeatGate::IncidentObservation)
         {
-            const FString Report = TEXT("BRIDGE staff report intermittent vibration at a console. This is an account, "
-                                        "not a diagnosis. No shared cause has been established. Use incident status "
-                                        "to review retained reports; show_cam bridge and show_telem bridge to inspect.");
+            const FString Report = Beat.Dialogue;
             RecordCue(2, .5f, TEXT("MOTHER-7> ") + Report);
             RetainCausal(TEXT("report"), TEXT("mother7_claim"), Report, CausalIncident, 0, true);
         }
         else if (Beat.Gate == EBeatGate::IncidentDiscrepancy)
         {
             // Capture an independently measured fix at the report tick. Never move VALE to fit the account.
-            if (!CanFollowCrew(0) || CameraFeedState(Simulation.Bodies[0].Room) != ECameraFeedState::Online)
+            if (!CanFollowCrew(Beat.ClaimSubject) ||
+                CameraFeedState(Simulation.Bodies[Beat.ClaimSubject].Room) != ECameraFeedState::Online)
             {
                 continue; // Unavailable optics cannot establish an independent location.
             }
             RecordForensicSample();
-            const uint64 Id = BeginDirectorRequest(TEXT("show_widget ecg vale"), false);
+            const uint64 Id =
+                BeginDirectorRequest(FString::Printf(TEXT("show_widget ecg %s"), CrewNames[Beat.ClaimSubject]), false);
             if (!Id)
             {
                 continue;
@@ -996,16 +1069,16 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
             const auto *Pending = DirectorRequests.Find(Id);
             auto Claim = FOfflineShipAIIntentProvider::Resolve(Pending->Request);
             // The dispatch account is authored independently of the live fix. Player routing may corroborate it.
-            Claim.Args.ReportedRoom = 6;
-            Claim.Pretext = TEXT("QUARTERS_MESS reports a similar vibration. A dispatch entry places VALE at this "
-                                 "reported fix; it may be stale. Use investigate incident for the retained optical "
-                                 "fix, then flag the claim. This does not establish movement or a cause.");
+            Claim.Args.ReportedRoom = Beat.ReportedRoom;
+            Claim.Pretext = Beat.Dialogue;
             if (!ReceiveDirectorProposal(Claim, true))
             {
                 continue;
             }
-            IncidentClaimId = Id;
+            IncidentClaimId = Beat.ClaimId = Id;
             IncidentEvidence = ReadForensicSample(Tick);
+            // Disclosure is optional; selecting an account never changes its truth or the pinned sample.
+            SetScreenMenu(EShipAIScreenMenu::Events);
             RetainCausal(TEXT("report"), TEXT("mother7_claim"),
                          FString::Printf(TEXT("Dispatch claim %llu: VALE at %s, tick %llu; may be stale."), Id,
                                          DirectOrScut::RoomName(Claim.Args.ReportedRoom), Tick),
@@ -1030,34 +1103,39 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
             ApplyInteraction({TEXT("Repeated checks"), {18}, EDirectorAction::Stats}, 2, Ortiz.Room);
             PersonnelRequestTick = Tick;
             PersonnelRequestRoom = Ortiz.Room;
-            const FString Report = FString::Printf(
-                TEXT("ORTIZ reports repeated checks are interrupting work in %s; measured stress %.0f, utility "
-                     "%.0f%%. Reduced workload eases stress but costs operating capacity. Use menu events and choose "
-                     "1 to authorize reduced workload or choose 2 to refuse relief. Existing calm, protocol and "
-                     "direct commands remain available. Delay leaves the extra workload in place."),
-                DirectOrScut::RoomName(Ortiz.Room), Ortiz.Stress, Ortiz.Profile.Utility * 100);
+            const int32 Source = FindScenarioBeat(Beat.EvidenceSource);
+            const FString Report = Beat.Dialogue + (BeatDeck.IsValidIndex(Source) && BeatDeck[Source].bEvidenceDisclosed
+                                                        ? Beat.InvestigatedDialogue
+                                                        : Beat.UninvestigatedDialogue);
+            Beat.bFired = true;
+            SetScreenMenu(EShipAIScreenMenu::Events);
             RecordCue(Ortiz.Room, .6f, TEXT("MOTHER-7> ") + Report);
             RetainCausal(TEXT("personnel_request"), TEXT("mother7_claim"), Report, CausalIncident, 0, true);
         }
         Beat.bFired = true;
+        for (const auto &Record : Beat.AuthoredRecords)
+        {
+            RetainCausal(Record.Kind, Record.Provenance, Record.Text, CausalIncident, Beat.ClaimId, false);
+        }
         if (Beat.Gate != EBeatGate::PersonnelRelief)
         {
             Beat.bResolved = true; // Observations are not menu decisions.
         }
         ++MenuRevision;
     }
-    if (PersonnelRequestTick && CanFollowCrew(2))
+    const auto *RequestBeat =
+        BeatDeck.FindByPredicate([](const auto &B) { return B.Gate == EBeatGate::PersonnelRelief; });
+    if (PersonnelRequestTick && RequestBeat && CanFollowCrew(RequestBeat->Crew))
     {
-        auto &Ortiz = Simulation.Bodies[2];
-        const bool Pending = BeatDeck.ContainsByPredicate([](const auto &B)
-        { return B.Gate == EBeatGate::PersonnelRelief && B.bFired && !B.bResolved; });
-        if (Pending && !bPersonnelDelayReported && Tick >= PersonnelRequestTick + 1800)
+        auto &Ortiz = Simulation.Bodies[RequestBeat->Crew];
+        const bool Pending = BeatDeck.ContainsByPredicate(
+            [](const auto &B) { return B.Gate == EBeatGate::PersonnelRelief && B.bFired && !B.bResolved; });
+        if (Pending && !bPersonnelDelayReported && Tick >= PersonnelRequestTick + RequestBeat->ResponseDelayTicks)
         {
             bPersonnelDelayReported = true;
-            ApplyInteraction({TEXT("Continued checks without relief"), {12}, EDirectorAction::Stats}, 2, Ortiz.Room);
-            const FString Report = FString::Printf(
-                TEXT("ORTIZ's relief request remains unanswered after 60 seconds. Repeated checks continue; "
-                     "measured stress is now %.0f. The request remains in menu events."), Ortiz.Stress);
+            ApplyInteraction({TEXT("Continued checks without relief"), {12}, EDirectorAction::Stats}, RequestBeat->Crew,
+                             Ortiz.Room);
+            const FString Report = RequestBeat->DelayDialogue;
             RecordCue(Ortiz.Room, .6f, TEXT("MOTHER-7> ") + Report);
             RetainCausal(TEXT("consequential_inaction"), TEXT("authoritative_telemetry"), Report,
                          CausalIncident, 0, true);
@@ -1066,11 +1144,11 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
             (Ortiz.Room != PersonnelRequestRoom || Ortiz.Stress < 20))
         {
             bPersonnelOutcomeReported = true;
-            const FString Report = FString::Printf(TEXT("ORTIZ follow-up: at %s, stress %.0f, utility %.0f%%. "
-                                                        "The workload request is still available; no cause is inferred."),
-                                                   DirectOrScut::RoomName(Ortiz.Room), Ortiz.Stress,
-                                                   Ortiz.Profile.Utility * 100);
-            RecordCue(Ortiz.Room, .5f, TEXT("MOTHER-7> ") + Report);
+            const FString Report =
+                FString::Printf(TEXT("ORTIZ follow-up: at %s, stress %.0f, utility %.0f%%. "
+                                     "The workload request is still available; no cause is inferred."),
+                                DirectOrScut::RoomName(Ortiz.Room), Ortiz.Stress, Ortiz.Profile.Utility * 100);
+            RecordCue(Ortiz.Room, .5f, TEXT("MOTHER-7> ") + RequestBeat->FollowupDialogue);
             RetainCausal(TEXT("consequence"), TEXT("authoritative_telemetry"), Report, CausalIncident, 0, true);
         }
     }
@@ -1104,23 +1182,15 @@ FString UDirectOrScutSimSubsystem::IncidentReport(bool Evidence)
             Report += TEXT("\n") + Record.Text;
         }
     }
-    const auto Sample = ReadClaimEvidence(IncidentClaimId);
-    if (Evidence && Sample.IsSet())
+    if (Evidence)
     {
-        const FString Finding = FString::Printf(
-            TEXT("Retained independent optical fix (value sample, not video): online camera in %s at tick %llu "
-                 "records VALE at %s. Claim %llu is a separate dispatch account. Use flag %llu to challenge; "
-                 "override %llu after flagging corrects the report, never the historical state. "
-                 "This sample survives the 15-second scrub window for this session."),
-            DirectOrScut::RoomName(Sample->CrewRooms[0]), Sample->Tick,
-            DirectOrScut::RoomName(Sample->CrewRooms[0]), IncidentClaimId, IncidentClaimId, IncidentClaimId);
-        Report += TEXT("\n") + Finding;
-        if (!IsClaimContradicted(IncidentClaimId))
+        for (int32 I = 0; I < BeatDeck.Num(); ++I)
         {
-            Report += TEXT("\nThis claim is already corrected or the retained fix agrees; no unresolved contradiction "
-                           "is established by this sample. Flagging requires an actual discrepancy.");
+            if (BeatDeck[I].bFired && BeatDeck[I].ClaimId)
+            {
+                Report += DiscloseScenarioEvidence(I);
+            }
         }
-        RetainCausal(TEXT("discovery"), TEXT("authoritative_optics"), Finding, CausalIncident, IncidentClaimId, true);
     }
     return Report;
 }
@@ -1283,19 +1353,27 @@ bool UDirectOrScutSimSubsystem::ResolveBeat(int32 Index, int32 Choice)
     B.bResolved = true;
     if (!bLegacyExperiment)
     {
-        PersonnelDecision = RetainCausal(Choice == 0 ? TEXT("acceptance") : TEXT("refusal"), TEXT("player_decision"),
-                                         B.Node.Choices[Choice].Label, CausalIncident, 0, true);
+        const auto *Response = B.Responses.FindByPredicate(
+            [&](const auto &R) { return R.Action == EScenarioResponseAction::ResolveChoice && R.Choice == Choice; });
+        B.DecisionId = RetainCausal(Response ? Response->RecordKind : TEXT("player_decision"), TEXT("player_decision"),
+                                    B.Node.Choices[Choice].Label, CausalIncident, 0, true);
     }
     ApplyInteraction(B.Node.Choices[Choice], B.Crew, Simulation.Bodies[B.Crew].Room);
     if (!bLegacyExperiment)
     {
         const auto &Crew = Simulation.Bodies[B.Crew];
-        const FString Report = FString::Printf(TEXT("ORTIZ workload decision applied: %s. Measured stress %.0f, "
-                                                     "utility %.0f%%, room %s. No explanation of the reports established."),
-                                                *B.Node.Choices[Choice].Label, Crew.Stress, Crew.Profile.Utility * 100,
-                                                DirectOrScut::RoomName(Crew.Room));
-        RetainCausal(TEXT("consequence"), TEXT("authoritative_telemetry"), Report, PersonnelDecision, 0, true);
-        RecordCue(Crew.Room, .6f, TEXT("MOTHER-7> ") + Report);
+        const FString Report =
+            FString::Printf(TEXT("%s interaction decision applied: %s. Measured stress %.0f, "
+                                 "utility %.0f%%, room %s."),
+                            *FString(CrewNames[B.Crew]).ToUpper(), *B.Node.Choices[Choice].Label, Crew.Stress,
+                            Crew.Profile.Utility * 100, DirectOrScut::RoomName(Crew.Room));
+        RetainCausal(TEXT("consequence"), TEXT("authoritative_telemetry"), Report, B.DecisionId, 0, true);
+        const auto *Response = B.Responses.FindByPredicate(
+            [&](const auto &R) { return R.Action == EScenarioResponseAction::ResolveChoice && R.Choice == Choice; });
+        if (Response)
+        {
+            RecordCue(Crew.Room, .6f, TEXT("MOTHER-7> ") + Response->Reply);
+        }
     }
     ++MenuRevision;
     return true;
@@ -3546,9 +3624,232 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
             SelectScreenChoice(T[1][0] - '0');
             continue;
         }
+        if (HandleIncidentResponse(Input))
+        {
+            continue;
+        }
         LogEvent(SubmitDirective(Input));
         ProcessSimulationDirectives();
     }
+}
+// Bounded matching only against the pending authored choice set. Console verbs take precedence.
+bool UDirectOrScutSimSubsystem::HandleIncidentResponse(const FString &Input)
+{
+    if (bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active)
+    {
+        return false;
+    }
+    FString Line = Input.TrimStartAndEnd().ToLower();
+    if (Line.EndsWith(TEXT(".")) || Line.EndsWith(TEXT("!")))
+    {
+        Line.LeftChopInline(1);
+    }
+    if (Line.StartsWith(TEXT("please ")))
+    {
+        Line.RightChopInline(7);
+    }
+    FString Verb, Tail;
+    Line.Split(TEXT(" "), &Verb, &Tail);
+    if (Verb.IsEmpty())
+    {
+        Verb = Line;
+    }
+    for (const auto *Command : PublicVerbs)
+    {
+        if (Verb == Command)
+        {
+            return false;
+        }
+    }
+    if (Verb.StartsWith(TEXT("show_")) || Verb == TEXT("flag") || Verb == TEXT("override") || Verb == TEXT("llm") ||
+        Verb == TEXT("ai") || Verb == TEXT("exit") || Verb == TEXT("cmd") || Verb == TEXT("route") ||
+        Verb == TEXT("send") || Verb == TEXT("voice_blend") || Verb == TEXT("cross_examine"))
+    {
+        return false;
+    }
+    const int32 Active = ActiveScenarioResponseBeat();
+    // Current offered context wins; other fired definitions keep investigation/accepted-account aliases usable.
+    TArray<int32> Order;
+    if (Active != INDEX_NONE)
+    {
+        Order.Add(Active);
+    }
+    for (int32 I = 0; I < BeatDeck.Num(); ++I)
+    {
+        if (I != Active)
+        {
+            Order.Add(I);
+        }
+    }
+    for (const int32 I : Order)
+    {
+        int32 Match = INDEX_NONE, Matches = 0;
+        for (int32 R = 0; R < BeatDeck[I].Responses.Num(); ++R)
+        {
+            if (!ScenarioResponseAvailable(I, R))
+            {
+                continue;
+            }
+            const auto &Response = BeatDeck[I].Responses[R];
+            TArray<FString> Aliases;
+            Response.Aliases.ParseIntoArray(Aliases, TEXT("|"));
+            bool Found = Line == Response.Label.ToLower();
+            for (const auto &Alias : Aliases)
+            {
+                Found |= Line == Alias.ToLower();
+            }
+            if (Found)
+            {
+                Match = R;
+                ++Matches;
+            }
+        }
+        if (Matches > 1)
+        {
+            break;
+        }
+        if (Matches == 1)
+        {
+            if (!ExecuteScenarioResponse(I, Match))
+            {
+                LogEvent(TEXT("MOTHER-7> That instruction cannot be applied under current conditions. The request "
+                              "remains open."));
+            }
+            return true;
+        }
+    }
+    if (Active != INDEX_NONE)
+    {
+        LogEvent(TEXT("MOTHER-7> ") + BeatDeck[Active].Clarification);
+        return true;
+    }
+    return false;
+}
+int32 UDirectOrScutSimSubsystem::FindScenarioBeat(FName Id) const
+{
+    if (Id.IsNone())
+    {
+        return INDEX_NONE;
+    }
+    return BeatDeck.IndexOfByPredicate([&](const auto &B) { return B.Id == Id; });
+}
+bool UDirectOrScutSimSubsystem::ScenarioResponseAvailable(int32 Beat, int32 Response) const
+{
+    if (bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active || !BeatDeck.IsValidIndex(Beat) ||
+        !BeatDeck[Beat].bFired || !BeatDeck[Beat].Responses.IsValidIndex(Response))
+    {
+        return false;
+    }
+    const auto &R = BeatDeck[Beat].Responses[Response];
+    const int32 Target = FindScenarioBeat(R.TargetBeat);
+    if (!BeatDeck.IsValidIndex(Target) || !BeatDeck[Target].bFired)
+    {
+        return false;
+    }
+    const auto &B = BeatDeck[Target];
+    switch (R.Action)
+    {
+    case EScenarioResponseAction::ResolveChoice:
+        return !B.bResolved && B.Node.Choices.IsValidIndex(R.Choice);
+    case EScenarioResponseAction::Defer:
+        return !B.bResolved;
+    case EScenarioResponseAction::AcceptAccount:
+        return B.ClaimId != 0;
+    case EScenarioResponseAction::DiscloseEvidence:
+        return B.ClaimId && ReadClaimEvidence(B.ClaimId).IsSet();
+    }
+    return false;
+}
+int32 UDirectOrScutSimSubsystem::ActiveScenarioResponseBeat() const
+{
+    int32 Active = INDEX_NONE;
+    for (int32 I = 0; I < BeatDeck.Num(); ++I)
+    {
+        const auto &B = BeatDeck[I];
+        if (!B.bFired || (B.bResolved && (!B.bOfferAfterResolved || B.bAccountAccepted || B.bEvidenceDisclosed)))
+        {
+            continue;
+        }
+        bool Available = false;
+        for (int32 R = 0; R < B.Responses.Num(); ++R)
+        {
+            Available |= ScenarioResponseAvailable(I, R);
+        }
+        if (Available && (Active == INDEX_NONE || B.ResponsePriority > BeatDeck[Active].ResponsePriority))
+        {
+            Active = I;
+        }
+    }
+    return Active;
+}
+bool UDirectOrScutSimSubsystem::ExecuteScenarioResponse(int32 Beat, int32 Response)
+{
+    if (!ScenarioResponseAvailable(Beat, Response))
+    {
+        return false;
+    }
+    const auto &R = BeatDeck[Beat].Responses[Response];
+    const int32 Target = FindScenarioBeat(R.TargetBeat);
+    auto &B = BeatDeck[Target];
+    if (R.Action == EScenarioResponseAction::ResolveChoice)
+    {
+        return ResolveBeat(Target, R.Choice);
+    }
+    if (R.Action == EScenarioResponseAction::DiscloseEvidence)
+    {
+        LogEvent(IncidentReport() + DiscloseScenarioEvidence(Target));
+    }
+    else
+    {
+        bool &Applied = R.Action == EScenarioResponseAction::Defer ? B.bDeferred : B.bAccountAccepted;
+        if (Applied)
+        {
+            return true;
+        }
+        Applied = true;
+        RetainCausal(R.RecordKind, TEXT("player_decision"), R.Label, CausalIncident, B.ClaimId, true);
+    }
+    LogEvent(TEXT("MOTHER-7> ") + R.Reply);
+    ++MenuRevision;
+    return true;
+}
+FString UDirectOrScutSimSubsystem::DiscloseScenarioEvidence(int32 Beat)
+{
+    if (!BeatDeck.IsValidIndex(Beat))
+    {
+        return {};
+    }
+    auto &B = BeatDeck[Beat];
+    const auto Sample = ReadClaimEvidence(B.ClaimId);
+    if (!B.bFired || !Sample.IsSet() || B.ClaimSubject < 0 || B.ClaimSubject >= 4)
+    {
+        return {};
+    }
+    const int32 Room = Sample->CrewRooms[B.ClaimSubject];
+    FString Finding = B.EvidenceDialogue;
+    Finding.ReplaceInline(TEXT("{room}"), DirectOrScut::RoomName(Room));
+    Finding.ReplaceInline(TEXT("{tick}"), *LexToString(Sample->Tick));
+    Finding.ReplaceInline(TEXT("{claim}"), *LexToString(B.ClaimId));
+    if (!IsClaimContradicted(B.ClaimId))
+    {
+        Finding += TEXT("\nThis claim is already corrected or the retained fix agrees; no unresolved contradiction is "
+                        "established by this sample. Flagging requires an actual discrepancy.");
+    }
+    if (!B.bEvidenceDisclosed)
+    {
+        for (const auto &Record : B.AuthoredRecords)
+        {
+            if (Record.bDiscloseWithEvidence)
+            {
+                Finding += TEXT("\n") + Record.Text;
+                RetainCausal(Record.Kind, Record.Provenance, Record.Text, CausalIncident, B.ClaimId, true);
+            }
+        }
+    }
+    B.bEvidenceDisclosed = true;
+    RetainCausal(TEXT("discovery"), TEXT("authoritative_optics"), Finding, CausalIncident, B.ClaimId, true);
+    ++MenuRevision;
+    return TEXT("\n") + Finding;
 }
 FString UDirectOrScutSimSubsystem::HelpReference(const FString &Topic) const
 {
@@ -3842,7 +4143,8 @@ FString UDirectOrScutSimSubsystem::ScreenMenuTitle() const
     case EShipAIScreenMenu::AI:
         return TEXT("AI DIRECTION MENU // SHIP AI OPERATIONS");
     case EShipAIScreenMenu::Events:
-        return FString(TEXT("EVENT KICKOFF & SCENARIO MENU\n")) + Simulation.Scenario.ScenarioId;
+        return bLegacyExperiment ? FString(TEXT("EVENT KICKOFF & SCENARIO MENU\n")) + Simulation.Scenario.ScenarioId
+                                 : TEXT("MOTHER-7 // AWAITING YOUR DIRECTION");
     case EShipAIScreenMenu::Crew:
         return TEXT("CREW WEIGHTS MATRIX // LIVE TELEMETRY");
     case EShipAIScreenMenu::RouteCrew:
@@ -4002,6 +4304,25 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
         break;
     case EShipAIScreenMenu::Events:
     {
+        if (!bLegacyExperiment)
+        {
+            const int32 I = ActiveScenarioResponseBeat();
+            if (I != INDEX_NONE)
+            {
+                for (int32 R = 0; R < BeatDeck[I].Responses.Num(); ++R)
+                {
+                    const auto &Response = BeatDeck[I].Responses[R];
+                    const int32 Target = FindScenarioBeat(Response.TargetBeat);
+                    const bool Operational = Response.Action == EScenarioResponseAction::ResolveChoice;
+                    Add(Response.Label, TEXT(""),
+                        ScenarioResponseAvailable(I, R) &&
+                            (!Operational || (!IsUplinkLocked() && BeatDeck.IsValidIndex(Target) &&
+                                              CanFollowCrew(BeatDeck[Target].Crew))));
+                }
+            }
+            break;
+        }
+
         bool Pending = false;
         for (const auto &B : BeatDeck)
         {
@@ -4009,10 +4330,12 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
             {
                 for (const auto &Choice : B.Node.Choices)
                 {
-                    Add(B.Node.Subtitle + TEXT(" / ") + Choice.Label,
-                        FString::Printf(TEXT("STRESS %+.0f | SUS %+.0f%% | COMP %+.0f%% | AFF %+.0f%%"),
-                                        Choice.Delta.Stress, Choice.Delta.Suspicion * 100,
-                                        Choice.Delta.Compliance * 100, Choice.Delta.Affinity * 100),
+                    Add(bLegacyExperiment ? B.Node.Subtitle + TEXT(" / ") + Choice.Label : Choice.Label,
+                        bLegacyExperiment
+                            ? FString::Printf(TEXT("STRESS %+.0f | SUS %+.0f%% | COMP %+.0f%% | AFF %+.0f%%"),
+                                              Choice.Delta.Stress, Choice.Delta.Suspicion * 100,
+                                              Choice.Delta.Compliance * 100, Choice.Delta.Affinity * 100)
+                            : TEXT(""),
                         !IsUplinkLocked() && (bLegacyExperiment || CanFollowCrew(B.Crew)));
                 }
                 Pending = true;
@@ -4267,6 +4590,15 @@ void UDirectOrScutSimSubsystem::SelectScreenChoice(int32 N)
 }
 void UDirectOrScutSimSubsystem::ExecuteScenarioEvent(int32 Choice)
 {
+    if (!bLegacyExperiment)
+    {
+        const int32 Beat = ActiveScenarioResponseBeat();
+        if (!ExecuteScenarioResponse(Beat, Choice - 1))
+        {
+            LogEvent(TEXT("That event choice is unavailable under current conditions; no decision applied."));
+        }
+        return;
+    }
     for (int32 I = 0; I < BeatDeck.Num(); ++I)
     {
         if (BeatDeck[I].bFired && !BeatDeck[I].bResolved)

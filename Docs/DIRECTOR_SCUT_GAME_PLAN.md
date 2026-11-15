@@ -274,6 +274,14 @@ Scope:
 
 **Acceptance:** From an ordinary game start, the player can investigate, intervene, and conclude the incident through at least two materially different approaches without developer commands.
 
+#### A3 execution contract: script-driven engagement
+
+A3 extends the current A2 incident, not the proposed airlock mystery. One authored, inspectable ordinary scenario script in `ConfigureScenario()` extends the existing beat deck: fixed-tick gates, dialogue, bounded response aliases, validated choices, disclosure, and pending-matter continuity. The script defines scenario claims, motivations, relationships, conditional disclosures, dialogue, choices, and interactions; the simulation determines authoritative state and validates consequences. Response actions and their named targets belong to the authored beat definitions, not to menu positions or scenario-specific branches in generic handlers. Private authored records may support a later approved conflict of interest; this establishes no particular motive. The script coordinates engagement and does not own authoritative world state. Keep authored copy localized for later narrative polish; do not introduce another dialogue controller or general scripting language.
+
+MOTHER-7 leads ordinary interaction by presenting developments, a useful but potentially selective interpretation, visible responses, and observed outcomes. The central tension is accepting her convenient guidance versus independently investigating the comprehensive operational console. Both remain viable; neither implies a correct explanation. Ordinary participation must not require `menu events` or `choose N`. Exact console commands retain precedence over bounded contextual matching; ambiguous replies clarify without acting. Investigation, refusal, deferral, and consequential inaction remain available. Independent discoveries can inform later dialogue without establishing deception or a culprit. Pending choices remain accessible while the simulation continues, without repeated solicitation.
+
+A3 acceptance exercises the actual prompt and rendered responses through an ordinary offline PIE session, covering guided consequences, ambiguity, deferral, evidence-led continuation, and operational/legacy regressions. A4 judgments and endings remain a separate authorization and joint acceptance step. A3 introduces no new ending, mandatory inference, terminal framework, simulation clock, Chunk B polish, or narrative rewrite.
+
 ### Chunk B — Sound, character, and presentation
 
 Build atmosphere and narrative cohesion on existing infrastructure.

@@ -844,7 +844,8 @@ class FIncidentCompositionCheck : public IAutomationLatentCommand
         Test->TestEqual(TEXT("Override preserves historical fix"), S->ReadClaimEvidence(ClaimId)->CrewRooms[0], EvidenceRoom);
         S->QueueConsoleCommand(TEXT("menu events"));
         S->AdvanceSteps(1);
-        Test->TestEqual(TEXT("Existing event menu exposes two responses"), S->ScreenMenuChoices().Num(), 2);
+        Test->TestEqual(TEXT("Event menu exposes decisions plus investigation and deferral"),
+                        S->ScreenMenuChoices().Num(), 4);
         const double StressBefore = S->Simulation.Bodies[2].Stress;
         const float UtilityBefore = S->Simulation.Bodies[2].Profile.Utility;
         S->QueueConsoleCommand(TEXT("choose 1"));
@@ -852,9 +853,14 @@ class FIncidentCompositionCheck : public IAutomationLatentCommand
         Test->TestTrue(TEXT("Authorized relief lowers measured stress"), S->Simulation.Bodies[2].Stress < StressBefore - 20);
         Test->TestTrue(TEXT("Relief has capacity cost"), S->Simulation.Bodies[2].Profile.Utility < UtilityBefore - .1f);
         Test->TestTrue(TEXT("Personnel consequence retained with decision parent"),
-                       S->CausalContext.ContainsByPredicate([&](const auto &R)
-                       { return R.Kind == TEXT("consequence") && R.Parent == S->PersonnelDecision &&
-                                R.Provenance == TEXT("authoritative_telemetry"); }));
+                       S->CausalContext.ContainsByPredicate(
+                           [&](const auto &R)
+                           {
+                               return R.Kind == TEXT("consequence") &&
+                                      R.Parent ==
+                                          S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].DecisionId &&
+                                      R.Provenance == TEXT("authoritative_telemetry");
+                           }));
         auto NoLeaks = [&](const FString &Text)
         {
             Test->TestFalse(TEXT("Ordinary text conceals identity"), Text.Contains(TEXT("android")));
@@ -918,8 +924,47 @@ class FIncidentCompositionCheck : public IAutomationLatentCommand
         S->AdvanceSteps(3600);
         Test->TestTrue(TEXT("Consequential delay reported once"), S->bPersonnelDelayReported);
         Test->TestFalse(TEXT("Delay does not silently choose for player"), S->BeatDeck.Last().bResolved);
-        Test->TestTrue(TEXT("Consequential inaction retained"), S->CausalContext.ContainsByPredicate([](const auto &R)
-                       { return R.Kind == TEXT("consequential_inaction"); }));
+        Test->TestTrue(TEXT("Consequential inaction retained"),
+                       S->CausalContext.ContainsByPredicate([](const auto &R)
+                                                            { return R.Kind == TEXT("consequential_inaction"); }));
+        // Synthetic authored records are fixture data, not a new incident motive.
+        Fresh();
+        S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].AuthoredRecords = {
+            {TEXT("context"), TEXT("authored_private"), TEXT("FIXTURE_PRIVATE_CONTEXT"), false},
+            {TEXT("context"), TEXT("authored_record"), TEXT("FIXTURE_CONDITIONAL_DISCLOSURE"), true}};
+        S->AdvanceSteps(1800);
+        Test->TestFalse(TEXT("Uninvestigated authored records stay out of player context"),
+                        S->MakeContextSnapshot().CompactJson.Contains(TEXT("FIXTURE_")));
+        S->BeatDeck.Swap(0, 1);
+        const int32 Account = S->FindScenarioBeat(TEXT("dispatch_account"));
+        const int32 Personnel = S->FindScenarioBeat(TEXT("personnel_request"));
+        S->BeatDeck[Personnel].Responses.Swap(0, 3);
+        S->QueueConsoleCommand(TEXT("menu events"));
+        S->QueueConsoleCommand(TEXT("choose 1"));
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("Reordered first response explicitly defers rather than resolving a choice"),
+                       S->BeatDeck[Personnel].bDeferred && !S->BeatDeck[Personnel].bResolved);
+        S->QueueConsoleCommand(TEXT("choose 4"));
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("Reordered fourth response retains its authored operational action"),
+                       S->BeatDeck[Personnel].bResolved);
+        S->BeatDeck[Account].Responses[0].Aliases = TEXT("fixture provisional account");
+        S->QueueConsoleCommand(TEXT("fixture provisional account"));
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("Script-owned alias targets named beat after deck reordering"),
+                       S->BeatDeck[Account].bAccountAccepted);
+        const uint64 BeforeDisclosure = S->Simulation.StateHash();
+        const FString Disclosed = S->DiscloseScenarioEvidence(Account);
+        Test->TestTrue(TEXT("Authored conditional record disclosed with independent evidence"),
+                       Disclosed.Contains(TEXT("FIXTURE_CONDITIONAL_DISCLOSURE")));
+        Test->TestFalse(TEXT("Private authored context is never implicitly disclosed"),
+                        Disclosed.Contains(TEXT("FIXTURE_PRIVATE_CONTEXT")) ||
+                            S->MakeContextSnapshot().CompactJson.Contains(TEXT("FIXTURE_PRIVATE_CONTEXT")));
+        Test->TestEqual(TEXT("Conditional disclosure does not mutate authoritative physical state"),
+                        S->Simulation.StateHash(), BeforeDisclosure);
+        S->BeatDeck[Account].Responses[0].TargetBeat = TEXT("missing_fixture_target");
+        Test->TestFalse(TEXT("Missing authored relationship rejects execution"),
+                        S->ExecuteScenarioResponse(Account, 0));
         S->QueueConsoleCommand(TEXT("new_session"));
         S->AdvanceSteps(1);
         S->Tick(.001f);
@@ -1004,6 +1049,30 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
             Key(EKeys::Enter);
             Test->TestTrue(TEXT("Terminal Enter consumes command draft"), Prompt->GetText().IsEmpty());
         };
+        auto Click = [&](FName Tag)
+        {
+            auto Button = Find(Tag);
+            if (!Button.IsValid())
+            {
+                Test->AddError(TEXT("Script response button missing"));
+                return;
+            }
+            const auto &G = Button->GetCachedGeometry();
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            auto Win = App.FindWidgetWindow(Button.ToSharedRef());
+            if (!Win)
+            {
+                Test->AddError(TEXT("Response window missing"));
+                return;
+            }
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseButtonDownEvent(Win->GetNativeWindow(),
+                                            FPointerEvent(0, P, P, TSet<FKey>{EKeys::LeftMouseButton},
+                                                          EKeys::LeftMouseButton, 0, FModifierKeysState()));
+            App.ProcessMouseButtonUpEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
+        };
         auto CheckEmpty = [&]()
         {
             auto Pane = Find(TEXT("ScutMenuPane"));
@@ -1072,17 +1141,53 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
             Test->TestTrue(TEXT("Bare menu renders existing operations"), Find(TEXT("ScutMenuChoice1")).IsValid());
             Submit(TEXT("menu close"));
             S->AdvanceSteps(1);
-            S->AdvanceSteps(int32(1800 - S->Simulation.TickIndex));
-            Submit(TEXT("menu events"));
+            S->AdvanceSteps(int32(1200 - S->Simulation.TickIndex));
+            Stage = 30;
+            break;
+        case 30:
+            Test->TestTrue(TEXT("Dispatch proactively renders a provisional account response"),
+                           Find(TEXT("ScutMenuChoice1")).IsValid() &&
+                               TextIn(Find(TEXT("ScutMenuChoice1")).ToSharedRef())
+                                   .Contains(TEXT("Proceed on the dispatch account")));
+            Click(TEXT("ScutMenuChoice1"));
             S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Click retains provisional account without discovering evidence"),
+                           S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bAccountAccepted &&
+                               !S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bEvidenceDisclosed);
+            Submit(TEXT("investigate incident"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Console investigation remains available after accepting guidance"),
+                           S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bEvidenceDisclosed);
+            S->AdvanceSteps(int32(1800 - S->Simulation.TickIndex));
+            Test->TestTrue(TEXT("Discovery informs subsequent scripted request"),
+                           S->TerminalBuffer().Contains(TEXT("Your independent observation remains distinct")));
+            Stage = 4;
+            Test->TestTrue(TEXT("Script proactively mounts responses without a command"),
+                           S->ActiveMenu == EShipAIScreenMenu::Events);
             break;
         case 4:
+        {
+            // Accelerate only text reveal for visual verification; the model clock is unchanged.
+            const uint64 BeforeReveal = S->Simulation.TickIndex;
+            for (int32 Frame = 0; Frame < 400; ++Frame)
+            {
+                UI->Tick(UI->GetCachedGeometry(), Now, .1f);
+            }
+            Test->TestEqual(TEXT("Text reveal cannot advance authoritative time"), S->Simulation.TickIndex,
+                            BeforeReveal);
+            Test->TestTrue(TEXT("Authored request reaches the visible terminal stream"),
+                           UI->GetTerminalStreamEntries().ContainsByPredicate([](const auto &E)
+                           { return E.Text.Contains(TEXT("I recommend reducing the workload")) && E.Characters >= E.Text.Len(); }));
+            Test->TestFalse(TEXT("Ordinary mediated prose omits internal subject and tick wrappers"),
+                            UI->GetTerminalStreamEntries().ContainsByPredicate([](const auto &E)
+                            { return E.Text.Contains(TEXT("SUBJECT 0 REPORTED")); }));
             CheckChoices(S->BeatDeck.Last());
             Test->TestFalse(TEXT("Ordinary view remains unified"), UI->IsDebugEightCamGrid());
             S->AdvanceSteps(int32(3600 - S->Simulation.TickIndex));
             Test->TestTrue(TEXT("Consequential delay occurred"), S->bPersonnelDelayReported);
             Test->TestFalse(TEXT("Consequential delay leaves event pending"), S->BeatDeck.Last().bResolved);
             break;
+        }
         case 5:
         {
             CheckChoices(S->BeatDeck.Last());
@@ -1097,15 +1202,31 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
                 Test->TestTrue(TEXT("Pending event menu screenshot saved"), FFileHelper::SaveArrayToFile(
                     PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut/EventMenuPendingPIE.png"))));
             }
+            Test->TestTrue(TEXT("Investigation and deferral render beside authoritative responses"),
+                           Find(TEXT("ScutMenuChoice3")).IsValid() && Find(TEXT("ScutMenuChoice4")).IsValid());
+            Submit(TEXT("yes"));
+            S->AdvanceSteps(1);
+            Test->TestFalse(TEXT("Ambiguous assent does not choose"), S->BeatDeck.Last().bResolved);
+            Submit(TEXT("later"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Deferral retained without resolving"),
+                           S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bDeferred &&
+                               !S->BeatDeck.Last().bResolved);
+            Submit(TEXT("show me the evidence"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Contextual investigation discloses retained observation"),
+                           S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bEvidenceDisclosed);
+            Test->TestFalse(TEXT("Investigation does not decide workload"), S->BeatDeck.Last().bResolved);
             const double Stress = S->Simulation.Bodies[2].Stress;
             Utility = S->Simulation.Bodies[2].Profile.Utility;
-            Submit(TEXT("choose 1"));
-            Test->TestEqual(TEXT("Typed choice waits for fixed tick"), S->Simulation.Bodies[2].Profile.Utility, Utility);
+            Submit(TEXT("give ortiz a break"));
+            Test->TestEqual(TEXT("Typed choice waits for fixed tick"), S->Simulation.Bodies[2].Profile.Utility,
+                            Utility);
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Relief lowers stress after delay"), S->Simulation.Bodies[2].Stress < Stress - 20);
             Test->TestTrue(TEXT("Relief incurs utility cost"), S->Simulation.Bodies[2].Profile.Utility < Utility - .1f);
             Utility = S->Simulation.Bodies[2].Profile.Utility;
-            Decision = S->PersonnelDecision;
+            Decision = S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].DecisionId;
             Test->TestTrue(TEXT("Decision-linked authoritative consequence recorded"),
                            S->CausalContext.ContainsByPredicate([&](const auto &R)
                            { return R.Parent == Decision && R.Kind == TEXT("consequence") &&
@@ -1118,7 +1239,8 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
             S->AdvanceSteps(1);
             Test->TestEqual(TEXT("Repeated resolved choice cannot reduce utility twice"),
                             S->Simulation.Bodies[2].Profile.Utility, Utility);
-            Test->TestEqual(TEXT("Repeated resolved choice cannot create another decision"), S->PersonnelDecision, Decision);
+            Test->TestEqual(TEXT("Repeated resolved choice cannot create another decision"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].DecisionId, Decision);
             Submit(TEXT("new_session"));
             S->AdvanceSteps(1);
             S->Tick(.001f);
@@ -1133,19 +1255,25 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
             CheckChoices(S->BeatDeck.Last());
             const double Stress = S->Simulation.Bodies[2].Stress;
             const float Suspicion = S->Simulation.Bodies[2].Profile.Suspicion;
-            Submit(TEXT("choose 2"));
+            Click(TEXT("ScutMenuChoice2"));
+            Test->TestFalse(TEXT("Rendered response click waits for authoritative tick"), S->BeatDeck.Last().bResolved);
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Refusal applies authored stress consequence"), S->Simulation.Bodies[2].Stress > Stress + 10);
             Test->TestTrue(TEXT("Refusal applies authored suspicion consequence"),
                            S->Simulation.Bodies[2].Profile.Suspicion > Suspicion + .04f);
-            Decision = S->PersonnelDecision;
+            Decision = S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].DecisionId;
             break;
         }
         case 9:
-            CheckEmpty();
+            Test->TestTrue(TEXT("Unresolved dispatch returns after personnel decision"),
+                           Find(TEXT("ScutMenuChoice1")).IsValid() &&
+                           TextIn(Find(TEXT("ScutMenuChoice1")).ToSharedRef()).Contains(TEXT("Proceed on the dispatch account")));
             Submit(TEXT("choose 2"));
             S->AdvanceSteps(1);
-            Test->TestEqual(TEXT("Refusal cannot be applied repeatedly"), S->PersonnelDecision, Decision);
+            Test->TestTrue(TEXT("Deferred dispatch can still be investigated"),
+                           S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bEvidenceDisclosed);
+            Test->TestEqual(TEXT("Investigation cannot reapply the personnel decision"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].DecisionId, Decision);
             Submit(TEXT("reset_experiment"));
             S->AdvanceSteps(1);
             Submit(TEXT("start_experiment"));

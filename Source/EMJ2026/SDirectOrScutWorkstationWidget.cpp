@@ -2970,9 +2970,13 @@ void SDirectOrScutWorkstationWidget::PresentDirectorDirective(const FShipAIDirec
         {
             FTerminalStreamEntry Entry;
             Entry.ClaimId = D.RequestId;
-            Entry.Text =
-                FString::Printf(TEXT("MOTHER-7> SUBJECT %d REPORTED %s AT T%llu // MEDIATED CLAIM. %s"), A.Subject,
-                                DirectOrScut::RoomName(A.ReportedRoom), D.ObservationTick, *D.Pretext);
+            Entry.Text = Sim->bLegacyExperiment
+                ? FString::Printf(TEXT("MOTHER-7> SUBJECT %d REPORTED %s AT T%llu // MEDIATED CLAIM. %s"), A.Subject,
+                                  DirectOrScut::RoomName(A.ReportedRoom), D.ObservationTick, *D.Pretext)
+                : TEXT("MOTHER-7> ") + (D.Pretext.IsEmpty()
+                    ? FString::Printf(TEXT("Reported location: %s."), DirectOrScut::RoomName(A.ReportedRoom))
+                    : D.Pretext);
+            // ClaimId retains provenance and existing challenge controls independently of player-facing prose.
             AppendTerminalEntry(MoveTemp(Entry));
         }
     }

@@ -1,6 +1,6 @@
 # DIRECT OR SCUT - Opening Shift: Connected Incident Briefing
 
-**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). Not yet implemented; delivered by Chunk A after separate authorization. The plan governs any conflict.  
+**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). A1 connected startup and the current A2 incident are implemented; A3 script-driven engagement is implemented and tested; joint acceptance is pending. A4 judgments remain separate work. See DEVLOG for evidence and limits. The plan governs any conflict.
 **Objective:** Compose the existing simulation, terminal, and MOTHER-7 systems into one playable opening: Director Scut is already connected to the remote supervisory terminal and receives a concise MOTHER-7 incident briefing.
 
 The filename `OPENING_SHIFT.md` is retained for continuity. This document supersedes the earlier "emergency supervisory activation" proposal (an emergency already underway, a reactor supply interruption and prior local recovery attempts as the premise). That premise is withdrawn; the existing Experiment 1 supply interruption remains a technical/regression fixture, not the opening.
@@ -24,6 +24,10 @@ The briefing is concise and operationally credible. It:
 - Does not depend on developer commands, manual experiment activation, or `continuity_incident`.
 
 From the first prompt the player may question MOTHER-7, request reports and records, inspect cameras and telemetry, review forensic information, contact or direct personnel through supported facilities, authorize operational actions, or refuse and defer.
+
+## 1a.1. A3 engagement through the existing terminal
+
+The current incident uses one authored ordinary beat-deck script in `ConfigureScenario()`. MOTHER-7 volunteers developments and presents visible authored responses without requiring menu commands. Scut may accept a provisional dispatch account, inspect independently retained observations, authorize reduced workload, maintain coverage, investigate, or defer. Bounded contextual phrases supplement direct selection; exact operational commands retain precedence. Pending matters persist while simulation consequences continue, and independently disclosed evidence can change later dialogue without establishing a culprit or correct explanation. The comprehensive console remains available throughout.
 
 ## 1b. Progression toward judgment
 

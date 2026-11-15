@@ -105,10 +105,44 @@ enum class EBeatGate : uint8
     IncidentDiscrepancy,
     PersonnelRelief
 };
+enum class EScenarioResponseAction : uint8
+{
+    ResolveChoice,
+    AcceptAccount,
+    DiscloseEvidence,
+    Defer
+};
+struct FScenarioResponse
+{
+    FString Label, Aliases;
+    EScenarioResponseAction Action = EScenarioResponseAction::ResolveChoice;
+    int32 Choice = INDEX_NONE;
+    FName TargetBeat;
+    FString Reply, RecordKind;
+};
+struct FScenarioAuthoredRecord
+{
+    FString Kind, Provenance, Text;
+    bool bDiscloseWithEvidence = false;
+};
 struct FScenarioBeat
 {
+    FName Id, EvidenceSource;
+    TArray<FScenarioResponse> Responses;
+    TArray<FScenarioAuthoredRecord> AuthoredRecords;
+    int32 ResponsePriority = 0, ClaimSubject = -1, ReportedRoom = -1;
+    uint64 ClaimId = 0, DecisionId = 0;
+    bool bAccountAccepted = false, bEvidenceDisclosed = false, bDeferred = false;
+    bool bOfferAfterResolved = false;
+    FString EvidenceDialogue;
     EBeatGate Gate;
     FInteractionNode Node;
+    // Ordinary engagement script: authored expression and bounded aliases; never world authority.
+    FString Dialogue, DelayDialogue, InvestigationLabel, DeferralLabel;
+    FString InvestigationReply, DeferralReply, Clarification;
+    FString InvestigatedDialogue, UninvestigatedDialogue, FollowupDialogue;
+    uint64 ResponseDelayTicks = 0;
+    TArray<FString> ResponseAliases, OutcomeDialogue;
     uint64 EarliestTick = 0;
     bool bFired = false, bResolved = false;
     int32 Crew = -1;
@@ -609,10 +643,16 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     void EvaluateBeatDeck();
     void EvaluateOrdinaryIncident();
     FString IncidentReport(bool Evidence = false);
+    bool HandleIncidentResponse(const FString &Input);
+    int32 FindScenarioBeat(FName Id) const;
+    int32 ActiveScenarioResponseBeat() const;
+    bool ScenarioResponseAvailable(int32 Beat, int32 Response) const;
+    bool ExecuteScenarioResponse(int32 Beat, int32 Response);
+    FString DiscloseScenarioEvidence(int32 Beat);
     FString PublicCrewRole(int32 Crew) const;
     TOptional<FForensicOpticSample> ReadClaimEvidence(uint64 Claim) const;
     // One authored discrepancy: a value sample, not extended video or a second forensic ring.
-    uint64 IncidentClaimId = 0, PersonnelRequestTick = 0, PersonnelDecision = 0;
+    uint64 IncidentClaimId = 0, PersonnelRequestTick = 0;
     TOptional<FForensicOpticSample> IncidentEvidence;
     bool bPersonnelDelayReported = false, bPersonnelOutcomeReported = false;
     int32 PersonnelRequestRoom = -1;
