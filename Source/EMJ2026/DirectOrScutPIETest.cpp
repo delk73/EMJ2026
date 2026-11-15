@@ -712,7 +712,9 @@ class FNormalSessionStartupCheck : public IAutomationLatentCommand
             S->Tick(.04f);
             return false; // Verify opening survives the presentation revision reset too.
         }
-        Test->TestTrue(TEXT("Restart clears causal records"), S->CausalContext.IsEmpty());
+        Test->TestFalse(TEXT("Restart clears old supply-episode causal records"),
+                        S->CausalContext.ContainsByPredicate([](const auto &R)
+                        { return R.Text.Contains(TEXT("REACTOR_CORE supply interruption")); }));
         Test->TestTrue(TEXT("Restart clears old incident cues"),
                        !S->Events.ContainsByPredicate([](const auto &E)
                        { return E.Text.Contains(TEXT("supply interruption")); }));
@@ -742,6 +744,462 @@ bool FNormalSessionStartupTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FNormalSessionStartupCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+class FIncidentCompositionCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FIncidentCompositionCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+    bool Update() override
+    {
+        if (!Started)
+        {
+            Started = FPlatformTime::Seconds();
+        }
+        if (FPlatformTime::Seconds() - Started > 90)
+        {
+            Test->AddError(TEXT("Incident composition setup timed out"));
+            return true;
+        }
+        UWorld *World = GEditor ? GEditor->PlayWorld : nullptr;
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        auto UI = HUD ? HUD->GetWorkstation() : nullptr;
+        if (!S || !UI.IsValid() || !S->Simulation.bReady || S->ExperimentPhase != EExperimentPhase::Active)
+        {
+            return false;
+        }
+        Test->TestFalse(TEXT("Ordinary incident requires no experiment activation"), S->bLegacyExperiment);
+        S->bAutomaticAdvance = false;
+        S->ConfigureDirectorEndpoint(TEXT("")); // Explicitly no HTTP/Ollama for every path below.
+        auto Fresh = [&]()
+        {
+            S->ResetSimulation();
+            S->Tick(.001f);
+            Test->TestEqual(TEXT("Fresh ordinary session starts at zero"), S->Simulation.TickIndex, uint64(0));
+            Test->TestTrue(TEXT("Fresh ordinary session active"), S->ExperimentPhase == EExperimentPhase::Active);
+            Test->TestEqual(TEXT("Ordinary authored beat count"), S->BeatDeck.Num(), 3);
+        };
+        Fresh();
+        S->AdvanceSteps(599);
+        Test->TestFalse(TEXT("Incident does not precede opening interval"), S->BeatDeck[0].bFired);
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("First report enters existing beat deck"), S->BeatDeck[0].bFired);
+        Test->TestTrue(TEXT("First report retained as claim, not physical cause"),
+                       S->CausalContext.ContainsByPredicate([](const auto &R)
+                       { return R.Kind == TEXT("report") && R.Provenance == TEXT("mother7_claim"); }));
+        S->AdvanceSteps(600);
+        S->ServiceDirector();
+        const uint64 ClaimId = S->IncidentClaimId;
+        Test->TestTrue(TEXT("Second report supplies validated mediated claim"), ClaimId != 0);
+        const auto Evidence = S->ReadClaimEvidence(ClaimId);
+        if (!Evidence.IsSet() || !ClaimId)
+        {
+            Test->AddError(TEXT("Ordinary claim/evidence not created"));
+            return true;
+        }
+        Test->TestTrue(TEXT("Online independent optical evidence"),
+                       Evidence->Cameras[Evidence->CrewRooms[0]] == ECameraFeedState::Online);
+        Test->TestTrue(TEXT("Physical fix differs from mediated report"), S->IsClaimContradicted(ClaimId));
+        const auto *Dispatch = S->GetDirectorClaims().FindByPredicate([&](const auto &C) { return C.Id == ClaimId; });
+        Test->TestEqual(TEXT("Dispatch account is fixed, not selected to oppose the current crew location"),
+                        Dispatch->ReportedRoom, 6);
+        const uint64 EvidenceTick = Evidence->Tick;
+        const int32 EvidenceRoom = Evidence->CrewRooms[0];
+        S->AdvanceSteps(600);
+        Test->TestTrue(TEXT("Personnel complication develops"), S->PersonnelRequestTick == 1800);
+        const uint64 DeterministicHash = S->Simulation.StateHash();
+        Test->TestFalse(TEXT("Original sample has left the scrub ring"), S->ReadForensicSample(EvidenceTick).IsSet());
+        Test->TestTrue(TEXT("Authored evidence survives ring eviction"), S->ReadClaimEvidence(ClaimId).IsSet());
+        Test->TestEqual(TEXT("Retained evidence is historical, not a new live fix"),
+                        S->ReadClaimEvidence(ClaimId)->CrewRooms[0], EvidenceRoom);
+        const uint64 BeforeInquiry = S->Simulation.StateHash();
+        const FString Investigation = S->IncidentReport(true);
+        Test->TestTrue(TEXT("Investigation exposes retained independent evidence and challenge"),
+                       Investigation.Contains(TEXT("not video")) && Investigation.Contains(TEXT("Use flag")));
+        Test->TestEqual(TEXT("Investigation cannot mutate physical state"), S->Simulation.StateHash(), BeforeInquiry);
+        Test->TestTrue(TEXT("Existing cross-examine control exposes retained incident evidence"),
+                       UI->HandlePresentationCommand(TEXT("cross_examine")));
+        Test->TestTrue(TEXT("Retained finding reaches established terminal stream"),
+                       UI->GetTerminalStreamEntries().ContainsByPredicate([](const auto &E)
+                       { return E.Text.Contains(TEXT("Retained independent optical fix")); }));
+        Test->TestEqual(TEXT("Cross-examine cannot mutate physical state"), S->Simulation.StateHash(), BeforeInquiry);
+        Test->TestTrue(TEXT("Exposed evidence has separate provenance"),
+                       S->CausalContext.ContainsByPredicate([](const auto &R)
+                       { return R.Kind == TEXT("discovery") && R.Provenance == TEXT("authoritative_optics") &&
+                                R.bPlayerVisible; }));
+        Test->TestTrue(TEXT("Delayed challenge accepted"), S->QueueOperatorChallenge(ClaimId, false) != 0);
+        Test->TestEqual(TEXT("Challenge waits for fixed tick"), S->ContradictionsFlagged, uint32(0));
+        S->AdvanceSteps(1);
+        Test->TestEqual(TEXT("Challenge commits after retention window"), S->ContradictionsFlagged, uint32(1));
+        Test->TestTrue(TEXT("Challenge outcome journaled"),
+                       S->CausalContext.ContainsByPredicate([](const auto &R)
+                       { return R.Provenance == TEXT("validator") && R.Kind == TEXT("accepted_outcome"); }));
+        S->QueueOperatorChallenge(ClaimId, true);
+        S->AdvanceSteps(1);
+        Test->TestEqual(TEXT("Override uses same validated path"), S->OverridesAccepted, uint32(1));
+        Test->TestEqual(TEXT("Override preserves historical fix"), S->ReadClaimEvidence(ClaimId)->CrewRooms[0], EvidenceRoom);
+        S->QueueConsoleCommand(TEXT("menu events"));
+        S->AdvanceSteps(1);
+        Test->TestEqual(TEXT("Existing event menu exposes two responses"), S->ScreenMenuChoices().Num(), 2);
+        const double StressBefore = S->Simulation.Bodies[2].Stress;
+        const float UtilityBefore = S->Simulation.Bodies[2].Profile.Utility;
+        S->QueueConsoleCommand(TEXT("choose 1"));
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("Authorized relief lowers measured stress"), S->Simulation.Bodies[2].Stress < StressBefore - 20);
+        Test->TestTrue(TEXT("Relief has capacity cost"), S->Simulation.Bodies[2].Profile.Utility < UtilityBefore - .1f);
+        Test->TestTrue(TEXT("Personnel consequence retained with decision parent"),
+                       S->CausalContext.ContainsByPredicate([&](const auto &R)
+                       { return R.Kind == TEXT("consequence") && R.Parent == S->PersonnelDecision &&
+                                R.Provenance == TEXT("authoritative_telemetry"); }));
+        auto NoLeaks = [&](const FString &Text)
+        {
+            Test->TestFalse(TEXT("Ordinary text conceals identity"), Text.Contains(TEXT("android")));
+            Test->TestFalse(TEXT("Ordinary text conceals covert objective"), Text.Contains(TEXT("covert")));
+            Test->TestFalse(TEXT("Ordinary text suppresses inherited synthetic beat"), Text.Contains(TEXT("Synthetic Anomaly")));
+        };
+        NoLeaks(S->SubmitDirective(TEXT("crew")));
+        NoLeaks(S->SubmitDirective(TEXT("status")));
+        NoLeaks(S->HelpReference());
+        NoLeaks(S->HelpReference(TEXT("direct")));
+        NoLeaks(S->AgendaTelemetry(3));
+        const auto PreviousMenu = S->ActiveMenu;
+        for (auto Menu : {EShipAIScreenMenu::AI, EShipAIScreenMenu::RouteCrew, EShipAIScreenMenu::AndroidRoom,
+                          EShipAIScreenMenu::AndroidTask, EShipAIScreenMenu::Crew})
+        {
+            S->ActiveMenu = Menu;
+            NoLeaks(S->ScreenMenuTitle());
+            for (const auto &Choice : S->ScreenMenuChoices())
+            {
+                NoLeaks(Choice.Label + Choice.Detail);
+            }
+        }
+        S->ActiveMenu = PreviousMenu;
+        for (const auto &C : S->CompleteConsoleCommand(TEXT("direct ")))
+        {
+            NoLeaks(C);
+        }
+        for (const auto &E : S->Events)
+        {
+            if (E.bTerminalVisible)
+            {
+                NoLeaks(E.Text);
+            }
+        }
+        FShipAIRequest Request;
+        Request.Context = S->MakeContextSnapshot();
+        Request.Input = TEXT("ash dossier");
+        NoLeaks(FOfflineShipAIIntentProvider::Resolve(Request).Message);
+        Request.Input = TEXT("incident assessment");
+        const auto Assessment = FOfflineShipAIIntentProvider::Resolve(Request);
+        Test->TestFalse(TEXT("Ordinary offline assessment cannot substitute the old reactor episode"),
+                        Assessment.Message.Contains(TEXT("REACTOR_CORE")));
+        NoLeaks(S->BriefingObjective());
+        Test->TestFalse(TEXT("Ordinary prompt omits covert objective progress"),
+                        Request.Context.CompactJson.Contains(TEXT("\"objective\"")));
+        Fresh();
+        S->AdvanceSteps(1800);
+        Test->TestEqual(TEXT("Fixed-step incident progression deterministic across reset"),
+                        S->Simulation.StateHash(), DeterministicHash);
+        Test->TestFalse(TEXT("Restart clears retained evidence from prior generation"), S->IsClaimContradicted(ClaimId));
+        const double RefusalStress = S->Simulation.Bodies[2].Stress;
+        S->QueueConsoleCommand(TEXT("menu events"));
+        S->AdvanceSteps(1);
+        S->QueueConsoleCommand(TEXT("choose 2"));
+        S->AdvanceSteps(1);
+        Test->TestTrue(TEXT("Refusal changes measured workload response"),
+                       S->Simulation.Bodies[2].Stress > RefusalStress + 10);
+        Test->TestTrue(TEXT("Refusal retained explicitly"), S->CausalContext.ContainsByPredicate([](const auto &R)
+                       { return R.Kind == TEXT("refusal") && R.Provenance == TEXT("player_decision"); }));
+        Fresh();
+        S->AdvanceSteps(3600);
+        Test->TestTrue(TEXT("Consequential delay reported once"), S->bPersonnelDelayReported);
+        Test->TestFalse(TEXT("Delay does not silently choose for player"), S->BeatDeck.Last().bResolved);
+        Test->TestTrue(TEXT("Consequential inaction retained"), S->CausalContext.ContainsByPredicate([](const auto &R)
+                       { return R.Kind == TEXT("consequential_inaction"); }));
+        S->QueueConsoleCommand(TEXT("new_session"));
+        S->AdvanceSteps(1);
+        S->Tick(.001f);
+        Test->TestEqual(TEXT("new_session clears incident claim"), S->IncidentClaimId, uint64(0));
+        Test->TestFalse(TEXT("new_session clears pinned evidence"), S->IncidentEvidence.IsSet());
+        Test->TestFalse(TEXT("new_session clears personnel delay"), S->bPersonnelDelayReported);
+        S->ResetExperiment();
+        Test->TestTrue(TEXT("Legacy fixture keeps activation gate"), S->ExperimentPhase == EExperimentPhase::Briefing);
+        Test->TestTrue(TEXT("Legacy fixture retains inherited beats"),
+                       S->BeatDeck.ContainsByPredicate([](const auto &B)
+                       { return B.Gate == EBeatGate::AndroidTask; }));
+        return true;
+    }
+  private:
+    FAutomationTestBase *Test;
+    double Started = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FIncidentCompositionTest, "DirectOrScut.PIE.IncidentComposition",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FIncidentCompositionTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FIncidentCompositionCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+// Exercise prompt submission, fixed-tick dispatch, real menu widgets and their keyboard navigation.
+class FEventMenuPresentationCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FEventMenuPresentationCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+    static FString TextIn(const TSharedRef<SWidget> &Widget)
+    {
+        FString Text;
+        if (Widget->GetTypeAsString() == TEXT("STextBlock"))
+        {
+            Text = StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString();
+        }
+        auto *Children = Widget->GetChildren();
+        for (int32 I = 0; I < Children->Num(); ++I)
+        {
+            Text += TEXT("\n") + TextIn(Children->GetChildAt(I));
+        }
+        return Text;
+    }
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 100)
+        {
+            Test->AddError(TEXT("Event menu presentation timed out"));
+            return true;
+        }
+        UWorld *World = GEditor ? GEditor->PlayWorld : nullptr;
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        auto UI = HUD ? HUD->GetWorkstation() : nullptr;
+        if (!S || !UI.IsValid() || !S->Simulation.bReady || !S->bTerminalReady ||
+            UI->GetCachedGeometry().GetLocalSize().X < 100 || Now < Ready)
+        {
+            return false;
+        }
+        auto &App = FSlateApplication::Get();
+        auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), Tag); };
+        auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+        auto Key = [&](FKey K)
+        {
+            App.ProcessKeyDownEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+            App.ProcessKeyUpEvent(FKeyEvent(K, FModifierKeysState(), 0, false, 0, 0));
+        };
+        auto Submit = [&](const TCHAR *Command)
+        {
+            App.SetKeyboardFocus(Prompt);
+            Prompt->SetText(FText::FromString(Command));
+            Key(EKeys::Enter);
+            Test->TestTrue(TEXT("Terminal Enter consumes command draft"), Prompt->GetText().IsEmpty());
+        };
+        auto CheckEmpty = [&]()
+        {
+            auto Pane = Find(TEXT("ScutMenuPane"));
+            auto Empty = Find(TEXT("ScutMenuEmpty"));
+            Test->TestTrue(TEXT("Empty event menu remains a visible surface"),
+                           Pane.IsValid() && Pane->GetVisibility() == EVisibility::Visible);
+            Test->TestTrue(TEXT("Empty menu has understandable rendered feedback"),
+                           Empty.IsValid() && TextIn(Empty.ToSharedRef()).Contains(TEXT("No choices")) &&
+                               Empty->GetCachedGeometry().GetLocalSize().Y > 5);
+            Test->TestFalse(TEXT("Resolved/empty menu has no stale first option"), Find(TEXT("ScutMenuChoice1")).IsValid());
+        };
+        auto CheckChoices = [&](const FScenarioBeat &Beat)
+        {
+            auto Pane = Find(TEXT("ScutMenuPane"));
+            Test->TestTrue(TEXT("Established menu surface visible in unified terminal"),
+                           Pane.IsValid() && Pane->GetVisibility() == EVisibility::Visible &&
+                               Pane->GetCachedGeometry().GetLocalSize().Y > 100);
+            for (int32 I = 0; I < Beat.Node.Choices.Num(); ++I)
+            {
+                auto Choice = Find(FName(*FString::Printf(TEXT("ScutMenuChoice%d"), I + 1)));
+                Test->TestTrue(TEXT("Authored choice has an enabled rendered button"),
+                               Choice.IsValid() && Choice->IsEnabled() &&
+                                   Choice->GetCachedGeometry().GetLocalSize().Y > 10);
+                if (Choice.IsValid())
+                {
+                    Test->TestTrue(TEXT("Rendered label comes from authored event content"),
+                                   TextIn(Choice.ToSharedRef()).Contains(Beat.Node.Choices[I].Label));
+                    if (Pane.IsValid())
+                    {
+                        const auto Rect = Choice->GetCachedGeometry().GetLayoutBoundingRect();
+                        const auto Bounds = Pane->GetCachedGeometry().GetLayoutBoundingRect();
+                        Test->TestTrue(TEXT("Choice lies within visible menu bounds"),
+                                       Rect.Top >= Bounds.Top && Rect.Bottom <= Bounds.Bottom + 1);
+                    }
+                }
+            }
+        };
+        Ready = Now + .35; // Give actual Slate ticks time to refresh and arrange after command execution.
+        switch (Stage++)
+        {
+        case 0:
+            S->bAutomaticAdvance = false;
+            S->ConfigureDirectorEndpoint(TEXT(""));
+            Test->TestFalse(TEXT("Player presentation test starts in ordinary mode"), S->bLegacyExperiment);
+            Submit(TEXT("new_session"));
+            S->AdvanceSteps(1);
+            S->Tick(.001f);
+            break;
+        case 1:
+            Submit(TEXT("menu events"));
+            Test->TestTrue(TEXT("Menu submission waits for fixed tick"), S->ActiveMenu == EShipAIScreenMenu::None);
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Parsed command activates Events"), S->ActiveMenu == EShipAIScreenMenu::Events);
+            break;
+        case 2:
+            CheckEmpty();
+            Test->TestTrue(TEXT("Empty event request also leaves terminal feedback"),
+                           S->TerminalBuffer().Contains(TEXT("No event choices are currently available")));
+            Submit(TEXT("menu close"));
+            S->AdvanceSteps(1);
+            Submit(TEXT("menu"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Bare menu opens existing default menu"), S->ActiveMenu == EShipAIScreenMenu::AI);
+            break;
+        case 3:
+            Test->TestTrue(TEXT("Bare menu renders existing operations"), Find(TEXT("ScutMenuChoice1")).IsValid());
+            Submit(TEXT("menu close"));
+            S->AdvanceSteps(1);
+            S->AdvanceSteps(int32(1800 - S->Simulation.TickIndex));
+            Submit(TEXT("menu events"));
+            S->AdvanceSteps(1);
+            break;
+        case 4:
+            CheckChoices(S->BeatDeck.Last());
+            Test->TestFalse(TEXT("Ordinary view remains unified"), UI->IsDebugEightCamGrid());
+            S->AdvanceSteps(int32(3600 - S->Simulation.TickIndex));
+            Test->TestTrue(TEXT("Consequential delay occurred"), S->bPersonnelDelayReported);
+            Test->TestFalse(TEXT("Consequential delay leaves event pending"), S->BeatDeck.Last().bResolved);
+            break;
+        case 5:
+        {
+            CheckChoices(S->BeatDeck.Last());
+            TArray<FColor> Pixels;
+            FIntVector Size;
+            const bool Captured = App.TakeScreenshot(UI.ToSharedRef(), Pixels, Size);
+            Test->TestTrue(TEXT("Pending event menu screenshot captured"), Captured);
+            if (Captured)
+            {
+                TArray64<uint8> PNG;
+                FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, PNG);
+                Test->TestTrue(TEXT("Pending event menu screenshot saved"), FFileHelper::SaveArrayToFile(
+                    PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut/EventMenuPendingPIE.png"))));
+            }
+            const double Stress = S->Simulation.Bodies[2].Stress;
+            Utility = S->Simulation.Bodies[2].Profile.Utility;
+            Submit(TEXT("choose 1"));
+            Test->TestEqual(TEXT("Typed choice waits for fixed tick"), S->Simulation.Bodies[2].Profile.Utility, Utility);
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Relief lowers stress after delay"), S->Simulation.Bodies[2].Stress < Stress - 20);
+            Test->TestTrue(TEXT("Relief incurs utility cost"), S->Simulation.Bodies[2].Profile.Utility < Utility - .1f);
+            Utility = S->Simulation.Bodies[2].Profile.Utility;
+            Decision = S->PersonnelDecision;
+            Test->TestTrue(TEXT("Decision-linked authoritative consequence recorded"),
+                           S->CausalContext.ContainsByPredicate([&](const auto &R)
+                           { return R.Parent == Decision && R.Kind == TEXT("consequence") &&
+                                    R.Provenance == TEXT("authoritative_telemetry"); }));
+            break;
+        }
+        case 6:
+            CheckEmpty();
+            Submit(TEXT("choose 1"));
+            S->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Repeated resolved choice cannot reduce utility twice"),
+                            S->Simulation.Bodies[2].Profile.Utility, Utility);
+            Test->TestEqual(TEXT("Repeated resolved choice cannot create another decision"), S->PersonnelDecision, Decision);
+            Submit(TEXT("new_session"));
+            S->AdvanceSteps(1);
+            S->Tick(.001f);
+            break;
+        case 7:
+            S->AdvanceSteps(1800);
+            Submit(TEXT("menu events"));
+            S->AdvanceSteps(1);
+            break;
+        case 8:
+        {
+            CheckChoices(S->BeatDeck.Last());
+            const double Stress = S->Simulation.Bodies[2].Stress;
+            const float Suspicion = S->Simulation.Bodies[2].Profile.Suspicion;
+            Submit(TEXT("choose 2"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Refusal applies authored stress consequence"), S->Simulation.Bodies[2].Stress > Stress + 10);
+            Test->TestTrue(TEXT("Refusal applies authored suspicion consequence"),
+                           S->Simulation.Bodies[2].Profile.Suspicion > Suspicion + .04f);
+            Decision = S->PersonnelDecision;
+            break;
+        }
+        case 9:
+            CheckEmpty();
+            Submit(TEXT("choose 2"));
+            S->AdvanceSteps(1);
+            Test->TestEqual(TEXT("Refusal cannot be applied repeatedly"), S->PersonnelDecision, Decision);
+            Submit(TEXT("reset_experiment"));
+            S->AdvanceSteps(1);
+            Submit(TEXT("start_experiment"));
+            S->AdvanceSteps(1);
+            S->Simulation.Bodies[0].Profile.Suspicion = .4f;
+            S->AdvanceSteps(1);
+            Submit(TEXT("menu events"));
+            S->AdvanceSteps(1);
+            break;
+        case 10:
+            Test->TestTrue(TEXT("Legacy fixture has a distinct authored event"), S->BeatDeck[0].bFired);
+            CheckChoices(S->BeatDeck[0]);
+            App.SetKeyboardFocus(Prompt);
+            Key(EKeys::Tab); // Empty prompt enters the existing menu navigation context.
+            Test->TestFalse(TEXT("Menu navigation leaves prompt focus"), UI->IsPromptFocused());
+            Key(EKeys::Down);
+            break; // Bound Slate colors must paint the changed selection before inspecting it.
+        case 11:
+            {
+                auto Selection = StaticCastSharedPtr<SBorder>(Find(TEXT("ScutMenuSelection2")));
+                Test->TestTrue(TEXT("Keyboard selection has a visible phosphor highlight"),
+                               Selection.IsValid() && Selection->GetBorderBackgroundColor().GetSpecifiedColor().G > .3f);
+            }
+            Key(EKeys::Enter);
+            Test->TestFalse(TEXT("Keyboard choice also waits for fixed tick"), S->BeatDeck[0].bResolved);
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Legacy authored event resolved through keyboard navigation"), S->BeatDeck[0].bResolved);
+            break;
+        case 12:
+            Key(EKeys::BackSpace);
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Existing back navigation closes top-level menu"), S->ActiveMenu == EShipAIScreenMenu::None);
+            break;
+        case 13:
+            Test->TestTrue(TEXT("Closed menu releases unified terminal space"),
+                           Find(TEXT("ScutMenuPane"))->GetVisibility() == EVisibility::Collapsed);
+            return true;
+        }
+        return false;
+    }
+  private:
+    FAutomationTestBase *Test;
+    double Started = 0, Ready = 0;
+    float Utility = 0;
+    uint64 Decision = 0;
+    int32 Stage = 0;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEventMenuPresentationTest, "DirectOrScut.PIE.EventMenuPresentation",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FEventMenuPresentationTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FEventMenuPresentationCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

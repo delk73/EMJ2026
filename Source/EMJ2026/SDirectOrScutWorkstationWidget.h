@@ -227,6 +227,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     void RefreshLog();
     FReply CopyLog();
     TSharedRef<SWidget> BuildTerminal(const FText &Draft);
+    TSharedRef<SWidget> BuildMenuSurface();
     TSharedRef<SWidget> BuildWorkstationControls();
     TSharedRef<SWidget> BuildRoomQuickActions();
     void ExecuteRoomQuickAction(int32 Action);

@@ -100,12 +100,16 @@ enum class EBeatGate : uint8
     AndroidTask,
     Collapse,
     Concealment,
-    Quarantine
+    Quarantine,
+    IncidentObservation,
+    IncidentDiscrepancy,
+    PersonnelRelief
 };
 struct FScenarioBeat
 {
     EBeatGate Gate;
     FInteractionNode Node;
+    uint64 EarliestTick = 0;
     bool bFired = false, bResolved = false;
     int32 Crew = -1;
 };
@@ -603,6 +607,15 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     bool bMedicalScenario = false;
     void ConfigureScenario(bool Medical);
     void EvaluateBeatDeck();
+    void EvaluateOrdinaryIncident();
+    FString IncidentReport(bool Evidence = false);
+    FString PublicCrewRole(int32 Crew) const;
+    TOptional<FForensicOpticSample> ReadClaimEvidence(uint64 Claim) const;
+    // One authored discrepancy: a value sample, not extended video or a second forensic ring.
+    uint64 IncidentClaimId = 0, PersonnelRequestTick = 0, PersonnelDecision = 0;
+    TOptional<FForensicOpticSample> IncidentEvidence;
+    bool bPersonnelDelayReported = false, bPersonnelOutcomeReported = false;
+    int32 PersonnelRequestRoom = -1;
     void RecordCue(int32 Room, float Severity, const FString &Subtitle, bool TerminalVisible = true);
     bool ExecuteDirectorOption(int32 Index);
     bool ResolveBeat(int32 Beat, int32 Choice);

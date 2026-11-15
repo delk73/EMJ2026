@@ -287,7 +287,8 @@ void SDirectOrScutWorkstationWidget::Construct(const FArguments &Args)
     Sim->LogEvent(Sim->SubmitDirective(TEXT("status")));
     Sim->LogEvent(TEXT("CMD button: focus prompt | Tab: categories or completion | Esc: camera navigation | "
                        "INSPECT / GRID buttons: cameras | help: reference"));
-    Sim->LogEvent(TEXT("Crew: Vale / engineer, Chen / medic, Ortiz / technician, Ash / android. Commands use full room "
+    Sim->LogEvent(TEXT("Crew: Vale / engineer, Chen / medic, Ortiz / technician, Ash / ") +
+                  Sim->PublicCrewRole(3) + TEXT(". Commands use full room "
                        "names, e.g. direct ash MED_BAY telemetry; alert AIRLOCK_CHAMBER fault."));
     ResetTerminalPresentation();
     SeenRuntimeRevision = Sim->RuntimeRevision;
@@ -699,6 +700,8 @@ void SDirectOrScutWorkstationWidget::Rebuild()
         Root->AddSlot().FillHeight(1)[SNew(SOverlay) + SOverlay::Slot()[BuildUnifiedTerminal(Draft)] +
                                       SOverlay::Slot()[BuildEvaluationDossier()]];
         RebuildUnifiedStream();
+        RebuildMenu();
+        SeenMenuRevision = Sim->MenuRevision;
         if (bConsoleOpen)
         {
             FSlateApplication::Get().SetKeyboardFocus(Prompt);
@@ -779,33 +782,7 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTerminal(const FText &D
     }
     Left->AddSlot().AutoHeight()[Tabs];
     Left->AddSlot().AutoHeight()[BuildRoomQuickActions()];
-    Left->AddSlot().AutoHeight().Padding(
-        2, 3)[SNew(STextBlock)
-                  .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-                  .ColorAndOpacity(FLinearColor(.3f, 1, .45f))
-                  .AutoWrapText(true)
-                  .Text_Lambda([this]() { return FText::FromString(Sim->ScreenMenuTitle()); })];
-    Left->AddSlot()
-        .AutoHeight()[SNew(SButton)
-                          .Tag(TEXT("ScutMenuBack"))
-                          .IsFocusable(false)
-                          .Text(FText::FromString(TEXT("[BACK]  Tab: category | Up/Down: select | Enter: execute")))
-                          .OnClicked_Lambda(
-                              [this]()
-                              {
-                                  bConsoleOpen = true;
-                                  bMenuFocused = true;
-                                  Sim->QueueConsoleCommand(TEXT("menu back"));
-                                  return FReply::Handled().SetUserFocus(AsShared());
-                              })];
-    Left->AddSlot().FillHeight(1)[SAssignNew(MenuScroll, SScrollBox)
-                                      .Tag(TEXT("ScutMenuScroll"))
-                                      .ScrollBarStyle(&SlimScrollStyle)
-                                      .ScrollBarThickness(FVector2D(3, 3))
-                                      .ScrollBarPadding(FMargin(0))
-                                      .ScrollBarVisibility(EVisibility::Visible)
-                                      .ScrollBarAlwaysVisible(false) +
-                                  SScrollBox::Slot()[SAssignNew(MenuList, SVerticalBox)]];
+    Left->AddSlot().FillHeight(1)[BuildMenuSurface()];
     auto Right = SNew(SVerticalBox);
     Right->AddSlot().AutoHeight()
         [SNew(SHorizontalBox) +
@@ -875,6 +852,40 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildTerminal(const FText &D
                                                           0, 0, 6, 0)[SNew(SBox).Tag(TEXT("ScutMenuPane"))[Left]] +
                                                       SHorizontalBox::Slot().FillWidth(.58f).Padding(
                                                           6, 0, 0, 0)[SNew(SBox).Tag(TEXT("ScutOutputPane"))[Right]]]];
+}
+TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildMenuSurface()
+{
+    auto Left = SNew(SVerticalBox).Tag(TEXT("ScutScreenMenu"));
+    Left->AddSlot().AutoHeight().Padding(
+        2, 3)[SNew(STextBlock)
+                  .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+                  .ColorAndOpacity(FLinearColor(.3f, 1, .45f))
+                  .AutoWrapText(true)
+                  .Text_Lambda([this]() { return FText::FromString(Sim->ScreenMenuTitle()); })];
+    Left->AddSlot()
+        .AutoHeight()[SNew(SButton)
+                          .Tag(TEXT("ScutMenuBack"))
+                          .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                          .ForegroundColor(EvaluatePhosphorColor(1))
+                          .IsFocusable(false)
+                          .Text(FText::FromString(TEXT("[BACK]  Tab: category | Up/Down: select | Enter: execute")))
+                          .OnClicked_Lambda(
+                              [this]()
+                              {
+                                  bConsoleOpen = true;
+                                  bMenuFocused = true;
+                                  Sim->QueueConsoleCommand(TEXT("menu back"));
+                                  return FReply::Handled().SetUserFocus(AsShared());
+                              })];
+    Left->AddSlot().FillHeight(1)[SAssignNew(MenuScroll, SScrollBox)
+                                      .Tag(TEXT("ScutMenuScroll"))
+                                      .ScrollBarStyle(&SlimScrollStyle)
+                                      .ScrollBarThickness(FVector2D(3, 3))
+                                      .ScrollBarPadding(FMargin(0))
+                                      .ScrollBarVisibility(EVisibility::Visible)
+                                      .ScrollBarAlwaysVisible(false) +
+                                  SScrollBox::Slot()[SAssignNew(MenuList, SVerticalBox)]];
+    return Left;
 }
 void SDirectOrScutWorkstationWidget::SelectCategory(int32 Category, bool FocusMenu)
 {
@@ -1415,6 +1426,10 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
     }
     if (!bDebugEightCamGrid && Key == EKeys::Escape)
     {
+        if (Sim->ActiveMenu != EShipAIScreenMenu::None)
+        {
+            Sim->QueueConsoleCommand(TEXT("menu close"));
+        }
         EvidenceSubject = EvidenceRoom = EvidenceProbe = -1;
         if (bForensicScrub)
         {
@@ -1446,10 +1461,46 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
             Prompt->GoTo(ETextLocation::EndOfDocument);
             return FReply::Handled();
         }
+        if (!IsPromptFocused() && Sim->ActiveMenu != EShipAIScreenMenu::None)
+        {
+            if (Key == EKeys::Up || Key == EKeys::Down)
+            {
+                if (!MenuLabels.IsEmpty())
+                {
+                    HighlightedChoice = (HighlightedChoice + MenuLabels.Num() +
+                                         (Key == EKeys::Up ? -1 : 1)) % MenuLabels.Num();
+                    if (MenuEntries.IsValidIndex(HighlightedChoice))
+                    {
+                        MenuScroll->ScrollDescendantIntoView(MenuEntries[HighlightedChoice]);
+                    }
+                }
+                return FReply::Handled();
+            }
+            if (Key == EKeys::Enter)
+            {
+                ExecuteHighlighted();
+                return FReply::Handled();
+            }
+            if (Key == EKeys::BackSpace)
+            {
+                Sim->QueueConsoleCommand(TEXT("menu back"));
+                return FReply::Handled();
+            }
+            if (Key == EKeys::Tab)
+            {
+                SelectCategory(ActiveCategory + (E.IsShiftDown() ? -1 : 1));
+                return FReply::Handled();
+            }
+        }
         if (IsPromptFocused())
         {
             if (Key == EKeys::Tab)
             {
+                if (Prompt->GetText().IsEmpty() && Sim->ActiveMenu != EShipAIScreenMenu::None)
+                {
+                    bMenuFocused = true;
+                    return FReply::Handled().SetUserFocus(AsShared());
+                }
                 Autocomplete(E.IsShiftDown() ? -1 : 1);
                 return FReply::Handled();
             }
@@ -1632,7 +1683,7 @@ void SDirectOrScutWorkstationWidget::RefreshMenuChoices()
 }
 void SDirectOrScutWorkstationWidget::RebuildMenu()
 {
-    if (!bDebugEightCamGrid || !MenuList)
+    if (!MenuList)
     {
         return;
     }
@@ -1640,18 +1691,22 @@ void SDirectOrScutWorkstationWidget::RebuildMenu()
     MenuEntries.Reset();
     RefreshMenuChoices();
     HighlightedChoice = 0;
+    if (MenuLabels.IsEmpty())
+    {
+        MenuList->AddSlot().AutoHeight()[SNew(STextBlock)
+                                            .Tag(TEXT("ScutMenuEmpty"))
+                                            .AutoWrapText(true)
+                                            .ColorAndOpacity(EvaluatePhosphorColor(.8f))
+                                            .Text(FText::FromString(TEXT("No choices are currently available. "
+                                                                        "Use menu back or menu close.")))];
+    }
     for (int32 I = 0; I < MenuLabels.Num(); ++I)
     {
         TSharedRef<SWidget> Entry =
             SNew(SButton)
                 .Tag(FName(*FString::Printf(TEXT("ScutMenuChoice%d"), I + 1)))
                 .IsFocusable(false)
-                .ButtonColorAndOpacity_Lambda(
-                    [this, I]()
-                    {
-                        return HighlightedChoice == I ? FLinearColor(.12f, .4f, .2f, .8f)
-                                                      : FLinearColor(.02f, .06f, .03f, .35f);
-                    })
+                .ButtonStyle(FCoreStyle::Get(), "NoBorder")
                 .IsEnabled_Lambda([this, I]() { return MenuEnabled.IsValidIndex(I) && MenuEnabled[I]; })
                 .OnClicked_Lambda(
                     [this, I]()
@@ -1661,13 +1716,23 @@ void SDirectOrScutWorkstationWidget::RebuildMenu()
                         HighlightedChoice = I;
                         ExecuteHighlighted();
                         return FReply::Handled().SetUserFocus(AsShared());
-                    })[SNew(STextBlock)
-                           .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-                           .AutoWrapText(true)
-                           .ColorAndOpacity(FLinearColor(.4f, 1, .55f))
-                           .Text_Lambda(
-                               [this, I]()
-                               { return FText::FromString(MenuLabels.IsValidIndex(I) ? MenuLabels[I] : TEXT("")); })];
+                    })[SNew(SBorder)
+                           .Tag(FName(*FString::Printf(TEXT("ScutMenuSelection%d"), I + 1)))
+                           .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                           .BorderBackgroundColor_Lambda([this, I]()
+                           {
+                               return HighlightedChoice == I ? FLinearColor(.12f, .4f, .2f, .8f)
+                                                             : FLinearColor(.02f, .06f, .03f, .35f);
+                           })
+                           .Padding(2)[SNew(STextBlock)
+                                           .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+                                           .AutoWrapText(true)
+                                           .ColorAndOpacity_Lambda([this, I]()
+                                           { return HighlightedChoice == I ? FLinearColor(.003f, .009f, .005f)
+                                                                           : EvaluatePhosphorColor(1); })
+                                           .Text_Lambda([this, I]()
+                                           { return FText::FromString(MenuLabels.IsValidIndex(I) ? MenuLabels[I]
+                                                                                              : TEXT("")); })]];
         MenuEntries.Add(Entry);
         MenuList->AddSlot().AutoHeight().Padding(0, 1)[Entry];
     }
@@ -1769,7 +1834,7 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
                                                                              : EVisibility::Hidden);
     Rig->SetVisibleFeeds(ActiveFeed, -1, true); // All eight remain active optical sources.
     UpdateTerminalPresentation(Delta, G);
-    if (bDebugEightCamGrid && SeenMenuRevision != Sim->MenuRevision)
+    if (SeenMenuRevision != Sim->MenuRevision)
     {
         switch (Sim->ActiveMenu)
         {
@@ -1795,7 +1860,7 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
         SeenMenuRevision = Sim->MenuRevision;
     }
     MenuRefreshClock += Delta;
-    if (bDebugEightCamGrid && MenuRefreshClock >= .2f)
+    if (MenuRefreshClock >= .2f)
     {
         if (Sim->ActiveMenu != EShipAIScreenMenu::None)
         {
@@ -2967,6 +3032,11 @@ void SDirectOrScutWorkstationWidget::Inquiry(int32 Index)
         }
         break;
     case 3:
+        if (!Sim->bLegacyExperiment)
+        {
+            AppendTerminalProse(Sim->IncidentReport(true));
+            break;
+        }
         AppendTerminalProse(TEXT("SYSTEM> CROSS-EXAMINE // Compare two independent claims. ECG establishes pulse, "
                                  "optics establish coverage; neither proves intent. Select a second subject, then "
                                  "ENTER. Use [SCRUB 15S] to inspect the timeline."));
@@ -3829,6 +3899,13 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildUnifiedTerminal(const F
                                            [this](float Offset)
                                            { bLogAutoScroll = Offset >= LogScroll->GetScrollOffsetOfEnd() - 2; }) +
                                    SScrollBox::Slot()[SAssignNew(Log, SVerticalBox).Tag(TEXT("ScutInlineStream"))]]];
+    Left->AddSlot().AutoHeight()[SNew(SBox)
+                                    .Tag(TEXT("ScutMenuPane"))
+                                    .HeightOverride(220)
+                                    .Visibility_Lambda([this]()
+                                    { return Sim->ActiveMenu == EShipAIScreenMenu::None ? EVisibility::Collapsed
+                                                                                     : EVisibility::Visible; })
+                                        [BuildMenuSurface()]];
     Left->AddSlot().AutoHeight()[PhosphorHairline()];
     auto Initialize = PhosphorSoftkey(
         TEXT("ScutInitializeExperiment"), FText::FromString(TEXT("[ENTER] INITIALIZE EXPERIMENT")),

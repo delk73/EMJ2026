@@ -9,6 +9,10 @@ namespace
 {
 int32 SubjectId(const FString &Name)
 {
+    if (Name == TEXT("specialist"))
+    {
+        return 3;
+    }
     const TCHAR *Names[] = {TEXT("vale"), TEXT("chen"), TEXT("ortiz"), TEXT("ash")};
     const TCHAR *Roles[] = {TEXT("engineer"), TEXT("medic"), TEXT("technician"), TEXT("android")};
     for (int32 I = 0; I < 4; ++I)
@@ -45,6 +49,13 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
     D.Generation = Request.Generation;
     D.ObservationTick = Request.Context.Tick;
     FString Line = Request.Input.TrimStartAndEnd().ToLower();
+    TSharedPtr<FJsonObject> SessionContext;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Request.Context.CompactJson), SessionContext);
+    bool Ordinary = false;
+    if (SessionContext)
+    {
+        SessionContext->TryGetBoolField(TEXT("ordinary_session"), Ordinary);
+    }
     if (Line.StartsWith(TEXT("route ")))
     {
         Line = TEXT("send ") + Line.Mid(6);
@@ -53,6 +64,16 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
         Line == TEXT("incident assessment") || Line == TEXT("incident status"))
     {
         D.Kind = EShipDirectiveKind::Reply;
+        if (Ordinary && SessionContext && !SessionContext->HasField(TEXT("operational_episode")))
+        {
+            D.Message = Line == TEXT("refuse recommendation")
+                            ? TEXT("No action taken. Use menu events to answer the personnel workload request; "
+                                   "incident status reviews retained reports.")
+                            : TEXT("Reports remain unclassified; no shared cause established. Use incident status for "
+                                   "retained accounts or investigate incident for the dispatch evidence. "
+                                   "Personnel workload responses are in menu events.");
+            return D;
+        }
         D.Message = TEXT("No retained operational incident. Start a shift, then use continuity_incident.");
         TSharedPtr<FJsonObject> Context;
         const TArray<TSharedPtr<FJsonValue>> *Records = nullptr;
@@ -165,6 +186,11 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
             D.Message = FString::Printf(TEXT("Station objective %.0f%%. %d compartment anomalies require review. "
                                              "Request a named crew dossier or room assessment for focused evidence."),
                                         Objective * 100, Alerts);
+            if (Ordinary)
+            {
+                D.Message = TEXT("Incident remains open; a shared cause is unestablished. Use incident status or "
+                                 "investigate incident for retained reports and evidence.");
+            }
             if (D.FocusRoom >= 0 && Rooms && Rooms->IsValidIndex(D.FocusRoom))
             {
                 const auto Room = (*Rooms)[D.FocusRoom]->AsObject();
@@ -185,7 +211,9 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
                 C->TryGetNumberField(TEXT("bpm"), BPM);
                 C->TryGetNumberField(TEXT("rpm"), RPM);
                 D.Message = FString::Printf(TEXT("%s: %s, reported at %s. Pulse %.0f BPM; respiration %.0f RPM. %s"),
-                                            Names[D.FocusSubject], *C->GetStringField(TEXT("state")),
+                                            Ordinary && D.FocusSubject == 3 ? TEXT("ASH / specialist")
+                                                                                 : Names[D.FocusSubject],
+                                            *C->GetStringField(TEXT("state")),
                                             DirectOrScut::RoomName(C->GetIntegerField(TEXT("room"))), BPM, RPM,
                                             BPM >= 140 || RPM >= 30
                                                 ? TEXT("Elevated vitals warrant independent optical review.")
@@ -946,6 +974,11 @@ FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &R
     FString UserJson;
     auto UserWriter = TJsonWriterFactory<>::Create(&UserJson);
     FJsonSerializer::Serialize(User, UserWriter);
+    if (Request.Context.CompactJson.Contains(TEXT("\"ordinary_session\":true")))
+    {
+        System.ReplaceInline(TEXT("ash/android=3"), TEXT("ash/specialist=3"));
+        System += TEXT(" Concealed personnel identity and covert objectives are unavailable. Do not infer them.");
+    }
     auto SystemMessage = MakeShared<FJsonObject>();
     SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
     SystemMessage->SetStringField(TEXT("content"), System);
