@@ -83,14 +83,14 @@ void UDirectOrScutSimSubsystem::Initialize(FSubsystemCollectionBase &Collection)
     ConfigureScenario(false);
     Simulation.bExperiment = true;
     IntentProvider = MakeShared<FOfflineShipAIIntentProvider>();
-    FString Endpoint;
+    FString Endpoint, Model;
     float Timeout = 2;
     GConfig->GetString(TEXT("DirectOrScut.Director"), TEXT("LocalEndpoint"), Endpoint, GGameIni);
     GConfig->GetFloat(TEXT("DirectOrScut.Director"), TEXT("TimeoutSeconds"), Timeout, GGameIni);
-    if (!Endpoint.IsEmpty())
-    {
-        ConfigureDirectorEndpoint(Endpoint, Timeout);
-    }
+    GConfig->GetString(TEXT("DirectOrScut.Director"), TEXT("Model"), Model, GGameIni);
+    const bool Configured = !Endpoint.IsEmpty() && ConfigureDirectorEndpoint(Endpoint, Timeout, Model);
+    UE_LOG(LogTemp, Display, TEXT("DIRECTOR CONFIG file=%s endpoint=%s model=%s timeout=%.2f enabled=%d"), *GGameIni,
+           *Endpoint, *Model, Timeout, Configured);
 }
 bool UDirectOrScutSimSubsystem::IsTickable() const
 {
@@ -4023,19 +4023,22 @@ void UDirectOrScutSimSubsystem::CancelDirector()
     bDirectorReplay = false;
     VoicePresentation = {};
 }
-bool UDirectOrScutSimSubsystem::ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds)
+bool UDirectOrScutSimSubsystem::ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds,
+                                                          const FString &Model)
 {
-    if (bDirectorShuttingDown || !FMath::IsFinite(TimeoutSeconds) || TimeoutSeconds < .1f || TimeoutSeconds > 10 ||
+    if (bDirectorShuttingDown || Model.Len() > 128 || Model.Contains(TEXT("\n")) || Model.Contains(TEXT("\r")) ||
+        !FMath::IsFinite(TimeoutSeconds) || TimeoutSeconds < .1f || TimeoutSeconds > 10 ||
         (!Endpoint.IsEmpty() && !FLocalHttpShipAIIntentProvider::IsLocalEndpoint(Endpoint)))
     {
         return false;
     }
     CancelDirector();
     DirectorTimeout = TimeoutSeconds;
+    DirectorModel = Model;
     bDirectorEndpoint = !Endpoint.IsEmpty();
     if (bDirectorEndpoint)
     {
-        IntentProvider = MakeShared<FLocalHttpShipAIIntentProvider>(Endpoint, DirectorTimeout);
+        IntentProvider = MakeShared<FLocalHttpShipAIIntentProvider>(Endpoint, DirectorTimeout, Model);
     }
     else
     {

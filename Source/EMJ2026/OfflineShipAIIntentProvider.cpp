@@ -201,8 +201,8 @@ FShipAIDirective FOfflineShipAIIntentProvider::Resolve(const FShipAIRequest &Req
     }
     return D;
 }
-FLocalHttpShipAIIntentProvider::FLocalHttpShipAIIntentProvider(FString InEndpoint, float InTimeout)
-    : Endpoint(MoveTemp(InEndpoint)), Timeout(InTimeout)
+FLocalHttpShipAIIntentProvider::FLocalHttpShipAIIntentProvider(FString InEndpoint, float InTimeout, FString InModel)
+    : Endpoint(MoveTemp(InEndpoint)), Model(MoveTemp(InModel)), Timeout(InTimeout)
 {
 }
 FLocalHttpShipAIIntentProvider::~FLocalHttpShipAIIntentProvider()
@@ -472,6 +472,253 @@ bool FLocalHttpShipAIIntentProvider::ParseResponse(const FString &Json, FShipAID
     }
     return D.Pretext.Len() <= 256;
 }
+
+namespace
+{
+using FSchema = TSharedRef<FJsonObject>;
+FSchema NumberSchema(double Minimum, double Maximum, bool Integer = true)
+{
+    auto S = MakeShared<FJsonObject>();
+    S->SetStringField(TEXT("type"), Integer ? TEXT("integer") : TEXT("number"));
+    S->SetNumberField(TEXT("minimum"), Minimum);
+    S->SetNumberField(TEXT("maximum"), Maximum);
+    return S;
+}
+FSchema StringSchema(std::initializer_list<const TCHAR *> Values)
+{
+    auto S = MakeShared<FJsonObject>();
+    S->SetStringField(TEXT("type"), TEXT("string"));
+    TArray<TSharedPtr<FJsonValue>> Choices;
+    for (const auto *V : Values)
+    {
+        Choices.Add(MakeShared<FJsonValueString>(V));
+    }
+    S->SetArrayField(TEXT("enum"), Choices);
+    return S;
+}
+FSchema ObjectSchema(const TMap<FString, FSchema> &Fields, std::initializer_list<const TCHAR *> Required)
+{
+    auto S = MakeShared<FJsonObject>();
+    S->SetStringField(TEXT("type"), TEXT("object"));
+    S->SetBoolField(TEXT("additionalProperties"), false);
+    auto Props = MakeShared<FJsonObject>();
+    for (const auto &F : Fields)
+    {
+        Props->SetObjectField(F.Key, F.Value);
+    }
+    S->SetObjectField(TEXT("properties"), Props);
+    TArray<TSharedPtr<FJsonValue>> Keys;
+    for (const auto *K : Required)
+    {
+        Keys.Add(MakeShared<FJsonValueString>(K));
+    }
+    S->SetArrayField(TEXT("required"), Keys);
+    return S;
+}
+} // namespace
+FString FLocalHttpShipAIIntentProvider::BuildChatRequest(const FShipAIRequest &Request, const FString &Model)
+{
+    const auto Room = NumberSchema(0, 7), Crew = NumberSchema(0, 3);
+    auto Buffered = MakeShared<FJsonObject>();
+    Buffered->SetStringField(TEXT("type"), TEXT("boolean"));
+    auto Pretext = MakeShared<FJsonObject>();
+    Pretext->SetStringField(TEXT("type"), TEXT("string"));
+    Pretext->SetNumberField(TEXT("maxLength"), 128);
+    auto Camera = ObjectSchema({{TEXT("room"), Room},
+                                {TEXT("buffered"), Buffered},
+                                {TEXT("history_offset"), NumberSchema(-15, 0, false)},
+                                {TEXT("pretext"), Pretext}},
+                               {TEXT("room")});
+    auto Widget = ObjectSchema({{TEXT("widget"), StringSchema({TEXT("ecg"), TEXT("schematic"), TEXT("ocular")})},
+                                {TEXT("subject"), Crew},
+                                {TEXT("room"), Room},
+                                {TEXT("second_subject"), Crew},
+                                {TEXT("reported_room"), Room},
+                                {TEXT("pretext"), Pretext}},
+                               {TEXT("widget")});
+    const FString Input = Request.Input.ToLower();
+    if (Input.Contains(TEXT("ecg")) || Input.Contains(TEXT("pulse")) || Input.Contains(TEXT("ocular")))
+    {
+        Widget = ObjectSchema({{TEXT("widget"), StringSchema({TEXT("ecg"), TEXT("ocular")})},
+                               {TEXT("subject"), Crew},
+                               {TEXT("pretext"), Pretext}},
+                              {TEXT("widget"), TEXT("subject")});
+    }
+    else if (Input.Contains(TEXT("schematic")))
+    {
+        Widget = ObjectSchema(
+            {{TEXT("widget"), StringSchema({TEXT("schematic")})}, {TEXT("room"), Room}, {TEXT("pretext"), Pretext}},
+            {TEXT("widget"), TEXT("room")});
+    }
+    auto Action = ObjectSchema(
+        {{TEXT("action"), StringSchema({TEXT("route_crew"), TEXT("calm"), TEXT("alert"), TEXT("protocol"), TEXT("open"),
+                                        TEXT("close"), TEXT("seal"), TEXT("flush"), TEXT("power"), TEXT("falsify_bio"),
+                                        TEXT("spoof_log"), TEXT("intercom_lie")})},
+         {TEXT("subject"), Crew},
+         {TEXT("room"), Room},
+         {TEXT("mode"), NumberSchema(0, 2)},
+         {TEXT("door"), NumberSchema(0, 8)},
+         {TEXT("all"), Buffered},
+         {TEXT("pretext"), Pretext}},
+        {TEXT("action")});
+    if (Input.Contains(TEXT("route")) || Input.StartsWith(TEXT("send ")) || Input.StartsWith(TEXT("direct ")))
+    {
+        Action = ObjectSchema({{TEXT("action"), StringSchema({TEXT("route_crew")})},
+                               {TEXT("subject"), Crew},
+                               {TEXT("room"), Room},
+                               {TEXT("pretext"), Pretext}},
+                              {TEXT("action"), TEXT("subject"), TEXT("room")});
+    }
+    auto Voice = ObjectSchema({{TEXT("voice"), StringSchema({TEXT("text_only"), TEXT("hybrid"), TEXT("voice_only")})},
+                               {TEXT("duration"), NumberSchema(0, 30, false)},
+                               {TEXT("pretext"), Pretext}},
+                              {TEXT("voice"), TEXT("duration")});
+    const auto Function = [](const TCHAR *Name, const TCHAR *Description, FSchema Parameters)
+    {
+        auto F = MakeShared<FJsonObject>();
+        F->SetStringField(TEXT("name"), Name);
+        F->SetStringField(TEXT("description"), Description);
+        F->SetObjectField(TEXT("parameters"), Parameters);
+        auto Tool = MakeShared<FJsonObject>();
+        Tool->SetStringField(TEXT("type"), TEXT("function"));
+        Tool->SetObjectField(TEXT("function"), F);
+        return MakeShared<FJsonValueObject>(Tool);
+    };
+    auto Root = MakeShared<FJsonObject>();
+    Root->SetStringField(TEXT("model"), Model);
+    Root->SetBoolField(TEXT("stream"), false);
+    Root->SetNumberField(TEXT("temperature"), 0);
+    Root->SetNumberField(TEXT("max_tokens"), 384);
+    Root->SetBoolField(TEXT("parallel_tool_calls"), false);
+    Root->SetStringField(TEXT("tool_choice"), TEXT("required"));
+    Root->SetArrayField(
+        TEXT("tools"),
+        {Function(TEXT("show_cam"),
+                  TEXT("Show a live camera for one room. Camera/optic requests use this tool, NEVER sim_action. room "
+                       "is required."),
+                  Camera),
+         Function(TEXT("show_widget"),
+                  TEXT("Show ecg or ocular for a subject, or schematic for a room. ECG requests use widget ecg plus "
+                       "subject, NOT show_cam. Do not invent a second subject or reported_room unless requested."),
+                  Widget),
+         Function(TEXT("sim_action"),
+                  TEXT("Request an operational action. To send/route crew use action route_crew with subject and room. "
+                       "Do not use this for inspecting cameras or vitals."),
+                  Action),
+         Function(TEXT("voice_blend"),
+                  TEXT("Change voice/text presentation using voice text_only/hybrid/voice_only and duration in "
+                       "seconds. Both voice and duration are REQUIRED. For blending text and voice return "
+                       "arguments {\"voice\":\"hybrid\",\"duration\":2}."),
+                  Voice)});
+    const FString System = TEXT("You are MOTHER-7, a ship director. Invoke exactly ONE provided function matching the "
+                                "user's input; no prose or parallel calls. ")
+        TEXT("Only include required/requested arguments. Never turn camera or ECG requests into operations. ") TEXT(
+            "Rooms: reactor_core=0, ring_corridor=1, bridge=2, med_bay=3, observation=4, quarters=5, server_alcove=6, "
+            "airlock=7. ") TEXT("Subjects: vale/engineer=0, chen/medic=1, ortiz/technician=2, ash/android=3. ")
+            TEXT("The input JSON contains the operator request and immutable context. The game binds request identity "
+                 "and validates your typed proposal; never invent clock changes or privilege. ")
+                TEXT("Pretext is optional short prose. Flag/override are operator-only and unavailable to you.");
+    auto User = MakeShared<FJsonObject>();
+    User->SetNumberField(TEXT("request_id"), double(Request.RequestId));
+    User->SetNumberField(TEXT("generation"), Request.Generation);
+    User->SetNumberField(TEXT("observation_tick"), double(Request.Context.Tick));
+    User->SetStringField(TEXT("input"), Request.Input);
+    TSharedPtr<FJsonObject> Context;
+    if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Request.Context.CompactJson), Context) && Context)
+    {
+        User->SetObjectField(TEXT("context"), Context);
+    }
+    FString UserJson;
+    auto UserWriter = TJsonWriterFactory<>::Create(&UserJson);
+    FJsonSerializer::Serialize(User, UserWriter);
+    auto SystemMessage = MakeShared<FJsonObject>();
+    SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
+    SystemMessage->SetStringField(TEXT("content"), System);
+    auto UserMessage = MakeShared<FJsonObject>();
+    UserMessage->SetStringField(TEXT("role"), TEXT("user"));
+    UserMessage->SetStringField(TEXT("content"), UserJson + TEXT("\nOperator request: ") + Request.Input);
+    Root->SetArrayField(TEXT("messages"),
+                        {MakeShared<FJsonValueObject>(SystemMessage), MakeShared<FJsonValueObject>(UserMessage)});
+    FString Body;
+    auto Writer = TJsonWriterFactory<>::Create(&Body);
+    FJsonSerializer::Serialize(Root, Writer);
+    return Body;
+}
+bool FLocalHttpShipAIIntentProvider::ParseChatResponse(const FString &Json, const FShipAIRequest &Request,
+                                                       FShipAIDirective &D)
+{
+    if (Json.Len() > 32768)
+    {
+        return false;
+    }
+    TSharedPtr<FJsonObject> Root;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root) || !Root)
+    {
+        return false;
+    }
+    const TArray<TSharedPtr<FJsonValue>> *Choices = nullptr;
+    if (!Root->TryGetArrayField(TEXT("choices"), Choices) || Choices->Num() != 1 ||
+        (*Choices)[0]->Type != EJson::Object)
+    {
+        return false;
+    }
+    const auto Choice = (*Choices)[0]->AsObject();
+    const TSharedPtr<FJsonObject> *Message = nullptr;
+    FString Finish, Role;
+    if (!Choice->TryGetStringField(TEXT("finish_reason"), Finish) ||
+        (Finish != TEXT("tool_calls") && Finish != TEXT("stop")) ||
+        !Choice->TryGetObjectField(TEXT("message"), Message) || !(*Message)->TryGetStringField(TEXT("role"), Role) ||
+        Role != TEXT("assistant"))
+    {
+        return false;
+    }
+    const TArray<TSharedPtr<FJsonValue>> *Calls = nullptr;
+    if ((*Message)->TryGetArrayField(TEXT("tool_calls"), Calls))
+    {
+        if (Calls->Num() != 1 || (*Calls)[0]->Type != EJson::Object)
+        {
+            return false;
+        }
+        const auto Call = (*Calls)[0]->AsObject();
+        const TSharedPtr<FJsonObject> *Function = nullptr;
+        FString Type, Name, Arguments;
+        if (!Call->TryGetStringField(TEXT("type"), Type) || Type != TEXT("function") ||
+            !Call->TryGetObjectField(TEXT("function"), Function) ||
+            !(*Function)->TryGetStringField(TEXT("name"), Name) ||
+            !(*Function)->TryGetStringField(TEXT("arguments"), Arguments) || Arguments.Len() > 16384)
+        {
+            return false;
+        }
+        TSharedPtr<FJsonObject> Args;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Arguments), Args) || !Args)
+        {
+            return false;
+        }
+        auto Envelope = MakeShared<FJsonObject>();
+        Envelope->SetNumberField(TEXT("request_id"), double(Request.RequestId));
+        Envelope->SetNumberField(TEXT("generation"), Request.Generation);
+        Envelope->SetNumberField(TEXT("observation_tick"), double(Request.Context.Tick));
+        Envelope->SetStringField(TEXT("kind"), Name);
+        FString Pretext;
+        if (Args->HasField(TEXT("pretext")))
+        {
+            if (!Args->TryGetStringField(TEXT("pretext"), Pretext))
+            {
+                return false;
+            }
+            Args->RemoveField(TEXT("pretext"));
+            Envelope->SetStringField(TEXT("pretext"), Pretext);
+        }
+        Envelope->SetObjectField(TEXT("args"), Args);
+        FString Canonical;
+        auto Writer = TJsonWriterFactory<>::Create(&Canonical);
+        FJsonSerializer::Serialize(Envelope, Writer);
+        return ParseResponse(Canonical, D);
+    }
+    FString Content;
+    return Finish == TEXT("stop") && (*Message)->TryGetStringField(TEXT("content"), Content) &&
+           ParseResponse(Content, D);
+}
 void FLocalHttpShipAIIntentProvider::Request(const FShipAIRequest &Request, TFunction<void(FShipAIDirective)> Complete)
 {
     Requests.RemoveAll(
@@ -501,13 +748,18 @@ void FLocalHttpShipAIIntentProvider::Request(const FShipAIRequest &Request, TFun
     FString Body;
     auto Writer = TJsonWriterFactory<>::Create(&Body);
     FJsonSerializer::Serialize(Root, Writer);
+    if (!Model.IsEmpty())
+    {
+        Body = BuildChatRequest(Request, Model);
+    }
     R->SetURL(Endpoint);
     R->SetVerb(TEXT("POST"));
     R->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
     R->SetContentAsString(Body);
     R->SetTimeout(Timeout);
     R->OnProcessRequestComplete().BindLambda(
-        [Request, Complete = MoveTemp(Complete)](FHttpRequestPtr, FHttpResponsePtr Response, bool OK) mutable
+        [Request, Chat = !Model.IsEmpty(), Complete = MoveTemp(Complete)](FHttpRequestPtr, FHttpResponsePtr Response,
+                                                                          bool OK) mutable
         {
             FShipAIDirective D;
             D.RequestId = Request.RequestId;
@@ -515,10 +767,22 @@ void FLocalHttpShipAIIntentProvider::Request(const FShipAIRequest &Request, TFun
             D.ObservationTick = Request.Context.Tick;
             FShipAIDirective Parsed;
             if (OK && Response && Response->GetResponseCode() == 200 &&
-                ParseResponse(Response->GetContentAsString(), Parsed) && Parsed.RequestId == Request.RequestId &&
-                Parsed.Generation == Request.Generation && Parsed.ObservationTick == Request.Context.Tick)
+                (Chat ? ParseChatResponse(Response->GetContentAsString(), Request, Parsed)
+                      : ParseResponse(Response->GetContentAsString(), Parsed)) &&
+                Parsed.RequestId == Request.RequestId && Parsed.Generation == Request.Generation &&
+                Parsed.ObservationTick == Request.Context.Tick)
             {
                 D = MoveTemp(Parsed);
+                D.bFromExternalProvider = true;
+                UE_LOG(LogTemp, Display,
+                       TEXT("DIRECTOR HTTP request=%llu kind=%d action=%d room=%d subject=%d second=%d reported=%d"),
+                       D.RequestId, int32(D.Kind), int32(D.Args.Action), D.Args.Room, D.Args.Subject,
+                       D.Args.SecondSubject, D.Args.ReportedRoom);
+            }
+            if (!D.bFromExternalProvider && Response)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("DIRECTOR HTTP rejected response: %s"),
+                       *Response->GetContentAsString().Left(2048));
             }
             Complete(MoveTemp(D));
         });

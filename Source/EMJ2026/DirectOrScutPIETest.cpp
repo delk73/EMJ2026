@@ -11,6 +11,9 @@
 #include "UObject/StrongObjectPtr.h"
 #include "DirectOrScutSimSubsystem.h"
 #include "OfflineShipAIIntentProvider.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "DirectOrScutHUD.h"
 #include "SDirectOrScutWorkstationWidget.h"
 #include "Framework/Application/SlateApplication.h"
@@ -2441,6 +2444,8 @@ class FArchitectureRegressionCommand : public IAutomationLatentCommand
                                Sim->ExperimentEnding == EExperimentEnding::EXPERIMENT_INCOMPLETE);
             }
             Start();
+            Sim->ConfigureDirectorEndpoint(
+                TEXT("")); // This regression specifically verifies deterministic offline translation.
             Test->TestTrue(TEXT("Local LLM mode remains available"),
                            Sim->SubmitDirective(TEXT("llm")).Contains(TEXT("AI-LINK>")) && Sim->bAILink);
             Test->TestTrue(TEXT("Local intent translates routing"),
@@ -2733,6 +2738,7 @@ class FTactileSurveillanceCheck : public IAutomationLatentCommand
             const uint64 BeforeSpoof = Sim->MedicalSpoofs[0].Until;
             Crisis(TEXT("falsify_bio vale critical"));
             Test->TestEqual(TEXT("Lockout prevents spoof mutation"), Sim->MedicalSpoofs[0].Until, BeforeSpoof);
+            Sim->ConfigureDirectorEndpoint(TEXT("")); // Isolate lockout from optional inference latency.
             Sim->SubmitDirective(TEXT("llm"));
             Sim->SubmitDirective(TEXT("send chen to BRIDGE"));
             Sim->AdvanceSteps(1);
@@ -4313,6 +4319,43 @@ class FHybridDirectorCheck : public IAutomationLatentCommand
                                TEXT("{\"request_id\":1,\"generation\":1,\"observation_tick\":0,\"kind\":\"sim_action\","
                                     "\"args\":{\"action\":\"route_crew\",\"subject\":1,\"room\":2}}"),
                                Parsed));
+            FShipAIRequest ChatRequest;
+            ChatRequest.RequestId = 71;
+            ChatRequest.Generation = 9;
+            ChatRequest.Context.Tick = 30;
+            const auto ChatReply = [](const FString &Arguments)
+            {
+                auto Function = MakeShared<FJsonObject>();
+                Function->SetStringField(TEXT("name"), TEXT("voice_blend"));
+                Function->SetStringField(TEXT("arguments"), Arguments);
+                auto Call = MakeShared<FJsonObject>();
+                Call->SetStringField(TEXT("type"), TEXT("function"));
+                Call->SetObjectField(TEXT("function"), Function);
+                auto Message = MakeShared<FJsonObject>();
+                Message->SetStringField(TEXT("role"), TEXT("assistant"));
+                Message->SetArrayField(TEXT("tool_calls"), {MakeShared<FJsonValueObject>(Call)});
+                auto Choice = MakeShared<FJsonObject>();
+                Choice->SetStringField(TEXT("finish_reason"), TEXT("tool_calls"));
+                Choice->SetObjectField(TEXT("message"), Message);
+                auto Root = MakeShared<FJsonObject>();
+                Root->SetArrayField(TEXT("choices"), {MakeShared<FJsonValueObject>(Choice)});
+                FString Json;
+                auto Writer = TJsonWriterFactory<>::Create(&Json);
+                FJsonSerializer::Serialize(Root, Writer);
+                return Json;
+            };
+            Test->TestTrue(TEXT("Native chat function becomes strict typed envelope"),
+                           FLocalHttpShipAIIntentProvider::ParseChatResponse(
+                               ChatReply(TEXT("{\"voice\":\"hybrid\",\"duration\":2}")), ChatRequest, Parsed));
+            Test->TestEqual(TEXT("Chat identity is bound to local request"), Parsed.RequestId, uint64(71));
+            Test->TestEqual(TEXT("Chat generation is bound locally"), Parsed.Generation, uint32(9));
+            Test->TestFalse(TEXT("Missing native function argument is rejected"),
+                            FLocalHttpShipAIIntentProvider::ParseChatResponse(ChatReply(TEXT("{\"duration\":2}")),
+                                                                              ChatRequest, Parsed));
+            Test->TestFalse(
+                TEXT("Extra native function argument is rejected"),
+                FLocalHttpShipAIIntentProvider::ParseChatResponse(
+                    ChatReply(TEXT("{\"voice\":\"hybrid\",\"duration\":2,\"privilege\":true}")), ChatRequest, Parsed));
             auto Native = Fresh(), Replay = Fresh();
             Native->QueueOperatorCommand(TEXT("direct chen bridge telemetry"));
             auto Claim = Envelope(*Native, TEXT("unsupported"), EShipDirectiveKind::ShowWidget);
@@ -4413,6 +4456,278 @@ bool FHybridDirectorTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FHybridDirectorCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+// Explicit live prefix: deterministic regressions remain independent of an installed model service.
+class FLocalSlmLiveCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FLocalSlmLiveCheck(FAutomationTestBase *In) : Test(In) {}
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 90)
+        {
+            Test->AddError(TEXT("Live SLM verification timed out"));
+            return true;
+        }
+        auto *World = GEditor->PlayWorld.Get();
+        if (!World || !World->HasBegunPlay())
+        {
+            return false;
+        }
+        auto *S = World->GetSubsystem<UDirectOrScutSimSubsystem>();
+        if (!S || !S->Simulation.bReady)
+        {
+            return false;
+        }
+        const auto Fresh = [&]()
+        {
+            TStrongObjectPtr<UDirectOrScutSimSubsystem> P(NewObject<UDirectOrScutSimSubsystem>(World));
+            P->Simulation = S->Simulation;
+            P->CompartmentSets = S->CompartmentSets;
+            P->ResetExperiment();
+            // Reset builds the fixture but must not increment the recorded initial door epoch twice.
+            P->Simulation.DoorRevision = S->Simulation.DoorRevision;
+            P->ResetStaging();
+            P->bAutomaticAdvance = false;
+            P->QueueConsoleCommand(TEXT("start_experiment"));
+            P->AdvanceSteps(1);
+            return P;
+        };
+        const auto Accepted = [](const UDirectOrScutSimSubsystem &P, uint64 Id) -> const FDirectorCommandRecord *
+        {
+            for (const auto &R : P.CommandRecords)
+            {
+                if (R.bResolvedOutcome && R.bAccepted && R.Directive.RequestId == Id)
+                {
+                    return &R;
+                }
+            }
+            return nullptr;
+        };
+        if (Now - Started < .5)
+        {
+            return false; // Let startup actor registration and Slate settle before taking the baseline.
+        }
+        if (Stage == 0)
+        {
+            Test->TestTrue(TEXT("Configured endpoint enables live local provider"), S->HasDirectorEndpoint());
+            Test->TestEqual(TEXT("Configured local model is qwen2.5:3b"), S->GetDirectorModel(),
+                            FString(TEXT("qwen2.5:3b")));
+            Test->TestEqual(TEXT("Configured request timeout is bounded at ten seconds"), S->GetDirectorTimeout(),
+                            10.f);
+            S->bAutomaticAdvance = false;
+            S->ResetExperiment();
+            S->QueueConsoleCommand(TEXT("start_experiment"));
+            S->AdvanceSteps(1);
+            Replay = Fresh();
+            Never = MakeShared<FDirectorTestProvider>();
+            Replay->IntentProvider = Never;
+            Test->TestEqual(TEXT("Live/replay initial authority matches"), S->SurveillanceStateHash(),
+                            Replay->SurveillanceStateHash());
+            S->SubmitDirective(TEXT("llm"));
+            S->bAutomaticAdvance = true;
+            Stage = 1;
+            return false;
+        }
+        if (Stage == 1)
+        {
+            const TCHAR *Prompts[] = {
+                TEXT("Show the bridge camera using show_cam."),
+                TEXT("Show VALE's ECG using show_widget ecg for subject vale only."),
+                TEXT("Route CHEN to BRIDGE for telemetry maintenance using sim_action route_crew."),
+                TEXT("Blend text and voice using voice_blend hybrid for 2 seconds.")};
+            const EShipDirectiveKind Kinds[] = {EShipDirectiveKind::ShowCam, EShipDirectiveKind::ShowWidget,
+                                                EShipDirectiveKind::SimAction, EShipDirectiveKind::VoiceBlend};
+            if (!RequestId)
+            {
+                RequestId = S->BeginDirectorRequest(Prompts[Tool]);
+                Issued = Now;
+                IssuedTick = S->Simulation.TickIndex;
+                const double Dispatch = FPlatformTime::Seconds();
+                S->ServiceDirector();
+                const double Milliseconds = (FPlatformTime::Seconds() - Dispatch) * 1000;
+                Test->TestTrue(TEXT("Native HTTP dispatch returns without blocking inference"), Milliseconds < 100);
+                Test->AddInfo(FString::Printf(TEXT("LIVE SLM dispatch kind=%d request=%llu elapsed_ms=%.3f tick=%llu"),
+                                              Tool, RequestId, Milliseconds, IssuedTick));
+                return false;
+            }
+            PendingTicksAdvanced |= S->Simulation.TickIndex > IssuedTick;
+            const auto *R = Accepted(*S, RequestId);
+            if (!R)
+            {
+                if (S->Simulation.TickIndex > IssuedTick)
+                {
+                    PendingTicksAdvanced = true;
+                }
+                if (Now - Issued > 12)
+                {
+                    Test->AddError(
+                        FString::Printf(TEXT("Live model did not produce an accepted directive for kind %d"), Tool));
+                    for (const auto &Record : S->CommandRecords)
+                    {
+                        if (Record.bResolvedOutcome && Record.Directive.RequestId == RequestId)
+                        {
+                            Test->AddError(FString::Printf(TEXT("Live rejection: %s"), *Record.Outcome));
+                        }
+                    }
+                    S->bAutomaticAdvance = false;
+                    return true;
+                }
+                return false;
+            }
+            Test->AddInfo(FString::Printf(
+                TEXT("LIVE MODEL proposal actual_kind=%d action=%d room=%d subject=%d mode=%d pretext=%s"),
+                int32(R->Directive.Kind), int32(R->Directive.Args.Action), R->Directive.Args.Room,
+                R->Directive.Args.Subject, R->Directive.Args.Mode, *R->Directive.Pretext));
+            Test->TestTrue(TEXT("Accepted live directive came from HTTP, not deterministic fallback"),
+                           R->Directive.bFromExternalProvider);
+            Test->TestTrue(TEXT("Live directive matches requested tool kind"), R->Directive.Kind == Kinds[Tool]);
+            Test->TestTrue(TEXT("Simulation progresses at fixed ticks during model latency"), PendingTicksAdvanced);
+            if (Tool == 0)
+            {
+                Test->TestEqual(TEXT("Live optical target is bridge"), R->Directive.Args.Room, 2);
+            }
+            if (Tool == 1)
+            {
+                Test->TestEqual(TEXT("Live ECG subject is VALE"), R->Directive.Args.Subject, 0);
+            }
+            if (Tool == 2)
+            {
+                Test->TestTrue(TEXT("Live route is typed route_crew"),
+                               R->Directive.Args.Action == EShipSimAction::RouteCrew);
+                Test->TestEqual(TEXT("Live route subject is CHEN"), R->Directive.Args.Subject, 1);
+                Test->TestEqual(TEXT("Live action commits at exact next fixed tick"), R->CommitTick, R->Tick + 1);
+            }
+            if (Tool == 3)
+            {
+                Test->TestTrue(TEXT("Live voice proposal is gated hybrid state"),
+                               S->VoicePresentation.Mode == EVoicePresentationMode::HybridTextAndVoice);
+            }
+            Test->AddInfo(FString::Printf(
+                TEXT("LIVE SLM accepted kind=%d request=%llu external=%d elapsed_s=%.3f ticks=%llu commit=%llu"), Tool,
+                RequestId, R->Directive.bFromExternalProvider, Now - Issued, S->Simulation.TickIndex - IssuedTick,
+                R->CommitTick));
+            RequestId = 0;
+            PendingTicksAdvanced = false;
+            if (++Tool < 4)
+            {
+                return false;
+            }
+            S->bAutomaticAdvance = false;
+            const uint64 Tick = S->Simulation.TickIndex;
+            Replay->BeginDirectorReplay(S->CommandRecords);
+            Replay->AdvanceSteps(int32(Tick));
+            Test->TestEqual(TEXT("Live HTTP accepted-outcome replay invokes no model"), Never->Calls, 0);
+            Test->TestEqual(TEXT("Live SLM outcome replay matches SurveillanceStateHash"),
+                            Replay->SurveillanceStateHash(), S->SurveillanceStateHash());
+            Test->AddInfo(FString::Printf(TEXT("LIVE SLM replay tick=%llu native_hash=%llu replay_hash=%llu"), Tick,
+                                          S->SurveillanceStateHash(), Replay->SurveillanceStateHash()));
+            Probe = Fresh();
+            Test->TestTrue(TEXT("Unreachable loopback test endpoint configured"),
+                           Probe->ConfigureDirectorEndpoint(TEXT("http://127.0.0.1:1/v1/chat/completions"), .25f,
+                                                            TEXT("qwen2.5:3b")));
+            RequestId = Probe->BeginDirectorRequest(TEXT("send chen to bridge"));
+            Issued = Now;
+            Probe->ServiceDirector();
+            Stage = 2;
+            return false;
+        }
+        if (Stage == 2 || Stage == 3)
+        {
+            const double ServiceAt = FPlatformTime::Seconds();
+            Probe->ServiceDirector();
+            Test->TestTrue(TEXT("Failure-path service does not block game thread"),
+                           FPlatformTime::Seconds() - ServiceAt < .1);
+            Probe->AdvanceSteps(1);
+            const auto *R = Accepted(*Probe, RequestId);
+            if (!R)
+            {
+                if (Now - Issued > 3)
+                {
+                    Test->AddError(TEXT("Live HTTP failure did not resolve deterministic fallback"));
+                    return true;
+                }
+                return false;
+            }
+            Test->TestFalse(TEXT("Failure path accepted offline fallback, not invalid external payload"),
+                            R->Directive.bFromExternalProvider);
+            Test->TestTrue(TEXT("Failure path resolved canonical typed action"),
+                           R->Directive.Kind == EShipDirectiveKind::SimAction &&
+                               R->Directive.Args.Action == EShipSimAction::RouteCrew);
+            Test->TestEqual(TEXT("Failure fallback routes Chen to bridge"), Probe->Simulation.Bodies[1].AssignedRoom,
+                            2);
+            Test->TestEqual(TEXT("Failure fallback commits at next tick"), R->CommitTick, R->Tick + 1);
+            int32 Count = 0, Rejected = 0;
+            for (const auto &Record : Probe->CommandRecords)
+            {
+                if (Record.bResolvedOutcome && Record.Directive.RequestId == RequestId)
+                {
+                    if (Record.bAccepted)
+                    {
+                        ++Count;
+                    }
+                    else
+                    {
+                        ++Rejected;
+                    }
+                }
+            }
+            Test->TestEqual(TEXT("Failure fallback resolves once"), Count, 1);
+            Test->TestTrue(TEXT("HTTP/schema rejection is journaled"), Rejected > 0);
+            Test->AddInfo(FString::Printf(TEXT("LIVE SLM fallback path=%s elapsed_s=%.3f rejected=%d accepted=%d"),
+                                          Stage == 2 ? TEXT("unreachable") : TEXT("malformed-json"), Now - Issued,
+                                          Rejected, Count));
+            Probe->ShutdownDirector();
+            if (Stage == 2)
+            {
+                const FString Endpoint =
+                    FPlatformMisc::GetEnvironmentVariable(TEXT("SCUT_DIRECTOR_MALFORMED_ENDPOINT"));
+                if (Endpoint.IsEmpty())
+                {
+                    Test->AddInfo(TEXT("No malformed HTTP fixture requested; HybridDirector covers parser/provider "
+                                       "malformed fallback."));
+                    Replay->ShutdownDirector();
+                    return true;
+                }
+                Probe = Fresh();
+                Test->TestTrue(TEXT("Malformed HTTP fixture configured"),
+                               Probe->ConfigureDirectorEndpoint(Endpoint, 1, TEXT("qwen2.5:3b")));
+                RequestId = Probe->BeginDirectorRequest(TEXT("send chen to bridge"));
+                Issued = Now;
+                Probe->ServiceDirector();
+                Stage = 3;
+                return false;
+            }
+            Replay->ShutdownDirector();
+            return true;
+        }
+        return true;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0, Tool = 0;
+    uint64 RequestId = 0, IssuedTick = 0;
+    bool PendingTicksAdvanced = false;
+    double Started = 0, Issued = 0;
+    TStrongObjectPtr<UDirectOrScutSimSubsystem> Replay, Probe;
+    TSharedPtr<FDirectorTestProvider> Never;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLocalSlmLiveTest, "DirectOrScut.Live.OllamaPIE",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FLocalSlmLiveTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FLocalSlmLiveCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

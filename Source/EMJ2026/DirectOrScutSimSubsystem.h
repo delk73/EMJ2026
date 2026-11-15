@@ -184,7 +184,10 @@ struct FShipAIDirective
     EShipDirectiveKind Kind = EShipDirectiveKind::Unknown;
     FShipDirectiveArgs Args;
     FString Pretext;
+    // Diagnostic provenance set by the HTTP adapter, never accepted from wire arguments.
+    bool bFromExternalProvider = false;
 };
+using FDirectorDirectiveEnvelope = FShipAIDirective;
 struct FShipAIRequest
 {
     uint64 RequestId = 0;
@@ -451,7 +454,15 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     uint64 BeginDirectorRequest(const FString &Input);
     bool ReceiveDirectorProposal(FShipAIDirective Directive, bool Fallback = false);
     void ServiceDirector(double Now = -1);
-    bool ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds = 2);
+    bool ConfigureDirectorEndpoint(const FString &Endpoint, float TimeoutSeconds = 2, const FString &Model = TEXT(""));
+    const FString &GetDirectorModel() const
+    {
+        return DirectorModel;
+    }
+    float GetDirectorTimeout() const
+    {
+        return DirectorTimeout;
+    }
     bool HasDirectorEndpoint() const
     {
         return bDirectorEndpoint;
@@ -506,6 +517,7 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     uint64 NextDirectorRequest = 1;
     bool bDirectorEndpoint = false, bDirectorReplay = false, bDirectorShuttingDown = false;
     float DirectorTimeout = 2;
+    FString DirectorModel;
     TMap<uint64, FPendingDirectorRequest> DirectorRequests;
     TArray<FShipAIDirective> DirectorActions, DirectorPresentationQueue;
     TArray<FDirectorCommandRecord> DirectorReplay;
