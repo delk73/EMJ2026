@@ -1,6 +1,6 @@
 # DIRECT OR SCUT - Opening Shift: Connected Incident Briefing
 
-**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). A1 connected startup and the current A2 incident are implemented; A3 script-driven engagement is implemented and tested; joint acceptance is pending. A4 judgments remain separate work. See DEVLOG for evidence and limits. The plan governs any conflict.
+**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). A1 connected startup and the current A2 incident are implemented; A3 script-driven engagement is implemented and tested; joint acceptance is pending. A4 judgment/report implementation is tested; the connected-to-closure loop remains subject to joint acceptance. See DEVLOG for evidence and limits. The plan governs any conflict.
 **Objective:** Compose the existing simulation, terminal, and MOTHER-7 systems into one playable opening: Director Scut is already connected to the remote supervisory terminal and receives a concise MOTHER-7 incident briefing.
 
 The filename `OPENING_SHIFT.md` is retained for continuity. This document supersedes the earlier "emergency supervisory activation" proposal (an emergency already underway, a reactor supply interruption and prior local recovery attempts as the premise). That premise is withdrawn; the existing Experiment 1 supply interruption remains a technical/regression fixture, not the opening.

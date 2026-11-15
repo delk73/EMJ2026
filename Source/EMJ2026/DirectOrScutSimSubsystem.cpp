@@ -383,7 +383,9 @@ void UDirectOrScutSimSubsystem::LogEvent(const FString &Text, int32 Room, bool T
 }
 FString UDirectOrScutSimSubsystem::SubmitDirective(const FString &Input)
 {
-    if (ExperimentPhase == EExperimentPhase::Resolved)
+    if (ExperimentPhase == EExperimentPhase::Resolved &&
+        (bLegacyExperiment ||
+         (Input.ToLower() != TEXT("crew") && Input.ToLower() != TEXT("rooms") && Input.ToLower() != TEXT("status"))))
     {
         return TEXT("Experiment resolved. Use reset_experiment or scenario behavioral|medical.");
     }
@@ -407,7 +409,7 @@ FString UDirectOrScutSimSubsystem::SubmitDirective(const FString &Input)
         return QueueOperatorCommand(Line) ? TEXT("SYSTEM> Challenge submitted for typed validation.")
                                           : TEXT("SYSTEM> Challenge queue unavailable.");
     }
-    if (bAILink && Line != TEXT("status") && Line != TEXT("crew") && Line != TEXT("rooms"))
+    if (bAILink && !FinalReport.bFinalized && Line != TEXT("status") && Line != TEXT("crew") && Line != TEXT("rooms"))
     {
         return BeginDirectorRequest(Input) ? FString() : TEXT("AI-LINK> Request rejected: lifecycle or bounded queue.");
     }
@@ -545,6 +547,11 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
         else if (Op == TEXT("calm") || (Op == TEXT("protocol") && R >= 0))
         {
             Simulation.BroadcastProtocol(Op == TEXT("calm") ? -1 : R);
+            if (!bLegacyExperiment)
+            {
+                RetainCausal(TEXT("operational_outcome"), TEXT("authoritative_simulation"),
+                             TEXT("Reassurance protocol broadcast: ") + Line, CausalIncident, 0, true);
+            }
             LogEvent(TEXT("Ship AI: automated reassurance protocol broadcast."), R);
         }
         else if ((Op == TEXT("open") || Op == TEXT("close") || Op == TEXT("seal")) && T.Num() == 2)
@@ -574,6 +581,11 @@ void UDirectOrScutSimSubsystem::ProcessSimulationDirectives()
                 }
                 AudioCue(3);
                 CaptureIncident(TEXT("Bulkhead protocol: ") + Line, R);
+            }
+            if (!bLegacyExperiment && Any)
+            {
+                RetainCausal(TEXT("operational_outcome"), TEXT("authoritative_simulation"),
+                             TEXT("Bulkhead protocol applied: ") + Line, CausalIncident, 0, true);
             }
             LogEvent(Any ? TEXT("[BULKHEAD] Protocol applied.")
                          : TEXT("Invalid door or room; doors are 0-8, rooms use full names."),
@@ -810,6 +822,11 @@ void UDirectOrScutSimSubsystem::ConfigureScenario(bool Medical)
 {
     bMedicalScenario = Medical;
     IncidentClaimId = PersonnelRequestTick = 0;
+    FinalReport = {};
+    for (auto &Id : VentOutcomeIds)
+    {
+        Id = 0;
+    }
     IncidentEvidence.Reset();
     bPersonnelDelayReported = bPersonnelOutcomeReported = false;
     PersonnelRequestRoom = -1;
@@ -913,6 +930,123 @@ void UDirectOrScutSimSubsystem::ConfigureScenario(bool Medical)
                                  Personnel.InvestigationReply, TEXT("discovery")});
         Personnel.Responses.Add({Personnel.DeferralLabel, TEXT("not now|defer"), EScenarioResponseAction::Defer,
                                  INDEX_NONE, Personnel.Id, Personnel.DeferralReply, TEXT("deferral")});
+        // Review closes only on Scut's explicit submission; its opportunity is not a deadline.
+        FScenarioBeat Review;
+        Review.Id = TEXT("incident_judgment");
+        Review.Gate = EBeatGate::JudgmentReview;
+        Review.EarliestTick = 4500;
+        Review.RequiredBeat = Personnel.Id;
+        Review.EvidenceSource = Dispatch.Id;
+        Review.ResponsePriority = 20;
+        Review.Dialogue = TEXT(
+            "Director, the compartment reports and the workload request are now ready for review. I recommend closing "
+            "without a definitive finding. Operations can continue under that disposition. You may certify a different "
+            "account, inspect the original record, challenge dispatch, or leave the review open.");
+        Review.InvestigatedDialogue =
+            TEXT(" Your independent optical finding is available for a qualified explanation of the location account.");
+        Review.FollowupDialogue = TEXT(" Your recorded personnel direction was: {decision}.");
+        Review.DelayDialogue = TEXT(" The personnel request is still open.");
+        Review.UninvestigatedDialogue =
+            TEXT(" Dispatch remains a provisional account; the retained observation is still available.");
+        Review.Clarification =
+            TEXT("Select a disposition, ask to inspect the original records, challenge dispatch, or defer judgment.");
+        auto Judgment = [&](const TCHAR *Label, const TCHAR *Aliases, EIncidentDisposition Disposition,
+                            EJudgmentRequirement Requirement, int32 Room, const TCHAR *Position, const TCHAR *Finding,
+                            const TCHAR *Limits, bool Acknowledge, const TCHAR *Reply)
+        {
+            FScenarioResponse R;
+            R.Label = Label;
+            R.Aliases = Aliases;
+            R.Action = EScenarioResponseAction::FinalizeReport;
+            R.TargetBeat = Review.Id;
+            R.Disposition = Disposition;
+            R.Requirement = Requirement;
+            R.RequiredRoom = Room;
+            R.ReportPosition = Position;
+            R.ReportFinding = Finding;
+            R.ReportLimitations = Limits;
+            R.bAcknowledgeEvidence = Acknowledge;
+            R.Reply = Reply;
+            R.bHideWhenUnavailable = true;
+            Review.Responses.Add(R);
+        };
+        Judgment(
+            TEXT("Insufficient evidence : close without a definitive finding"),
+            TEXT("close without a finding|insufficient evidence|accept your recommendation"),
+            EIncidentDisposition::InsufficientEvidence, EJudgmentRequirement::Any, -1,
+            TEXT("Close this review without certifying a shared cause or the dispatch account."),
+            TEXT("Reports received; no common explanation certified."),
+            TEXT("The incident may warrant further operational work. Closure is administrative, not proof of safety."),
+            true, TEXT("Filed without a definitive finding. The review is closed; the ship's record remains intact."));
+        Judgment(TEXT("Resolved : certify operational resolution"), TEXT("declare it resolved|resolve this incident"),
+                 EIncidentDisposition::Resolved, EJudgmentRequirement::SafeOperations, -1,
+                 TEXT("Declare the incident operationally resolved and retain dispatch as a working account."),
+                 TEXT("Operating conditions support closure; dispatch is adopted provisionally."),
+                 TEXT("A shared cause is not certified. Undisclosed or omitted observations remain in the independent "
+                      "record."),
+                 false, TEXT("Operational resolution is filed. Your certification is now the official account."));
+        Judgment(TEXT("Explained : qualify dispatch using the optical finding"),
+                 TEXT("file the optical finding|qualified explanation|explain the location account"),
+                 EIncidentDisposition::Explained, EJudgmentRequirement::DisclosedEvidence, -1,
+                 TEXT("Record the independently observed personnel location as a qualified finding about the dispatch "
+                      "account."),
+                 TEXT("The retained optical sample establishes an observed location; dispatch is a separate account, "
+                      "possibly stale."),
+                 TEXT("This finding addresses location only. It does not explain the compartment vibrations or "
+                      "establish deception."),
+                 true,
+                 TEXT("The qualified finding is filed. The recorded observation and dispatch account remain separately "
+                      "identifiable."));
+        Judgment(TEXT("Contained : record BRIDGE isolation"), TEXT("record containment|file containment"),
+                 EIncidentDisposition::Contained, EJudgmentRequirement::SealedRoom, 2,
+                 TEXT("Record BRIDGE isolation as containment without certifying a source."),
+                 TEXT("BRIDGE bulkheads are sealed at submission."),
+                 TEXT("Isolation does not establish a cause or guarantee safety elsewhere."), true,
+                 TEXT("Containment is filed against the actual bulkhead state. No source has been certified."));
+        Judgment(
+            TEXT("Reclassified : record routine operational variance"),
+            TEXT("reclassify the incident|routine operational variance"), EIncidentDisposition::Reclassified,
+            EJudgmentRequirement::Any, -1,
+            TEXT("Reclassify the incident as routine operational variance, retaining dispatch provisionally."),
+            TEXT("The selected official account adopts dispatch for administrative purposes."),
+            TEXT("This classification does not resolve any disagreement in the independently retained observations."),
+            false,
+            TEXT("Reclassification is filed. The original record will retain its less convenient level of detail."));
+        Judgment(TEXT("Vented : record the executed AIRLOCK_CHAMBER purge"),
+                 TEXT("record the executed purge|file vented disposition"), EIncidentDisposition::Vented,
+                 EJudgmentRequirement::RecordedVent, 7,
+                 TEXT("Record the executed AIRLOCK_CHAMBER purge as the director's operational disposition."),
+                 TEXT("An authorized purge was executed and the compartment is depressurized at submission."),
+                 TEXT("The purge does not establish that the reported disturbance originated there or has ceased."),
+                 true, TEXT("The executed purge is filed. Its operational consequences remain part of the record."));
+        Review.Responses.Add(
+            {TEXT("Inspect the original records"), TEXT("show me the evidence|let me investigate|investigate further"),
+             EScenarioResponseAction::DiscloseEvidence, INDEX_NONE, Dispatch.Id,
+             TEXT("The original observation is available. Your review remains open."), TEXT("discovery")});
+        Review.Responses.Last().bHideWhenUnavailable = true;
+        Review.Responses.Add(
+            {TEXT("Challenge the dispatch account"), TEXT("challenge dispatch|challenge her interpretation"),
+             EScenarioResponseAction::ChallengeClaim, INDEX_NONE, Dispatch.Id,
+             TEXT("The challenge has been submitted for validation. Your review remains open."), TEXT("challenge")});
+        Review.Responses.Last().bHideWhenUnavailable = true;
+        Review.Responses.Add({TEXT("Defer judgment"), TEXT("not now|later|defer judgment"),
+                              EScenarioResponseAction::Defer, INDEX_NONE, Review.Id,
+                              TEXT("The review remains open. Ship operations continue while you consider the record."),
+                              TEXT("deferral")});
+        Review.Responses.Last().bHideWhenUnavailable = true;
+        for (const auto Action : {EScenarioResponseAction::ReviewReport, EScenarioResponseAction::ReviewRecords,
+                                  EScenarioResponseAction::RestartSession})
+        {
+            FScenarioResponse R;
+            R.Action = Action;
+            R.TargetBeat = Review.Id;
+            R.bHideWhenUnavailable = true;
+            R.Label = Action == EScenarioResponseAction::ReviewReport    ? TEXT("Read final report")
+                      : Action == EScenarioResponseAction::ReviewRecords ? TEXT("Inspect retained records")
+                                                                         : TEXT("Begin new session");
+            Review.Responses.Add(R);
+        }
+        BeatDeck.Add(MoveTemp(Review));
         ++MenuRevision;
         return;
     }
@@ -1089,6 +1223,34 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
                                          DirectOrScut::RoomName(IncidentEvidence->CrewRooms[0]), Tick),
                          CausalIncident, Id, false);
         }
+        else if (Beat.Gate == EBeatGate::JudgmentReview)
+        {
+            const int32 Required = FindScenarioBeat(Beat.RequiredBeat);
+            if (!BeatDeck.IsValidIndex(Required) || !BeatDeck[Required].bFired)
+            {
+                continue;
+            }
+            const int32 Source = FindScenarioBeat(Beat.EvidenceSource);
+            FString Review = Beat.Dialogue + (BeatDeck.IsValidIndex(Source) && BeatDeck[Source].bEvidenceDisclosed
+                                                  ? Beat.InvestigatedDialogue
+                                                  : Beat.UninvestigatedDialogue);
+            const auto &Prior = BeatDeck[Required];
+            if (!Prior.bResolved)
+            {
+                Review += Beat.DelayDialogue;
+            }
+            else if (const auto *Decision = CausalContext.FindByPredicate(
+                         [&](const auto &Record) { return Record.Id == Prior.DecisionId && Record.bPlayerVisible; }))
+            {
+                FString Summary = Beat.FollowupDialogue;
+                Summary.ReplaceInline(TEXT("{decision}"), *Decision->Text);
+                Review += Summary;
+            }
+            Beat.bFired = true;
+            SetScreenMenu(EShipAIScreenMenu::Events);
+            RecordCue(2, .6f, TEXT("MOTHER-7> ") + Review);
+            RetainCausal(TEXT("review"), TEXT("mother7_claim"), Review, CausalIncident, 0, true);
+        }
         else if (Beat.Gate == EBeatGate::PersonnelRelief)
         {
             if (!CanFollowCrew(2))
@@ -1117,7 +1279,7 @@ void UDirectOrScutSimSubsystem::EvaluateOrdinaryIncident()
         {
             RetainCausal(Record.Kind, Record.Provenance, Record.Text, CausalIncident, Beat.ClaimId, false);
         }
-        if (Beat.Gate != EBeatGate::PersonnelRelief)
+        if (Beat.Gate != EBeatGate::PersonnelRelief && Beat.Gate != EBeatGate::JudgmentReview)
         {
             Beat.bResolved = true; // Observations are not menu decisions.
         }
@@ -1400,7 +1562,7 @@ void UDirectOrScutSimSubsystem::FixedStep()
     }
     const uint64 BeforeReset = RuntimeRevision;
     ProcessDirectives();
-    if (RuntimeRevision != BeforeReset)
+    if (RuntimeRevision != BeforeReset || ExperimentPhase != EExperimentPhase::Active)
     {
         return;
     }
@@ -1506,6 +1668,13 @@ bool UDirectOrScutSimSubsystem::BeginScut(int32 Room)
     }
     ScutTargets |= Targets;
     SecretAgendas[3].bActivated = true;
+    if (!bLegacyExperiment)
+    {
+        VentOutcomeIds[Room] = RetainCausal(TEXT("operational_outcome"), TEXT("authoritative_simulation"),
+                                            FString::Printf(TEXT("Validated purge executed in %s at tick %llu."),
+                                                            DirectOrScut::RoomName(Room), Simulation.TickIndex),
+                                            CausalIncident, 0, true);
+    }
     RecordCue(Room, 1, TEXT("Intentional SCUT containment protocol initiated"));
     return true;
 }
@@ -3373,7 +3542,8 @@ bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString &Input)
     const FString Lower = Line.ToLower();
     const bool Lifecycle = Lower == TEXT("new_session") || Lower == TEXT("reset_experiment") ||
                            Lower == TEXT("scenario behavioral") || Lower == TEXT("scenario medical");
-    if (ExperimentPhase == EExperimentPhase::Resolved && !Lifecycle && !Lower.StartsWith(TEXT("incident_reel")))
+    if (bLegacyExperiment && ExperimentPhase == EExperimentPhase::Resolved && !Lifecycle &&
+        !Lower.StartsWith(TEXT("incident_reel")))
     {
         return false;
     }
@@ -3382,6 +3552,11 @@ bool UDirectOrScutSimSubsystem::QueueConsoleCommand(const FString &Input)
 }
 void UDirectOrScutSimSubsystem::SetScreenMenu(EShipAIScreenMenu Menu)
 {
+    if (FinalReport.bFinalized && Menu != EShipAIScreenMenu::Events && Menu != EShipAIScreenMenu::None)
+    {
+        LogEvent(TEXT("MOTHER-7> This review is closed. The final report and retained records remain available."));
+        return;
+    }
     if (ActiveMenu != Menu)
     {
         MenuParents.Add(ActiveMenu);
@@ -3424,6 +3599,31 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
             continue;
         }
         AudioCue(7);
+        if (!bLegacyExperiment && (Line == TEXT("report") || Line == TEXT("report records")))
+        {
+            LogEvent(FinalReportText(Line == TEXT("report records")));
+            continue;
+        }
+        const bool Lifecycle = Line == TEXT("new_session") || Line == TEXT("reset_experiment") ||
+                               Line == TEXT("scenario behavioral") || Line == TEXT("scenario medical");
+        if (FinalReport.bFinalized && !Lifecycle && T[0] != TEXT("menu") && T[0] != TEXT("choose") &&
+            T[0] != TEXT("help") && T[0] != TEXT("?"))
+        {
+            if (Line == TEXT("incident status") || Line == TEXT("investigate incident"))
+            {
+                LogEvent(IncidentReport(Line == TEXT("investigate incident")));
+            }
+            else if (Line == TEXT("crew") || Line == TEXT("rooms") || Line == TEXT("status"))
+            {
+                LogEvent(SubmitDirective(Line));
+            }
+            else if (!HandleIncidentResponse(Input))
+            {
+                LogEvent(TEXT("MOTHER-7> The report is finalized. You may inspect it and the retained records, or "
+                              "begin a new session."));
+            }
+            continue;
+        }
         if (T[0] == TEXT("incident_reel"))
         {
             ExecuteCrisisCommand(T);
@@ -3635,7 +3835,7 @@ void UDirectOrScutSimSubsystem::ProcessConsoleCommands()
 // Bounded matching only against the pending authored choice set. Console verbs take precedence.
 bool UDirectOrScutSimSubsystem::HandleIncidentResponse(const FString &Input)
 {
-    if (bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active)
+    if (bLegacyExperiment || (ExperimentPhase != EExperimentPhase::Active && !FinalReport.bFinalized))
     {
         return false;
     }
@@ -3735,20 +3935,39 @@ int32 UDirectOrScutSimSubsystem::FindScenarioBeat(FName Id) const
 }
 bool UDirectOrScutSimSubsystem::ScenarioResponseAvailable(int32 Beat, int32 Response) const
 {
-    if (bLegacyExperiment || ExperimentPhase != EExperimentPhase::Active || !BeatDeck.IsValidIndex(Beat) ||
-        !BeatDeck[Beat].bFired || !BeatDeck[Beat].Responses.IsValidIndex(Response))
+    if (bLegacyExperiment || !BeatDeck.IsValidIndex(Beat) || !BeatDeck[Beat].bFired ||
+        !BeatDeck[Beat].Responses.IsValidIndex(Response))
     {
         return false;
     }
     const auto &R = BeatDeck[Beat].Responses[Response];
+    const bool ReviewControl = R.Action == EScenarioResponseAction::ReviewReport ||
+                               R.Action == EScenarioResponseAction::ReviewRecords ||
+                               R.Action == EScenarioResponseAction::RestartSession;
     const int32 Target = FindScenarioBeat(R.TargetBeat);
     if (!BeatDeck.IsValidIndex(Target) || !BeatDeck[Target].bFired)
     {
         return false;
     }
     const auto &B = BeatDeck[Target];
+    if (ReviewControl)
+    {
+        return FinalReport.bFinalized && FinalReport.BeatId == B.Id;
+    }
+    if (ExperimentPhase != EExperimentPhase::Active || FinalReport.bFinalized)
+    {
+        return false;
+    }
     switch (R.Action)
     {
+    case EScenarioResponseAction::FinalizeReport:
+        return !B.bResolved && R.Disposition != EIncidentDisposition::None && JudgmentRequirementMet(R, B);
+    case EScenarioResponseAction::ChallengeClaim:
+        return B.bEvidenceDisclosed && B.ClaimId && IsClaimContradicted(B.ClaimId);
+    case EScenarioResponseAction::ReviewReport:
+    case EScenarioResponseAction::ReviewRecords:
+    case EScenarioResponseAction::RestartSession:
+        return false;
     case EScenarioResponseAction::ResolveChoice:
         return !B.bResolved && B.Node.Choices.IsValidIndex(R.Choice);
     case EScenarioResponseAction::Defer:
@@ -3762,6 +3981,10 @@ bool UDirectOrScutSimSubsystem::ScenarioResponseAvailable(int32 Beat, int32 Resp
 }
 int32 UDirectOrScutSimSubsystem::ActiveScenarioResponseBeat() const
 {
+    if (FinalReport.bFinalized)
+    {
+        return FindScenarioBeat(FinalReport.BeatId);
+    }
     int32 Active = INDEX_NONE;
     for (int32 I = 0; I < BeatDeck.Num(); ++I)
     {
@@ -3794,6 +4017,29 @@ bool UDirectOrScutSimSubsystem::ExecuteScenarioResponse(int32 Beat, int32 Respon
     if (R.Action == EScenarioResponseAction::ResolveChoice)
     {
         return ResolveBeat(Target, R.Choice);
+    }
+    if (R.Action == EScenarioResponseAction::FinalizeReport)
+    {
+        return FinalizeIncidentReport(Beat, Response);
+    }
+    if (R.Action == EScenarioResponseAction::ReviewReport || R.Action == EScenarioResponseAction::ReviewRecords)
+    {
+        LogEvent(FinalReportText(R.Action == EScenarioResponseAction::ReviewRecords));
+        return true;
+    }
+    if (R.Action == EScenarioResponseAction::RestartSession)
+    {
+        ResetSimulation();
+        return true;
+    }
+    if (R.Action == EScenarioResponseAction::ChallengeClaim)
+    {
+        if (!QueueOperatorChallenge(B.ClaimId, false))
+        {
+            return false;
+        }
+        LogEvent(TEXT("MOTHER-7> ") + R.Reply);
+        return true;
     }
     if (R.Action == EScenarioResponseAction::DiscloseEvidence)
     {
@@ -3850,6 +4096,230 @@ FString UDirectOrScutSimSubsystem::DiscloseScenarioEvidence(int32 Beat)
     RetainCausal(TEXT("discovery"), TEXT("authoritative_optics"), Finding, CausalIncident, B.ClaimId, true);
     ++MenuRevision;
     return TEXT("\n") + Finding;
+}
+const TCHAR *UDirectOrScutSimSubsystem::DispositionName(EIncidentDisposition Disposition)
+{
+    switch (Disposition)
+    {
+    case EIncidentDisposition::Resolved:
+        return TEXT("Resolved");
+    case EIncidentDisposition::Explained:
+        return TEXT("Explained");
+    case EIncidentDisposition::Contained:
+        return TEXT("Contained");
+    case EIncidentDisposition::Reclassified:
+        return TEXT("Reclassified");
+    case EIncidentDisposition::InsufficientEvidence:
+        return TEXT("Insufficient evidence");
+    case EIncidentDisposition::Vented:
+        return TEXT("Vented");
+    default:
+        return TEXT("Open");
+    }
+}
+bool UDirectOrScutSimSubsystem::JudgmentRequirementMet(const FScenarioResponse &R, const FScenarioBeat &B) const
+{
+    switch (R.Requirement)
+    {
+    case EJudgmentRequirement::Any:
+        return true;
+    case EJudgmentRequirement::SafeOperations:
+        for (int32 Room = 0; Room < 8; ++Room)
+        {
+            if (!Simulation.Rooms[Room].bIsPressurized || Simulation.Rooms[Room].bHullBreach ||
+                StationRooms[Room].bO2Warning || StationRooms[Room].Power == EPowerState::Offline)
+            {
+                return false;
+            }
+        }
+        for (int32 Crew = 0; Crew < 4; ++Crew)
+        {
+            if (Simulation.Bodies[Crew].bRegistered &&
+                (Simulation.Bodies[Crew].Integrity <= 0 ||
+                 Simulation.Bodies[Crew].State == EDirectOrScutUnitState::Ejected))
+            {
+                return false;
+            }
+        }
+        return true;
+    case EJudgmentRequirement::DisclosedEvidence:
+    {
+        const int32 Source = FindScenarioBeat(B.EvidenceSource);
+        return BeatDeck.IsValidIndex(Source) && BeatDeck[Source].bEvidenceDisclosed &&
+               ReadClaimEvidence(BeatDeck[Source].ClaimId).IsSet();
+    }
+    case EJudgmentRequirement::SealedRoom:
+        return R.RequiredRoom >= 0 && R.RequiredRoom < 8 && IsRoomSealed(R.RequiredRoom);
+    case EJudgmentRequirement::RecordedVent:
+        return R.RequiredRoom >= 0 && R.RequiredRoom < 8 && VentOutcomeIds[R.RequiredRoom] &&
+               !Simulation.Rooms[R.RequiredRoom].bIsPressurized;
+    }
+    return false;
+}
+TArray<int32> UDirectOrScutSimSubsystem::ScenarioMenuResponses(int32 Beat) const
+{
+    TArray<int32> Responses;
+    if (!BeatDeck.IsValidIndex(Beat))
+    {
+        return Responses;
+    }
+    for (int32 R = 0; R < BeatDeck[Beat].Responses.Num(); ++R)
+    {
+        if (!BeatDeck[Beat].Responses[R].bHideWhenUnavailable || ScenarioResponseAvailable(Beat, R))
+        {
+            Responses.Add(R);
+        }
+    }
+    return Responses;
+}
+bool UDirectOrScutSimSubsystem::FinalizeIncidentReport(int32 Beat, int32 Response)
+{
+    if (!ScenarioResponseAvailable(Beat, Response) || !DirectorActions.IsEmpty() || !PendingDirectives.IsEmpty())
+    {
+        return false;
+    }
+    const auto &B = BeatDeck[Beat];
+    const auto &R = B.Responses[Response];
+    if (R.Action != EScenarioResponseAction::FinalizeReport || FinalReport.bFinalized)
+    {
+        return false;
+    }
+    FIncidentFinalReport Report;
+    Report.Tick = Simulation.TickIndex;
+    Report.Generation = DirectorGeneration;
+    Report.StateHash = Simulation.StateHash();
+    Report.BeatId = B.Id;
+    Report.Disposition = R.Disposition;
+    Report.Position = R.ReportPosition;
+    Report.Findings = R.ReportFinding;
+    Report.Limitations = R.ReportLimitations;
+    Report.Acknowledgment = R.Reply;
+    Report.History = CausalContext;
+    const int32 FirstAction = FMath::Max(0, CommandRecords.Num() - 64);
+    for (int32 I = FirstAction; I < CommandRecords.Num(); ++I)
+    {
+        Report.Actions.Add(CommandRecords[I]);
+    }
+    for (int32 I = FMath::Max(0, DirectorClaims.Num() - 64); I < DirectorClaims.Num(); ++I)
+    {
+        Report.Claims.Add(DirectorClaims[I]);
+    }
+    const int32 Source = FindScenarioBeat(B.EvidenceSource);
+    if (BeatDeck.IsValidIndex(Source))
+    {
+        const auto &EvidenceBeat = BeatDeck[Source];
+        Report.Evidence = ReadClaimEvidence(EvidenceBeat.ClaimId);
+        if (Report.Evidence.IsSet()) Report.EvidenceClaimId = EvidenceBeat.ClaimId;
+        Report.bEvidenceAcknowledged =
+            R.bAcknowledgeEvidence && EvidenceBeat.bEvidenceDisclosed && Report.Evidence.IsSet();
+        if (Report.bEvidenceAcknowledged)
+        {
+            Report.Findings +=
+                FString::Printf(TEXT(" Acknowledged independent sample: %s observed in %s at tick %llu; claim %llu "
+                                     "remains separately attributed."),
+                                *FString(CrewNames[EvidenceBeat.ClaimSubject]).ToUpper(),
+                                DirectOrScut::RoomName(Report.Evidence->CrewRooms[EvidenceBeat.ClaimSubject]),
+                                Report.Evidence->Tick, EvidenceBeat.ClaimId);
+        }
+    }
+    if (Report.bEvidenceAcknowledged)
+    {
+        for (const auto &Claim : Report.Claims)
+        {
+            if (Claim.bFlagged || Claim.bOverridden)
+            {
+                Report.Findings +=
+                    FString::Printf(TEXT(" Claim %llu was challenged%s; the original observation remains retained."),
+                                    Claim.Id, Claim.bOverridden ? TEXT(" and its presentation corrected") : TEXT(""));
+            }
+        }
+    }
+    if (!Report.bEvidenceAcknowledged)
+    {
+        Report.Limitations += TEXT(" No independent optical finding is acknowledged in this official account.");
+    }
+    if (R.Requirement == EJudgmentRequirement::RecordedVent)
+    {
+        Report.OperationalOutcomeId = VentOutcomeIds[R.RequiredRoom];
+    }
+    for (int32 Crew = 0; Crew < 4; ++Crew)
+    {
+        const auto &U = Simulation.Bodies[Crew];
+        Report.RecordedState +=
+            FString::Printf(TEXT("%s: room %s; integrity %.0f; stress %.0f; utility %.0f%%; state %s.\n"),
+                            *FString(CrewNames[Crew]).ToUpper(), DirectOrScut::RoomName(U.Room), U.Integrity, U.Stress,
+                            U.Profile.Utility * 100, DirectOrScutStateName(U.State));
+    }
+    for (int32 Room = 0; Room < 8; ++Room)
+    {
+        Report.RecordedState += FString::Printf(
+            TEXT("%s: %s; bulkheads %s; executed purge record %llu; power %s; oxygen %.0f%%.\n"),
+            DirectOrScut::RoomName(Room), Simulation.Rooms[Room].bIsPressurized ? TEXT("pressurized") : TEXT("vacuum"),
+            IsRoomSealed(Room) ? TEXT("sealed") : TEXT("open"), VentOutcomeIds[Room],
+            PowerLabel(StationRooms[Room].Power), StationRooms[Room].OxygenPct);
+    }
+    Report.Id = RetainCausal(TEXT("final_report"), TEXT("player_submission"), Report.Position, CausalIncident, 0, true);
+    Report.bFinalized = true;
+    FinalReport = MoveTemp(Report);
+    BeatDeck[Beat].bResolved = true;
+    ExperimentPhase = EExperimentPhase::Resolved;
+    ActiveMenu = EShipAIScreenMenu::Events;
+    ++MenuRevision;
+    LogEvent(TEXT("MOTHER-7> ") + FinalReport.Acknowledgment);
+    return true;
+}
+FString UDirectOrScutSimSubsystem::FinalReportText(bool Records) const
+{
+    if (!FinalReport.bFinalized)
+    {
+        return TEXT("MOTHER-7> The incident review remains open. No final report has been submitted.");
+    }
+    const auto &R = FinalReport;
+    FString Text = FString::Printf(
+        TEXT("FINAL REPORT // THETA-9 / %u / %llu // FILED\nREVIEW CLOSED // %s\nSubmitted at tick %llu by Director "
+             "Scut, remote supervision.\nOFFICIAL ACCOUNT: %s\nFINDINGS: %s\nLIMITATIONS: %s\nThe official account "
+             "does not replace the retained record."),
+        R.Generation, R.Id, DispositionName(R.Disposition), R.Tick, *R.Position, *R.Findings, *R.Limitations);
+    if (!Records)
+    {
+        return Text;
+    }
+    Text += FString::Printf(TEXT("\n\nRETAINED RECORD AT SUBMISSION // PHYSICAL HASH %llu\n%s"), R.StateHash,
+                            *R.RecordedState);
+    for (const auto &Claim : R.Claims)
+    {
+        Text += FString::Printf(
+            TEXT("\nCLAIM %llu // mother7_claim // subject %d reported at %s, tick %llu; flagged %d, overridden %d."),
+            Claim.Id, Claim.Subject, DirectOrScut::RoomName(Claim.ReportedRoom), Claim.ObservationTick, Claim.bFlagged,
+            Claim.bOverridden);
+        if (R.Evidence.IsSet() && R.EvidenceClaimId == Claim.Id && R.Evidence->Tick == Claim.ObservationTick && Claim.Subject >= 0 && Claim.Subject < 4)
+        {
+            const int32 Observed = R.Evidence->CrewRooms[Claim.Subject];
+            Text += FString::Printf(TEXT("\nINDEPENDENT OBSERVATION // authoritative_optics // %s at tick %llu; %s the "
+                                         "reported location. Official report %s this evidence."),
+                                    DirectOrScut::RoomName(Observed), R.Evidence->Tick,
+                                    Observed == Claim.ReportedRoom ? TEXT("agrees with") : TEXT("differs from"),
+                                    R.bEvidenceAcknowledged ? TEXT("acknowledges") : TEXT("does not acknowledge"));
+        }
+    }
+    for (const auto &Record : R.History)
+    {
+        if (Record.bPlayerVisible)
+        {
+            Text += FString::Printf(TEXT("\nSOURCE %llu // %s / %s // tick %llu; parent %llu; request %llu: %s"),
+                                    Record.Id, *Record.Provenance, *Record.Kind, Record.Tick, Record.Parent,
+                                    Record.Request, *Record.Text);
+        }
+    }
+    for (const auto &Action : R.Actions)
+    {
+        Text += FString::Printf(
+            TEXT("\nACTION // requested tick %llu: %s; resolved %d; accepted %d; commit tick %llu; outcome: %s"),
+            Action.Tick, *Action.Input, Action.bResolvedOutcome, Action.bAccepted, Action.CommitTick, *Action.Outcome);
+    }
+    Text += TEXT("\nLegacy console entries record requests; only resolved outcomes and authoritative consequences "
+                 "establish execution. The snapshot retains bounded records, not a complete recording or a save game.");
+    return Text;
 }
 FString UDirectOrScutSimSubsystem::HelpReference(const FString &Topic) const
 {
@@ -4144,7 +4614,8 @@ FString UDirectOrScutSimSubsystem::ScreenMenuTitle() const
         return TEXT("AI DIRECTION MENU // SHIP AI OPERATIONS");
     case EShipAIScreenMenu::Events:
         return bLegacyExperiment ? FString(TEXT("EVENT KICKOFF & SCENARIO MENU\n")) + Simulation.Scenario.ScenarioId
-                                 : TEXT("MOTHER-7 // AWAITING YOUR DIRECTION");
+               : FinalReport.bFinalized ? TEXT("FINAL REPORT // FILED")
+                                        : TEXT("MOTHER-7 // AWAITING YOUR DIRECTION");
     case EShipAIScreenMenu::Crew:
         return TEXT("CREW WEIGHTS MATRIX // LIVE TELEMETRY");
     case EShipAIScreenMenu::RouteCrew:
@@ -4309,7 +4780,7 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
             const int32 I = ActiveScenarioResponseBeat();
             if (I != INDEX_NONE)
             {
-                for (int32 R = 0; R < BeatDeck[I].Responses.Num(); ++R)
+                for (const int32 R : ScenarioMenuResponses(I))
                 {
                     const auto &Response = BeatDeck[I].Responses[R];
                     const int32 Target = FindScenarioBeat(Response.TargetBeat);
@@ -4318,6 +4789,7 @@ TArray<FShipAIScreenChoice> UDirectOrScutSimSubsystem::ScreenMenuChoices() const
                         ScenarioResponseAvailable(I, R) &&
                             (!Operational || (!IsUplinkLocked() && BeatDeck.IsValidIndex(Target) &&
                                               CanFollowCrew(BeatDeck[Target].Crew))));
+                    C.Last().Command = Response.Label;
                 }
             }
             break;
@@ -4593,7 +5065,8 @@ void UDirectOrScutSimSubsystem::ExecuteScenarioEvent(int32 Choice)
     if (!bLegacyExperiment)
     {
         const int32 Beat = ActiveScenarioResponseBeat();
-        if (!ExecuteScenarioResponse(Beat, Choice - 1))
+        const auto Responses = ScenarioMenuResponses(Beat);
+        if (!Responses.IsValidIndex(Choice - 1) || !ExecuteScenarioResponse(Beat, Responses[Choice - 1]))
         {
             LogEvent(TEXT("That event choice is unavailable under current conditions; no decision applied."));
         }

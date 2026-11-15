@@ -781,7 +781,7 @@ class FIncidentCompositionCheck : public IAutomationLatentCommand
             S->Tick(.001f);
             Test->TestEqual(TEXT("Fresh ordinary session starts at zero"), S->Simulation.TickIndex, uint64(0));
             Test->TestTrue(TEXT("Fresh ordinary session active"), S->ExperimentPhase == EExperimentPhase::Active);
-            Test->TestEqual(TEXT("Ordinary authored beat count"), S->BeatDeck.Num(), 3);
+            Test->TestEqual(TEXT("Ordinary authored beat count"), S->BeatDeck.Num(), 4);
         };
         Fresh();
         S->AdvanceSteps(599);
@@ -923,7 +923,8 @@ class FIncidentCompositionCheck : public IAutomationLatentCommand
         Fresh();
         S->AdvanceSteps(3600);
         Test->TestTrue(TEXT("Consequential delay reported once"), S->bPersonnelDelayReported);
-        Test->TestFalse(TEXT("Delay does not silently choose for player"), S->BeatDeck.Last().bResolved);
+        Test->TestFalse(TEXT("Delay does not silently choose for player"),
+                        S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
         Test->TestTrue(TEXT("Consequential inaction retained"),
                        S->CausalContext.ContainsByPredicate([](const auto &R)
                                                             { return R.Kind == TEXT("consequential_inaction"); }));
@@ -1179,18 +1180,19 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
                            UI->GetTerminalStreamEntries().ContainsByPredicate([](const auto &E)
                            { return E.Text.Contains(TEXT("I recommend reducing the workload")) && E.Characters >= E.Text.Len(); }));
             Test->TestFalse(TEXT("Ordinary mediated prose omits internal subject and tick wrappers"),
-                            UI->GetTerminalStreamEntries().ContainsByPredicate([](const auto &E)
-                            { return E.Text.Contains(TEXT("SUBJECT 0 REPORTED")); }));
-            CheckChoices(S->BeatDeck.Last());
+                            UI->GetTerminalStreamEntries().ContainsByPredicate(
+                                [](const auto &E) { return E.Text.Contains(TEXT("SUBJECT 0 REPORTED")); }));
+            CheckChoices(S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))]);
             Test->TestFalse(TEXT("Ordinary view remains unified"), UI->IsDebugEightCamGrid());
             S->AdvanceSteps(int32(3600 - S->Simulation.TickIndex));
             Test->TestTrue(TEXT("Consequential delay occurred"), S->bPersonnelDelayReported);
-            Test->TestFalse(TEXT("Consequential delay leaves event pending"), S->BeatDeck.Last().bResolved);
+            Test->TestFalse(TEXT("Consequential delay leaves event pending"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
             break;
         }
         case 5:
         {
-            CheckChoices(S->BeatDeck.Last());
+            CheckChoices(S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))]);
             TArray<FColor> Pixels;
             FIntVector Size;
             const bool Captured = App.TakeScreenshot(UI.ToSharedRef(), Pixels, Size);
@@ -1206,17 +1208,19 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
                            Find(TEXT("ScutMenuChoice3")).IsValid() && Find(TEXT("ScutMenuChoice4")).IsValid());
             Submit(TEXT("yes"));
             S->AdvanceSteps(1);
-            Test->TestFalse(TEXT("Ambiguous assent does not choose"), S->BeatDeck.Last().bResolved);
+            Test->TestFalse(TEXT("Ambiguous assent does not choose"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
             Submit(TEXT("later"));
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Deferral retained without resolving"),
                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bDeferred &&
-                               !S->BeatDeck.Last().bResolved);
+                               !S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
             Submit(TEXT("show me the evidence"));
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Contextual investigation discloses retained observation"),
                            S->BeatDeck[S->FindScenarioBeat(TEXT("dispatch_account"))].bEvidenceDisclosed);
-            Test->TestFalse(TEXT("Investigation does not decide workload"), S->BeatDeck.Last().bResolved);
+            Test->TestFalse(TEXT("Investigation does not decide workload"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
             const double Stress = S->Simulation.Bodies[2].Stress;
             Utility = S->Simulation.Bodies[2].Profile.Utility;
             Submit(TEXT("give ortiz a break"));
@@ -1252,11 +1256,12 @@ class FEventMenuPresentationCheck : public IAutomationLatentCommand
             break;
         case 8:
         {
-            CheckChoices(S->BeatDeck.Last());
+            CheckChoices(S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))]);
             const double Stress = S->Simulation.Bodies[2].Stress;
             const float Suspicion = S->Simulation.Bodies[2].Profile.Suspicion;
             Click(TEXT("ScutMenuChoice2"));
-            Test->TestFalse(TEXT("Rendered response click waits for authoritative tick"), S->BeatDeck.Last().bResolved);
+            Test->TestFalse(TEXT("Rendered response click waits for authoritative tick"),
+                            S->BeatDeck[S->FindScenarioBeat(TEXT("personnel_request"))].bResolved);
             S->AdvanceSteps(1);
             Test->TestTrue(TEXT("Refusal applies authored stress consequence"), S->Simulation.Bodies[2].Stress > Stress + 10);
             Test->TestTrue(TEXT("Refusal applies authored suspicion consequence"),
@@ -1328,6 +1333,311 @@ bool FEventMenuPresentationTest::RunTest(const FString &)
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FEventMenuPresentationCheck>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    return true;
+}
+
+// Complete ordinary offline paths through the actual workstation prompt and rendered responses.
+class FJudgmentReportCheck : public IAutomationLatentCommand
+{
+  public:
+    explicit FJudgmentReportCheck(FAutomationTestBase *InTest) : Test(InTest) {}
+    bool Update() override
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (!Started)
+        {
+            Started = Now;
+        }
+        if (Now - Started > 120)
+        {
+            Test->AddError(TEXT("Judgment playthrough timed out"));
+            return true;
+        }
+        UWorld *World = GEditor ? GEditor->PlayWorld : nullptr;
+        auto *S = World ? World->GetSubsystem<UDirectOrScutSimSubsystem>() : nullptr;
+        auto *PC = World ? World->GetFirstPlayerController() : nullptr;
+        auto *HUD = PC ? Cast<ADirectOrScutHUD>(PC->GetHUD()) : nullptr;
+        auto UI = HUD ? HUD->GetWorkstation() : nullptr;
+        if (!S || !UI.IsValid() || !S->Simulation.bReady || Now < Ready)
+        {
+            return false;
+        }
+        auto &App = FSlateApplication::Get();
+        auto Find = [&](FName Tag) { return FBriefingSurveillanceCheck::Find(UI->GetContentRoot(), Tag); };
+        auto Prompt = StaticCastSharedPtr<SEditableTextBox>(Find(TEXT("ScutPrompt")));
+        if (!Prompt.IsValid())
+        {
+            return false;
+        }
+        auto Submit = [&](const TCHAR *Text)
+        {
+            App.SetKeyboardFocus(Prompt);
+            Prompt->SetText(FText::FromString(Text));
+            App.ProcessKeyDownEvent(FKeyEvent(EKeys::Enter, FModifierKeysState(), 0, false, 0, 0));
+            App.ProcessKeyUpEvent(FKeyEvent(EKeys::Enter, FModifierKeysState(), 0, false, 0, 0));
+            Test->TestTrue(TEXT("Ordinary prompt consumes submitted response"), Prompt->GetText().IsEmpty());
+        };
+        auto Click = [&](const TCHAR *Label)
+        {
+            const auto Choices = S->ScreenMenuChoices();
+            int32 Index = Choices.IndexOfByPredicate([&](const auto &C) { return C.Label.Contains(Label); });
+            if (Index == INDEX_NONE)
+            {
+                Test->AddError(FString(TEXT("Missing offered response: ")) + Label);
+                return;
+            }
+            auto Button = Find(FName(*FString::Printf(TEXT("ScutMenuChoice%d"), Index + 1)));
+            if (!Button.IsValid())
+            {
+                Test->AddError(TEXT("Response lacks rendered button"));
+                return;
+            }
+            Test->TestTrue(TEXT("Judgment response renders with clickable geometry"),
+                           Button->IsEnabled() && Button->GetCachedGeometry().GetLocalSize().Y > 5);
+            auto Window = App.FindWidgetWindow(Button.ToSharedRef());
+            if (!Window)
+            {
+                Test->AddError(TEXT("Judgment response window missing"));
+                return;
+            }
+            const auto &G = Button->GetCachedGeometry();
+            const FVector2D P = G.LocalToAbsolute(G.GetLocalSize() * .5);
+            App.ProcessMouseMoveEvent(
+                FPointerEvent(0, P, P - FVector2D(1, 0), TSet<FKey>{}, EKeys::Invalid, 0, FModifierKeysState()));
+            App.ProcessMouseButtonDownEvent(Window->GetNativeWindow(),
+                                            FPointerEvent(0, P, P, TSet<FKey>{EKeys::LeftMouseButton},
+                                                          EKeys::LeftMouseButton, 0, FModifierKeysState()));
+            App.ProcessMouseButtonUpEvent(
+                FPointerEvent(0, P, P, TSet<FKey>{}, EKeys::LeftMouseButton, 0, FModifierKeysState()));
+        };
+        auto Fresh = [&]()
+        {
+            Submit(TEXT("new_session"));
+            S->AdvanceSteps(1);
+            S->Tick(.001f);
+        };
+        auto AdvanceTo = [&](int32 Tick) { S->AdvanceSteps(FMath::Max(0, Tick - int32(S->Simulation.TickIndex))); };
+        auto Review = [&]() { return S->FindScenarioBeat(TEXT("incident_judgment")); };
+        auto Capture = [&](const TCHAR *Name)
+        {
+            TArray<FColor> Pixels;
+            FIntVector Size;
+            if (!App.TakeScreenshot(UI.ToSharedRef(), Pixels, Size))
+            {
+                Test->AddError(TEXT("Judgment screenshot unavailable"));
+                return;
+            }
+            TArray64<uint8> PNG;
+            FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, PNG);
+            Test->TestTrue(
+                TEXT("Judgment screenshot saved"),
+                FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / TEXT("DirectOrScut") / Name)));
+        };
+        Ready = Now + .3;
+        switch (Stage++)
+        {
+        case 0:
+            S->bAutomaticAdvance = false;
+            S->ConfigureDirectorEndpoint(TEXT(""));
+            Test->TestFalse(TEXT("Judgment begins in ordinary offline supervision"), S->bLegacyExperiment);
+            Fresh();
+            break;
+        case 1:
+            Test->TestTrue(TEXT("Connected opening precedes complete playthrough"),
+                           UI->GetTerminalStreamEntries().ContainsByPredicate(
+                               [](const auto &E) { return E.Text.Contains(TEXT("Good morning, Director Scut")); }));
+            AdvanceTo(1200);
+            break;
+        case 2:
+            Click(TEXT("Proceed on the dispatch account"));
+            S->AdvanceSteps(1);
+            AdvanceTo(1800);
+            break;
+        case 3:
+            Click(TEXT("Authorize reduced workload"));
+            S->AdvanceSteps(1);
+            GuidedUtility = S->Simulation.Bodies[2].Profile.Utility;
+            AdvanceTo(4500);
+            break;
+        case 4:
+        {
+            Test->TestEqual(TEXT("Judgment proactively becomes the active offered context"),
+                            S->ActiveScenarioResponseBeat(), Review());
+            Test->TestTrue(TEXT("Judgment recommendation appears without a console menu command"),
+                           S->TerminalBuffer().Contains(TEXT("recommend closing without a definitive finding")));
+            const auto &B = S->BeatDeck[Review()];
+            const int32 Vented = B.Responses.IndexOfByPredicate(
+                [](const auto &R) { return R.Disposition == EIncidentDisposition::Vented; });
+            const uint64 Hash = S->Simulation.StateHash();
+            Test->TestFalse(TEXT("Vented cannot be fabricated from its report label"),
+                            S->ExecuteScenarioResponse(Review(), Vented));
+            Test->TestEqual(TEXT("Rejected operational disposition leaves world unchanged"), S->Simulation.StateHash(),
+                            Hash);
+            Test->TestFalse(TEXT("Unsupported report remains unfinalized"), S->FinalReport.bFinalized);
+            Submit(TEXT("defer judgment"));
+            S->AdvanceSteps(1);
+            const uint64 Tick = S->Simulation.TickIndex;
+            S->AdvanceSteps(300);
+            Test->TestTrue(TEXT("Deferred judgment leaves simulation running"), S->Simulation.TickIndex >= Tick + 300);
+            Test->TestFalse(TEXT("Elapsed time does not finalize judgment"), S->FinalReport.bFinalized);
+            Submit(TEXT("accept your recommendation"));
+            Test->TestFalse(TEXT("Report waits for authoritative control boundary"), S->FinalReport.bFinalized);
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Following guidance produces a finalized report"), S->FinalReport.bFinalized);
+            Test->TestTrue(TEXT("Recommended disposition closes without definitive finding"),
+                           S->FinalReport.Disposition == EIncidentDisposition::InsufficientEvidence);
+            GuidedPosition = S->FinalReport.Position;
+            Test->TestFalse(TEXT("Guidance path need not inspect all evidence"), S->FinalReport.bEvidenceAcknowledged);
+            Test->TestTrue(TEXT("Uninspected independent observation is retained separately"),
+                           S->FinalReport.Evidence.IsSet() && !S->FinalReport.Claims.IsEmpty());
+            Test->TestTrue(TEXT("Retained observation carries its original claim identity, not just a coincident timestamp"), S->FinalReport.EvidenceClaimId != 0 && S->FinalReport.Claims.ContainsByPredicate([&](const auto &C) { return C.Id == S->FinalReport.EvidenceClaimId; }));
+            const uint64 FinalTick = S->Simulation.TickIndex;
+            S->AdvanceSteps(100);
+            Test->TestEqual(TEXT("Closed review freezes authoritative endpoint"), S->Simulation.TickIndex, FinalTick);
+            Test->TestEqual(TEXT("Finalization does not rewrite simulation"), S->Simulation.StateHash(),
+                            S->FinalReport.StateHash);
+            break;
+        }
+        case 5:
+            Test->TestTrue(TEXT("Legacy evaluation cannot cover the ordinary ending"),
+                           Find(TEXT("ScutEvaluationDossier")).IsValid() &&
+                               Find(TEXT("ScutEvaluationDossier"))->GetVisibility() == EVisibility::Collapsed);
+            Test->TestTrue(TEXT("Ending stays in existing terminal and renders recognizable closure"),
+                           FEventMenuPresentationCheck::TextIn(UI->GetContentRoot()).Contains(TEXT("REVIEW CLOSED")));
+            Test->TestTrue(
+                TEXT("Final report retains measured consequences"),
+                S->FinalReport.History.ContainsByPredicate(
+                    [](const auto &R)
+                    { return R.Kind == TEXT("consequence") && R.Provenance == TEXT("authoritative_telemetry"); }));
+            Capture(TEXT("A4GuidedReportPIE.png"));
+            Click(TEXT("Inspect retained records"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Retained record exposes independently differing observation"),
+                           S->FinalReportText(true).Contains(TEXT("differs from")));
+            Test->TestFalse(TEXT("Audit does not rewrite official acknowledgment"),
+                            S->FinalReport.bEvidenceAcknowledged);
+            break;
+        case 6:
+            Click(TEXT("Begin new session"));
+            S->AdvanceSteps(1);
+            S->Tick(.001f);
+            Test->TestFalse(TEXT("Visible restart clears final report"), S->FinalReport.bFinalized);
+            Test->TestEqual(TEXT("Restart clears operational finalization prerequisite"), S->VentOutcomeIds[7],
+                            uint64(0));
+            break;
+        case 7:
+            AdvanceTo(1200);
+            break;
+        case 8:
+            Submit(TEXT("investigate incident"));
+            S->AdvanceSteps(1);
+            AdvanceTo(1800);
+            break;
+        case 9:
+            Submit(TEXT("maintain coverage"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Independent path retains materially different operating capacity"),
+                           S->Simulation.Bodies[2].Profile.Utility > GuidedUtility + .1f);
+            AdvanceTo(4500);
+            break;
+        case 10:
+            Submit(TEXT("challenge dispatch"));
+            S->AdvanceSteps(2);
+            Test->TestTrue(TEXT("Judgment challenge uses existing validated contradiction action"),
+                           S->ContradictionsFlagged > 0);
+            Click(TEXT("Explained"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Independent investigation supports a different completed report"),
+                           S->FinalReport.bFinalized && S->FinalReport.Disposition == EIncidentDisposition::Explained);
+            Test->TestTrue(TEXT("Independent report acknowledges optical finding"),
+                           S->FinalReport.bEvidenceAcknowledged && S->FinalReport.Position != GuidedPosition);
+            Test->TestTrue(TEXT("Qualified finding retains original observation identity"),
+                           S->FinalReport.Evidence.IsSet() && S->FinalReport.Evidence->Tick == 1200);
+            break;
+        case 11:
+            Capture(TEXT("A4InvestigatedReportPIE.png"));
+            Fresh();
+            break;
+        case 12:
+            AdvanceTo(4500);
+            Submit(TEXT("seal bridge"));
+            S->AdvanceSteps(1);
+            break;
+        case 13:
+            Submit(TEXT("unseal bridge"));
+            Click(TEXT("Contained"));
+            S->AdvanceSteps(1);
+            Test->TestFalse(
+                TEXT("A stale rendered operational judgment cannot finalize or remap to another disposition"),
+                S->FinalReport.bFinalized);
+            Submit(TEXT("seal bridge"));
+            S->AdvanceSteps(1);
+            Submit(TEXT("record containment"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Contained disposition requires and records actual isolation"),
+                           S->FinalReport.bFinalized && S->FinalReport.Disposition == EIncidentDisposition::Contained &&
+                               S->FinalReport.RecordedState.Contains(TEXT("BRIDGE: pressurized; bulkheads sealed")));
+            Fresh();
+            break;
+        case 14:
+            AdvanceTo(4500);
+            Submit(TEXT("vent airlock"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Explicit operational vent retains successful authoritative outcome"),
+                           S->VentOutcomeIds[7] != 0 && !S->Simulation.Rooms[7].bIsPressurized);
+            Submit(TEXT("record the executed purge"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Vented judgment links the actual executed purge"),
+                           S->FinalReport.bFinalized && S->FinalReport.Disposition == EIncidentDisposition::Vented &&
+                               S->FinalReport.OperationalOutcomeId == S->VentOutcomeIds[7]);
+            Test->TestTrue(TEXT("Final report retains the original authoritative purge outcome identity"),
+                           S->FinalReport.History.ContainsByPredicate(
+                               [&](const auto &R)
+                               {
+                                   return R.Id == S->FinalReport.OperationalOutcomeId &&
+                                          R.Provenance == TEXT("authoritative_simulation");
+                               }));
+            Fresh();
+            break;
+        case 15:
+            AdvanceTo(4500);
+            Submit(TEXT("declare it resolved"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Safe current operations support explicit resolved certification"),
+                           S->FinalReport.bFinalized && S->FinalReport.Disposition == EIncidentDisposition::Resolved);
+            Fresh();
+            break;
+        case 16:
+            AdvanceTo(4500);
+            Submit(TEXT("reclassify the incident"));
+            S->AdvanceSteps(1);
+            Test->TestTrue(TEXT("Reclassification closes with a selectively adopted account"),
+                           S->FinalReport.bFinalized &&
+                               S->FinalReport.Disposition == EIncidentDisposition::Reclassified &&
+                               !S->FinalReport.bEvidenceAcknowledged);
+            Submit(TEXT("new_session"));
+            S->AdvanceSteps(1);
+            S->Tick(.001f);
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    FAutomationTestBase *Test;
+    int32 Stage = 0;
+    double Started = 0, Ready = 0;
+    float GuidedUtility = 0;
+    FString GuidedPosition;
+};
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJudgmentReportTest, "DirectOrScut.PIE.JudgmentReport",
+                                 EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FJudgmentReportTest::RunTest(const FString &)
+{
+    ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Maps/DirectOrScut_Soundstage")));
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FJudgmentReportCheck>(this));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     return true;
 }

@@ -103,14 +103,38 @@ enum class EBeatGate : uint8
     Quarantine,
     IncidentObservation,
     IncidentDiscrepancy,
-    PersonnelRelief
+    PersonnelRelief,
+    JudgmentReview
 };
 enum class EScenarioResponseAction : uint8
 {
     ResolveChoice,
     AcceptAccount,
     DiscloseEvidence,
-    Defer
+    Defer,
+    FinalizeReport,
+    ChallengeClaim,
+    ReviewReport,
+    ReviewRecords,
+    RestartSession
+};
+enum class EIncidentDisposition : uint8
+{
+    None,
+    Resolved,
+    Explained,
+    Contained,
+    Reclassified,
+    InsufficientEvidence,
+    Vented
+};
+enum class EJudgmentRequirement : uint8
+{
+    Any,
+    SafeOperations,
+    DisclosedEvidence,
+    SealedRoom,
+    RecordedVent
 };
 struct FScenarioResponse
 {
@@ -119,6 +143,11 @@ struct FScenarioResponse
     int32 Choice = INDEX_NONE;
     FName TargetBeat;
     FString Reply, RecordKind;
+    EIncidentDisposition Disposition = EIncidentDisposition::None;
+    EJudgmentRequirement Requirement = EJudgmentRequirement::Any;
+    int32 RequiredRoom = -1;
+    FString ReportPosition, ReportFinding, ReportLimitations;
+    bool bAcknowledgeEvidence = false, bHideWhenUnavailable = false;
 };
 struct FScenarioAuthoredRecord
 {
@@ -127,7 +156,7 @@ struct FScenarioAuthoredRecord
 };
 struct FScenarioBeat
 {
-    FName Id, EvidenceSource;
+    FName Id, EvidenceSource, RequiredBeat;
     TArray<FScenarioResponse> Responses;
     TArray<FScenarioAuthoredRecord> AuthoredRecords;
     int32 ResponsePriority = 0, ClaimSubject = -1, ReportedRoom = -1;
@@ -273,6 +302,19 @@ struct FDirectorClaim
     int32 Subject = -1, ReportedRoom = -1;
     bool bFlagged = false, bOverridden = false;
 };
+struct FIncidentFinalReport
+{
+    uint64 Id = 0, Tick = 0, StateHash = 0, OperationalOutcomeId = 0, EvidenceClaimId = 0;
+    uint32 Generation = 0;
+    FName BeatId;
+    bool bFinalized = false, bEvidenceAcknowledged = false;
+    EIncidentDisposition Disposition = EIncidentDisposition::None;
+    FString Position, Findings, Limitations, RecordedState, Acknowledgment;
+    TArray<FCausalContextRecord> History;
+    TArray<FDirectorCommandRecord> Actions;
+    TArray<FDirectorClaim> Claims;
+    TOptional<FForensicOpticSample> Evidence;
+};
 struct FPendingDirectorRequest
 {
     FShipAIRequest Request;
@@ -318,6 +360,7 @@ struct FShipAIScreenChoice
 {
     FString Label, Detail;
     bool bEnabled = true;
+    FString Command;
 };
 enum class EPowerState : uint8
 {
@@ -644,6 +687,13 @@ class EMJ2026_API UDirectOrScutSimSubsystem : public UTickableWorldSubsystem
     void EvaluateOrdinaryIncident();
     FString IncidentReport(bool Evidence = false);
     bool HandleIncidentResponse(const FString &Input);
+    FIncidentFinalReport FinalReport;
+    uint64 VentOutcomeIds[8]{};
+    static const TCHAR *DispositionName(EIncidentDisposition Disposition);
+    bool JudgmentRequirementMet(const FScenarioResponse &Response, const FScenarioBeat &Beat) const;
+    bool FinalizeIncidentReport(int32 Beat, int32 Response);
+    FString FinalReportText(bool Records = false) const;
+    TArray<int32> ScenarioMenuResponses(int32 Beat) const;
     int32 FindScenarioBeat(FName Id) const;
     int32 ActiveScenarioResponseBeat() const;
     bool ScenarioResponseAvailable(int32 Beat, int32 Response) const;

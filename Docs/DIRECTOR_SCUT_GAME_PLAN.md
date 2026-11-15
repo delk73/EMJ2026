@@ -236,6 +236,12 @@ MOTHER-7 may provide a brief, dry assessment appropriate to the outcome.
 
 The game recognizes multiple forms of success without asserting that every decision was wise.
 
+### A4 implementation bounds
+
+The current THETA-9 script offers judgment after the personnel development and 150 simulation seconds, with no finalization deadline. MOTHER-7 recommends closure without a definitive finding; Scut may investigate, challenge, defer, or submit another currently eligible disposition. Resolved requires pressurized, unbreached compartments without oxygen warnings or offline power and surviving registered personnel. Explained requires independently disclosed retained optics and qualifies the location account only. Contained records already-sealed BRIDGE bulkheads. Reclassified and Insufficient evidence are interpretive submissions. Vented records an already-successful validated AIRLOCK_CHAMBER purge only while that compartment remains depressurized. Final report selection performs none of those operational actions.
+
+Finalization closes the review at its fixed control boundary and freezes that session's endpoint using the existing resolved lifecycle. The terminal remains available for the official report, separate retained records, read-only investigation and restart. A bounded in-memory report snapshot preserves original claims, observations, action requests/resolved outcomes, causal records and measured state separately from Scut's official position and selected findings. Omitted or disputed observations remain inspectable; no history is rewritten and no persistent save system is introduced. Chunk B/C remain separate, unauthorized work until joint review.
+
 ## 8. Presentation and sound
 
 Preserve the existing CRT terminal and procedural audio infrastructure.

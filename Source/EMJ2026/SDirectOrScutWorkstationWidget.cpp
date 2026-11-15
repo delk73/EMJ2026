@@ -604,7 +604,7 @@ void SDirectOrScutWorkstationWidget::ShowGrid()
 // Compatibility entry point: the desk console is permanent; this changes input focus only.
 void SDirectOrScutWorkstationWidget::SetConsoleOpen(bool PromptFocus, bool)
 {
-    if (PromptFocus && Sim->ExperimentPhase == EExperimentPhase::Resolved)
+    if (PromptFocus && Sim->bLegacyExperiment && Sim->ExperimentPhase == EExperimentPhase::Resolved)
     {
         return;
     }
@@ -904,7 +904,10 @@ void SDirectOrScutWorkstationWidget::ExecuteHighlighted()
 {
     if (MenuEnabled.IsValidIndex(HighlightedChoice) && MenuEnabled[HighlightedChoice])
     {
-        Sim->QueueConsoleCommand(FString::Printf(TEXT("choose %d"), HighlightedChoice + 1));
+        Sim->QueueConsoleCommand(MenuCommands.IsValidIndex(HighlightedChoice) &&
+                                         !MenuCommands[HighlightedChoice].IsEmpty()
+                                     ? MenuCommands[HighlightedChoice]
+                                     : FString::Printf(TEXT("choose %d"), HighlightedChoice + 1));
     }
 }
 FReply SDirectOrScutWorkstationWidget::CopyLog()
@@ -1443,7 +1446,7 @@ FReply SDirectOrScutWorkstationWidget::OnPreviewKeyDown(const FGeometry &, const
         SetConsoleOpen(true);
         return FReply::Handled();
     }
-    if (Sim->ExperimentPhase == EExperimentPhase::Resolved)
+    if (Sim->bLegacyExperiment && Sim->ExperimentPhase == EExperimentPhase::Resolved)
     {
         return FReply::Unhandled();
     }
@@ -1672,10 +1675,12 @@ FReply SDirectOrScutWorkstationWidget::OnKeyDown(const FGeometry &Geometry, cons
 void SDirectOrScutWorkstationWidget::RefreshMenuChoices()
 {
     MenuLabels.Reset();
+    MenuCommands.Reset();
     MenuEnabled.Reset();
     const auto Choices = Sim->ScreenMenuChoices();
     for (int32 I = 0; I < Choices.Num(); ++I)
     {
+        MenuCommands.Add(Choices[I].Command);
         MenuLabels.Add(FString::Printf(TEXT("[%d] %s%s%s"), I + 1, *Choices[I].Label,
                                        Choices[I].Detail.IsEmpty() ? TEXT("") : TEXT("\n"), *Choices[I].Detail));
         MenuEnabled.Add(Choices[I].bEnabled);
@@ -1760,7 +1765,7 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
                 TEXT("SignalOfflineNoise"), Sim->StationRooms[Room].Power == EPowerState::Offline ? 1.f : 0.f);
         }
     }
-    const bool Resolved = Sim->ExperimentPhase == EExperimentPhase::Resolved;
+    const bool Resolved = Sim->bLegacyExperiment && Sim->ExperimentPhase == EExperimentPhase::Resolved;
     if (Resolved != bShowingEvaluation)
     {
         bShowingEvaluation = Resolved;
@@ -1834,6 +1839,18 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
                                                                              : EVisibility::Hidden);
     Rig->SetVisibleFeeds(ActiveFeed, -1, true); // All eight remain active optical sources.
     UpdateTerminalPresentation(Delta, G);
+    if (!Sim->FinalReport.bFinalized)
+    {
+        SeenFinalReportId = 0;
+    }
+    if (Sim->FinalReport.bFinalized && SeenFinalReportId != Sim->FinalReport.Id)
+    {
+        SeenFinalReportId = Sim->FinalReport.Id;
+        FTerminalStreamEntry Entry;
+        Entry.Text = TEXT("MOTHER-7> ") + Sim->FinalReport.Acknowledgment + TEXT("\n\n") + Sim->FinalReportText();
+        Entry.Characters = Entry.Text.Len();
+        AppendTerminalEntry(MoveTemp(Entry));
+    }
     if (SeenMenuRevision != Sim->MenuRevision)
     {
         switch (Sim->ActiveMenu)
@@ -1979,8 +1996,9 @@ TSharedRef<SWidget> SDirectOrScutWorkstationWidget::BuildEvaluationDossier()
         .Visibility_Lambda(
             [this]()
             {
-                return Sim->ExperimentPhase == EExperimentPhase::Resolved ? EVisibility::Visible
-                                                                          : EVisibility::Collapsed;
+                return Sim->bLegacyExperiment && Sim->ExperimentPhase == EExperimentPhase::Resolved
+                           ? EVisibility::Visible
+                           : EVisibility::Collapsed;
             })
         .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
         .BorderBackgroundColor(FLinearColor(.18f, .8f, .35f))

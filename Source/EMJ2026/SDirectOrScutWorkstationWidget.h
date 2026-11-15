@@ -169,6 +169,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     TArray<TPair<FString, FString>> PendingReports;
     void RouteConversationEvent(const FString &Text, int32 Room);
     void FlushOperationalReports();
+    uint64 SeenFinalReportId = 0;
     TArray<FTerminalStreamEntry> TerminalStream;
     TArray<TSharedPtr<FInlineOpticSlot>> LiveInlineOptics, InlineOpticPool;
     uint64 NextTerminalEntryId = 1, ActiveOpticEntryId = 0;
@@ -240,7 +241,7 @@ class SDirectOrScutWorkstationWidget : public SCompoundWidget
     double LastTap = -1;
     float MenuRefreshClock = 0;
     uint64 SeenMenuRevision = MAX_uint64;
-    TArray<FString> History, Completions, MenuLabels;
+    TArray<FString> History, Completions, MenuLabels, MenuCommands;
     TArray<bool> MenuEnabled;
     int32 HistoryCursor = 0, CompletionCursor = 0;
     FString HistoryDraft, LastCompletion;
