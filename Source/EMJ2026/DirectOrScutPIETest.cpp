@@ -2613,6 +2613,17 @@ class FCrisisLoopCheck : public IAutomationLatentCommand
             Audio->Synthesize(0);
             T->TestTrue(TEXT("Procedural PCM synthesizes without a renderer"),
                         Audio->Wave && Audio->Wave->GetAvailableAudioByteCount() > 0);
+            for (int32 Kind = 8; Kind <= 11; ++Kind)
+            {
+                auto *Cue = NewObject<UDirectOrScutAudioComponent>(W->GetWorldSettings());
+                Cue->InitializeSynth();
+                Cue->Synthesize(Kind);
+                T->TestTrue(FString::Printf(TEXT("Presentation cue %d generates bounded PCM"), Kind),
+                            Cue->Wave->GetAvailableAudioByteCount() > 0 &&
+                                Cue->Wave->GetAvailableAudioByteCount() <= 22050);
+                Cue->Silence();
+                T->TestFalse(TEXT("Silence stops presentation playback"), Cue->IsPlaying());
+            }
             T->TestTrue(TEXT("Structured timestamped agenda telemetry"),
                         S->TerminalBuffer().Contains(TEXT("[00:00] [AGENDA]")));
             T->TestFalse(TEXT("No routine working chatter"), S->TerminalBuffer().Contains(TEXT("Crew 0: Working")));

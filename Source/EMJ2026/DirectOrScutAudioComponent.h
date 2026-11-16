@@ -16,4 +16,5 @@ class EMJ2026_API UDirectOrScutAudioComponent : public UAudioComponent
 
   private:
     uint32 NoiseSeed = 1970;
+    double LastPresentationCue = -10;
 };

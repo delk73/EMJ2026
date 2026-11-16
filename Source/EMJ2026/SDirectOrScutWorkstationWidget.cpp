@@ -904,6 +904,7 @@ void SDirectOrScutWorkstationWidget::ExecuteHighlighted()
 {
     if (MenuEnabled.IsValidIndex(HighlightedChoice) && MenuEnabled[HighlightedChoice])
     {
+        Sim->AudioCue(8);
         Sim->QueueConsoleCommand(MenuCommands.IsValidIndex(HighlightedChoice) &&
                                          !MenuCommands[HighlightedChoice].IsEmpty()
                                      ? MenuCommands[HighlightedChoice]
@@ -1381,6 +1382,7 @@ void SDirectOrScutWorkstationWidget::Commit(const FText &Text, ETextCommit::Type
     {
         return;
     }
+    Sim->AudioCue(8); // Receipt only; validation remains authoritative.
     if (HandlePresentationCommand(Input) || Sim->QueueConsoleCommand(Input))
     {
         if (History.IsEmpty() || History.Last() != Input)
@@ -1726,7 +1728,7 @@ void SDirectOrScutWorkstationWidget::RebuildMenu()
                            .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
                            .BorderBackgroundColor_Lambda([this, I]()
                            {
-                               return HighlightedChoice == I ? FLinearColor(.12f, .4f, .2f, .8f)
+                               return HighlightedChoice == I ? FLinearColor(.48f, .87f, .58f)
                                                              : FLinearColor(.02f, .06f, .03f, .35f);
                            })
                            .Padding(2)[SNew(STextBlock)
@@ -1846,6 +1848,7 @@ void SDirectOrScutWorkstationWidget::Tick(const FGeometry &G, double Now, float 
     if (Sim->FinalReport.bFinalized && SeenFinalReportId != Sim->FinalReport.Id)
     {
         SeenFinalReportId = Sim->FinalReport.Id;
+        Sim->AudioCue(11);
         FTerminalStreamEntry Entry;
         Entry.Text = TEXT("MOTHER-7> ") + Sim->FinalReport.Acknowledgment + TEXT("\n\n") + Sim->FinalReportText();
         Entry.Characters = Entry.Text.Len();
@@ -2522,6 +2525,17 @@ bool SDirectOrScutWorkstationWidget::AppendTerminalEntry(FTerminalStreamEntry En
             }
         }
         TerminalStream.RemoveAt(0);
+    }
+    if (Sim.IsValid())
+    {
+        if (Entry.Attachment.IsSet() || Entry.Telemetry.IsSet())
+        {
+            Sim->AudioCue(10);
+        }
+        else if (Entry.Text.Contains(TEXT("MOTHER-7>")) && !Entry.Text.Contains(TEXT("FINAL REPORT //")))
+        {
+            Sim->AudioCue(9);
+        }
     }
     Entry.Id = NextTerminalEntryId++;
     Entry.Text = Entry.Text.Left(2048);
@@ -4078,19 +4092,36 @@ void SDirectOrScutWorkstationWidget::RebuildUnifiedStream()
         auto Row = SNew(SVerticalBox).Tag(FName(*FString::Printf(TEXT("ScutStreamEntry%llu"), Entry.Id)));
         const uint64 Id = Entry.Id;
         const bool bMOTD = !Entry.Attachment.IsSet() && Entry.Text.StartsWith(TEXT("+---"));
-        Row->AddSlot().AutoHeight().Padding(
-            0, 1, 0, 1)[SNew(STextBlock)
+        const bool bFiled = Entry.Text.Contains(TEXT("FINAL REPORT //"));
+        const bool bRecord = Entry.Attachment.IsSet() || Entry.Telemetry.IsSet() ||
+                             Entry.Text.Contains(TEXT("RETAINED RECORD AT SUBMISSION"));
+        const bool bMother = Entry.Text.Contains(TEXT("MOTHER-7>"));
+        const FLinearColor Rule = bFiled ? FLinearColor(.48f, .68f, .39f)
+                                        : bRecord ? FLinearColor(.25f, .38f, .3f)
+                                                  : FLinearColor(.08f, .25f, .13f);
+        Row->AddSlot().AutoHeight().Padding(0, 3, 0, 3)
+            [SNew(SBorder)
+                 .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                 .BorderBackgroundColor(Rule)
+                 .Padding(FMargin(bFiled ? 2 : 1, bFiled ? 2 : 0, 0, bFiled ? 2 : 0))
+                 [SNew(SBorder)
+                      .BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                      .BorderBackgroundColor(bMother ? FLinearColor(.008f, .024f, .014f)
+                                                    : FLinearColor(.007f, .014f, .01f))
+                      .Padding(FMargin(8, bFiled ? 10 : 4))
+                      [SNew(STextBlock)
                             .Tag(TEXT("ScutTeletypeLine"))
-                            .Font(FCoreStyle::GetDefaultFontStyle(bMOTD ? "Mono" : "Regular", 13))
+                            .Font(FCoreStyle::GetDefaultFontStyle(bMOTD || bRecord || bFiled ? "Mono" : "Regular", 13))
                             .AutoWrapText(!bMOTD)
-                            .ColorAndOpacity(EvaluatePhosphorColor(.9f))
+                            .ColorAndOpacity(bRecord ? FLinearColor(.57f, .72f, .61f)
+                                                     : EvaluatePhosphorColor(bMother || bFiled ? .95f : .75f))
                             .Text_Lambda(
                                 [this, Id]()
                                 {
                                     const auto *Record = FindTerminalEntry(Id);
                                     return Record ? FText::FromString(Record->Text.Left(int32(Record->Characters)))
                                                   : FText::GetEmpty();
-                                })];
+                                })]]];
         if (Entry.ClaimId)
         {
             const uint64 ClaimId = Entry.ClaimId;

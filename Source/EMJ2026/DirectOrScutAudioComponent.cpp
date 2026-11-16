@@ -19,6 +19,7 @@ void UDirectOrScutAudioComponent::Silence()
 {
     Stop();
     NoiseSeed = 1970;
+    LastPresentationCue = -10;
     if (Wave)
     {
         Wave->ResetAudio();
@@ -35,7 +36,18 @@ void UDirectOrScutAudioComponent::Synthesize(int32 Kind)
     {
         return;
     }
-    const float Duration = Kind == 1 ? .28f : Kind == 3 ? .32f : Kind == 6 ? .25f : .09f;
+    // Presentation bursts are coalesced on wall time, independent of model stepping.
+    if (Kind >= 8)
+    {
+        const double Now = FPlatformTime::Seconds();
+        if (Kind != 11 && Now - LastPresentationCue < .3)
+        {
+            return;
+        }
+        LastPresentationCue = Now;
+    }
+    const float Duration = Kind == 11 ? .48f : Kind == 10 ? .22f : Kind == 9 ? .18f : Kind == 8 ? .045f
+                           : Kind == 1 ? .28f : Kind == 3 ? .32f : Kind == 6 ? .25f : .09f;
     const int32 Count = int32(Duration * 22050);
     TArray<int16> PCM;
     PCM.SetNumUninitialized(Count);
@@ -70,10 +82,26 @@ void UDirectOrScutAudioComponent::Synthesize(int32 Kind)
         case 6:
             Sample = FMath::Sin(2 * PI * 880 * T) * Envelope;
             break;
+        case 8: // Switch receipt: short, muted contact.
+            Sample = .28f * FMath::Sin(2 * PI * 640 * T) * Envelope;
+            break;
+        case 9: // Incoming communication: paired descending carrier tones.
+            Sample = .3f * FMath::Sin(2 * PI * (T < .085f ? 740 : 554) * T) *
+                     FMath::Sin(PI * FMath::Fmod(T, .09f) / .09f);
+            break;
+        case 10: // Independent instrument or record returned.
+            Sample = .28f * FMath::Sin(2 * PI * (T < .11f ? 554 : 830) * T) *
+                     FMath::Sin(PI * FMath::Fmod(T, .11f) / .11f);
+            break;
+        case 11: // Filed report: settled two-note cadence.
+            Sample = .35f * FMath::Sin(2 * PI * (T < .18f ? 554 : 370) * T) *
+                     FMath::Sin(PI * T / Duration);
+            break;
         default:
             Sample = Noise * FMath::Exp(-T * 180);
             break;
         }
+        Sample *= FMath::Min(T / .004f, 1.f) * FMath::Min((Duration - T) / .008f, 1.f);
         PCM[I] = int16(FMath::Clamp(Sample * .3f, -1.f, 1.f) * 32767);
     }
     Wave->QueueAudio(reinterpret_cast<const uint8 *>(PCM.GetData()), PCM.Num() * sizeof(int16));
