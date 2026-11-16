@@ -168,7 +168,15 @@ void Materials(UDynamicMeshComponent *C)
         const FString Path = FString::Printf(TEXT("/Game/DirectOrScut/Materials/M_Slot%d.M_Slot%d"), I, I);
         if (auto *M = LoadObject<UMaterialInterface>(nullptr, *Path))
         {
-            C->SetMaterial(I, UMaterialInstanceDynamic::Create(M, C));
+            auto *Surface = UMaterialInstanceDynamic::Create(M, C);
+            Surface->SetScalarParameterValue(TEXT("Roughness"), .86f);
+            if (I == 0 || I == 1 || I == 2)
+            {
+                Surface->SetVectorParameterValue(TEXT("BaseTint"), I == 0   ? FLinearColor(.085f, .095f, .08f)
+                                                                   : I == 1 ? FLinearColor(.19f, .18f, .145f)
+                                                                            : FLinearColor(.12f, .145f, .14f));
+            }
+            C->SetMaterial(I, Surface);
         }
     }
 }

@@ -13,8 +13,23 @@ ACompartmentCameraRig::ACompartmentCameraRig()
         C->bCaptureEveryFrame = false;
         C->bCaptureOnMovement = false;
         C->FOVAngle = 73.7398f; // 36 mm sensor, 24 mm rectilinear lens.
-        C->PostProcessBlendWeight = 0;
-        C->ShowFlags.SetPostProcessing(false);
+        C->PostProcessBlendWeight = 1;
+        C->ShowFlags.SetPostProcessing(true);
+        auto &Post = C->PostProcessSettings;
+        Post.bOverride_AutoExposureMethod = true;
+        Post.AutoExposureMethod = AEM_Manual;
+        Post.bOverride_AutoExposureApplyPhysicalCameraExposure = true;
+        Post.AutoExposureApplyPhysicalCameraExposure = false;
+        Post.bOverride_AutoExposureBias = true;
+        Post.AutoExposureBias = 1.f;
+        Post.bOverride_VignetteIntensity = true;
+        Post.VignetteIntensity = .38f;
+        Post.bOverride_FilmGrainIntensity = true;
+        Post.FilmGrainIntensity = .18f;
+        Post.bOverride_SceneFringeIntensity = true;
+        Post.SceneFringeIntensity = .3f;
+        Post.bOverride_ColorSaturation = true;
+        Post.ColorSaturation = FVector4(.68f, .68f, .68f, 1.f);
         Captures.Add(C);
     }
 }
@@ -67,6 +82,13 @@ void ACompartmentCameraRig::InitializeFeeds()
     OnConstruction(GetActorTransform());
     for (int32 F = 0; F < 9; ++F)
     {
+        // Loaded map components can retain older serialized capture overrides.
+        auto *Defaults = GetClass()->GetDefaultObject<ACompartmentCameraRig>()->Captures[F].Get();
+        Captures[F]->PostProcessSettings = Defaults->PostProcessSettings;
+        Captures[F]->PostProcessBlendWeight = 1;
+        Captures[F]->ShowFlags.SetPostProcessing(true);
+        Captures[F]->ShowFlags.SetTonemapper(true);
+        Captures[F]->ShowFlags.SetEyeAdaptation(true);
         auto *RT = NewObject<UTextureRenderTarget2D>(this);
         RT->RenderTargetFormat = RTF_RGBA8;
         RT->InitAutoFormat(1024, 576);

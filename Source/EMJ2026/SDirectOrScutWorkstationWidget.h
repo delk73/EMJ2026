@@ -65,6 +65,8 @@ struct FTerminalStreamEntry
 struct FInlineOpticSlot;
 class SDirectOrScutWorkstationWidget : public SCompoundWidget
 {
+    friend class ADirectOrScutGameMode;
+
   public:
     SLATE_BEGIN_ARGS(SDirectOrScutWorkstationWidget)
     {

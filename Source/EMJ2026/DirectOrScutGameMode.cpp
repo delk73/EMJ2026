@@ -23,6 +23,10 @@
 #include "Engine/GameViewportClient.h"
 #include "UnrealClient.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "AudioMixerBlueprintLibrary.h"
+#include "Widgets/Input/SEditableTextBox.h"
 
 ADirectOrScutGameMode::ADirectOrScutGameMode()
 {
@@ -83,6 +87,71 @@ void ADirectOrScutGameMode::BeginPlay()
             4.f, false);
         GetWorldTimerManager().SetTimer(Exit, []() { FPlatformMisc::RequestExit(false); }, 6.f, false);
     }
+#if !UE_BUILD_SHIPPING
+    // Opt-in capture of ordinary terminal play. No clock changes or scenario-state injection.
+    if (FParse::Param(FCommandLine::Get(), TEXT("ScutTrailer")))
+    {
+        const FString Directory = FPaths::ProjectSavedDir() / TEXT("Releases/TrailerCapture");
+        IFileManager::Get().MakeDirectory(*Directory, true);
+        UAudioMixerBlueprintLibrary::StartRecordingOutput(this, 180.f);
+        auto SubmitAt = [this](float Time, const TCHAR *Command)
+        {
+            FTimerHandle Handle;
+            GetWorldTimerManager().SetTimer(
+                Handle,
+                [this, Input = FString(Command)]()
+                {
+                    if (auto *PC = GetWorld()->GetFirstPlayerController())
+                    {
+                        if (auto *HUD = Cast<ADirectOrScutHUD>(PC->GetHUD()))
+                        {
+                            if (auto UI = HUD->GetWorkstation())
+                            {
+                                UI->Prompt->SetText(FText::FromString(Input));
+                                UI->Commit(FText::FromString(Input), ETextCommit::OnEnter);
+                                UE_LOG(LogTemp, Display, TEXT("TRAILER INPUT %.3f : %s"), GetWorld()->GetTimeSeconds(),
+                                       *Input);
+                            }
+                        }
+                    }
+                },
+                Time, false);
+        };
+        SubmitAt(18, TEXT("show_cam bridge"));
+        SubmitAt(27, TEXT("show_cam reactor_core"));
+        SubmitAt(43, TEXT("trust dispatch"));
+        SubmitAt(58, TEXT("show me the evidence"));
+        SubmitAt(74, TEXT("investigate incident"));
+        SubmitAt(94, TEXT("authorize relief"));
+        SubmitAt(113, TEXT("show_cam quarters_mess"));
+        SubmitAt(154, TEXT("file the optical finding"));
+        SubmitAt(164, TEXT("report"));
+        FTimerHandle Frames, Exit;
+        GetWorldTimerManager().SetTimer(
+            Frames,
+            [this, Directory, Frame = 0]() mutable
+            {
+                const float Time = GetWorld()->GetTimeSeconds();
+                FScreenshotRequest::RequestScreenshot(Directory / FString::Printf(TEXT("frame%05d.png"), Frame), true,
+                                                      false);
+                FFileHelper::SaveStringToFile(
+                    FString::Printf(TEXT("%d,%.6f\n"), Frame++, Time), *(Directory / TEXT("frames.csv")),
+                    FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
+            },
+            .1f, true, 1.f);
+        GetWorldTimerManager().SetTimer(
+            Exit,
+            [this]()
+            {
+                UAudioMixerBlueprintLibrary::StopRecordingOutputToAnyPath(
+                    this, EAudioRecordingExportType::WavFile, TEXT("Gameplay"),
+                    FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Releases/TrailerCapture")));
+                FTimerHandle Quit;
+                GetWorldTimerManager().SetTimer(Quit, []() { FPlatformMisc::RequestExit(false); }, 2.f, false);
+            },
+            176.f, false);
+    }
+#endif
     if (FParse::Param(FCommandLine::Get(), TEXT("ScutValidate")))
     {
         FTimerHandle Handle;

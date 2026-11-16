@@ -2849,7 +2849,7 @@ class FTerminalDeskCheck : public IAutomationLatentCommand
                 for (int32 F = 1; F <= 8; ++F)
                 {
                     Counts[F] = It->CaptureCounts[F];
-                    Test->TestFalse(TEXT("Vanilla capture postprocessing"), It->Captures[F]->ShowFlags.PostProcessing);
+                    Test->TestTrue(TEXT("Surveillance optical postprocessing"), It->Captures[F]->ShowFlags.PostProcessing);
                     Test->TestTrue(TEXT("Native 16:9 targets"),
                                    It->Targets[F]->SizeX * 9 == It->Targets[F]->SizeY * 16);
                     Test->TestTrue(TEXT("Horizontal lens FOV retained"),
@@ -3889,18 +3889,18 @@ class FTactileSurveillanceCheck : public IAutomationLatentCommand
                         Test->TestEqual(TEXT("Lighting visibility follows power"), Light->IsVisible(),
                                         State != EPowerState::Offline);
                         Test->TestTrue(TEXT("Lighting intensity follows power"),
-                                       FMath::IsNearlyEqual(Light->Intensity, State == EPowerState::Nominal ? 6500.f
-                                                                              : State == EPowerState::Low   ? 650.f
-                                                                                                            : 0.f));
+                                       State == EPowerState::Nominal
+                                           ? Light->Intensity >= 17000.f && Light->Intensity <= 38000.f
+                                           : FMath::IsNearlyEqual(Light->Intensity, State == EPowerState::Low ? 650.f : 0.f));
                         if (State == EPowerState::Low)
                         {
                             Test->TestTrue(TEXT("Emergency light is amber"), Light->LightColor.R > Light->LightColor.B);
                         }
                         if (State == EPowerState::Nominal)
                         {
-                            Test->TestTrue(TEXT("Nominal neutral lighting restored"),
+                            Test->TestTrue(TEXT("Nominal practical lighting restored"),
                                            Light->LightColor == FColor::White && Light->bUseTemperature &&
-                                               Light->Temperature == 5800.f);
+                                               Light->Temperature >= 3400.f && Light->Temperature <= 4300.f);
                         }
                     }
                 }

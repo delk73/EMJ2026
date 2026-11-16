@@ -17,11 +17,13 @@ void ACrewUnitBlockout::BeginPlay()
     DirectOrScut::Materials(Body);
     if (!bAndroid)
     {
+        // Authored map slots include emissive warning colors; uniforms use matte cloth.
+        Body->SetMaterial(SuitSlot, UMaterialInstanceDynamic::Create(Body->GetMaterial(3)->GetMaterial(), this));
         if (auto *Suit = Cast<UMaterialInstanceDynamic>(Body->GetMaterial(SuitSlot)))
         {
-            Suit->SetVectorParameterValue(TEXT("BaseTint"), SimUnitIndex == 0   ? FLinearColor(.9f, .015f, .01f)
-                                                            : SimUnitIndex == 1 ? FLinearColor(.02f, .08f, .9f)
-                                                                                : FLinearColor(.95f, .7f, .015f));
+            Suit->SetVectorParameterValue(TEXT("BaseTint"), SimUnitIndex == 0   ? FLinearColor(.18f, .075f, .045f)
+                                                            : SimUnitIndex == 1 ? FLinearColor(.055f, .095f, .12f)
+                                                                                : FLinearColor(.23f, .19f, .085f));
         }
     }
     auto *M = Body->GetDynamicMesh();
@@ -30,11 +32,15 @@ void ACrewUnitBlockout::BeginPlay()
     // Footprint is exactly W x W; base is Z=0. Faceted round human / square android.
     auto Profile = DirectOrScut::Octagon(W, W, bAndroid ? 8.f : 23.43146f);
     DirectOrScut::Prism(M, Profile, 12, FTransform::Identity, 7);
-    DirectOrScut::Prism(M, DirectOrScut::Octagon(56, 54, bAndroid ? 5 : 16), 65, FTransform(FVector(0, 0, 12)),
+    for (float Y : {-18.f, 18.f})
+    {
+        DirectOrScut::Box(M, FVector(0, Y, 44), FVector(33, 25, 64), bAndroid ? 1 : SuitSlot);
+        DirectOrScut::Box(M, FVector(-6, Y, 13), FVector(49, 29, 22), 7);
+        DirectOrScut::Box(M, FVector(0, Y * 1.85f, 104), FVector(27, 13, 62), bAndroid ? 1 : SuitSlot);
+    }
+    DirectOrScut::Prism(M, DirectOrScut::Octagon(56, 54, 12), 61, FTransform(FVector(0, 0, 77)),
                         bAndroid ? 1 : SuitSlot);
-    DirectOrScut::Prism(M, Profile, 61, FTransform(FVector(0, 0, 77)), bAndroid ? 1 : SuitSlot);
-    DirectOrScut::Prism(M, DirectOrScut::Octagon(56, 56, bAndroid ? 4 : 16), H - 138, FTransform(FVector(0, 0, 138)),
-                        1);
+    DirectOrScut::Prism(M, DirectOrScut::Octagon(38, 38, 10), H - 138, FTransform(FVector(0, 0, 138)), 1);
     DirectOrScut::Box(M, FVector(-29, 0, H - 22), FVector(4, 46, bAndroid ? 7.f : 19.f), bAndroid ? 4 : 7);
     DirectOrScut::Box(M, FVector(-W / 2 + 0.25f, 0, 111), FVector(0.5, 42, 9), 3);
     if (bAndroid)

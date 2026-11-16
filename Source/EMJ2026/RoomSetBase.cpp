@@ -37,7 +37,7 @@ ARoomSetBase::ARoomSetBase()
         L->SetTemperature(5800);
         L->SetIntensity(6500);
         L->SetAttenuationRadius(1900);
-        L->SetSourceRadius(100);
+        L->SetSourceRadius(28);
         L->SetCastShadows(true);
     }
 }
@@ -332,13 +332,15 @@ void ARoomSetBase::ApplyPowerLighting(EPowerState Power)
     }
     AppliedLightingPower = uint8(Power);
     TInlineComponentArray<UPointLightComponent *> Lights(this);
-    for (auto *Light : Lights)
+    for (int32 I = 0; I < Lights.Num(); ++I)
     {
-        // Preserve neutral stage lighting exactly whenever nominal power is restored.
+        auto *Light = Lights[I];
+        // Uneven practical pools, with a readable fill at the camera end.
         Light->SetVisibility(Power != EPowerState::Offline);
-        Light->SetIntensity(Power == EPowerState::Nominal ? 6500.f : Power == EPowerState::Low ? 650.f : 0.f);
+        const float Nominal = I == 0 ? 38000.f : I == 1 ? 17000.f : 29000.f;
+        Light->SetIntensity(Power == EPowerState::Nominal ? Nominal : Power == EPowerState::Low ? 650.f : 0.f);
         Light->bUseTemperature = Power == EPowerState::Nominal;
-        Light->SetTemperature(5800.f);
+        Light->SetTemperature(I == 1 ? 4300.f : 3400.f + RoomId * 130.f);
         Light->SetLightColor(Power == EPowerState::Low ? FLinearColor(1.f, .25f, .025f) : FLinearColor::White);
         Light->MarkRenderStateDirty();
     }
