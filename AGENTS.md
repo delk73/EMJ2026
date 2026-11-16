@@ -1,6 +1,10 @@
 # Canonical agent contract: Direct or Scut
 
-Updated 2026-11-15. This file is the canonical agent guidance. [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) is the **authoritative creative and execution contract**: premise, intended experience, implementation chunks, acceptance criteria and governance. If any document conflicts with it, the plan wins until a deviation is approved. Then read [DIRECT_OR_SCUT.md](DIRECT_OR_SCUT.md) (architecture, current status, historical evidence) and the newest [DEVLOG.md](DEVLOG.md) entry. Historical Slice/Chunk/Experiment notes preserve evidence; they do not override the plan.
+Updated 2026-11-16.
+
+**Project closure:** Director Scut is closed as a jam-scale exploratory project. A1-A4, bounded B/C presentation/stabilization, final atmosphere, local Shipping packaging and trailer work are documented in DEVLOG. The developer reports that the open-ended game plays and seems to work ("very meta chaos"); exhaustive coverage and public jam submission are not established. The final combined run records 17 current PIE successes and one failing legacy Chunk 2 fixture. Historical approval gates and deferred proposals below do not authorize further development. See the [final AAR](Director_Scut_2026_MegaJam_AAR.md) and [reconciled timeline](DirectorScut_Devlog_Timeline.md).
+
+This file is the canonical agent guidance. [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) is the **authoritative creative and execution contract**: premise, intended experience, implementation chunks, acceptance criteria and governance. If any document conflicts with it, the plan wins until a deviation is approved. Then read [DIRECT_OR_SCUT.md](DIRECT_OR_SCUT.md) (architecture, current status, historical evidence) and the newest [DEVLOG.md](DEVLOG.md) entry. Historical Slice/Chunk/Experiment notes preserve evidence; they do not override the plan.
 
 ## Creative and technical objective
 
@@ -41,9 +45,9 @@ Keep the unified shader-driven phosphor terminal as the active presentation form
 
 Current code includes the CRT terminal and project-owned `MD_UI` material, typed hybrid director, validated offline fallback and local HTTP integration, six-message chat transcript, scenario beats, event/cue/action records, bounded optical references, contradiction challenges, and resolved-action replay. Existing proactive observations are deterministic event/vital-threshold notices assembled by `ServiceDirector()`; they are not LLM-grounded narrative responses. Experiment 1 retains one operational episode across recommendations, decisions, evidence, outcomes and observed consequences; general scenario-wide retention remains future work. Voice mode validation exists; directional acoustics and actual TTS/voice delivery remain future work. Consult the implementation entries in `DIRECT_OR_SCUT.md` for precise scope and verification evidence.
 
-## Opening and closure (A1-A4 implemented; joint acceptance pending)
+## Opening and closure (A1-A4 implemented; joint acceptance not established)
 
-[OPENING_SHIFT.md](OPENING_SHIFT.md) retains its filename and specifies the actual opening: Scut is already connected to the terminal and MOTHER-7 briefs him on an uncertain incident. It supersedes the earlier emergency-activation/supply-incident premise. All unsolicited operational information is mediated by MOTHER-7; critical reports remain available deterministically when inference fails; routine/diagnostic collection stays independent of conversation display. Experiment 2 already implements `show_telem` and presentation-only deterministic MOTHER-7 routing (see newest verification entry in DEVLOG). A1 implements the composed connected opening; A2 implements the current compact incident and retained dispatch discrepancy. A3 adds script-driven engagement and contextual choices. A4 adds script-driven judgments and a separate official report; see DEVLOG for verification and limits. See the newest DEVLOG evidence.
+[OPENING_SHIFT.md](OPENING_SHIFT.md) retains its filename and specifies the actual opening: Scut is already connected to the terminal and MOTHER-7 briefs him on an uncertain incident. It supersedes the earlier emergency-activation/supply-incident premise. All unsolicited operational information is mediated by MOTHER-7; critical reports remain available deterministically when inference fails; routine/diagnostic collection stays independent of conversation display. Experiment 2 already implements `show_telem` and presentation-only deterministic MOTHER-7 routing (see newest verification entry in DEVLOG). A1 implements the composed connected opening; A2 implements the current compact incident and retained dispatch discrepancy. A3 adds script-driven engagement and contextual choices. A4 adds script-driven judgments and a separate official report; see DEVLOG for verification and limits.
 
 ## Inference and distribution (stretch, outside the gameplay sequence)
 
@@ -55,14 +59,14 @@ Slice 1-14 is retired historical nomenclature for the completed multi-tile works
 
 | Milestone | Status and focus |
 | --- | --- |
-| P2-00 | Delivered: reference audit, selected math porting, and `Content/Loom/` removal. |
+| P2-00 | Delivered: Loom reference audit, native geometry/curve helpers, terminal material and `Content/Loom/` dependency removal. "Math porting" was the historical scope label; identifiable source adaptation is not established. See the [provenance audit](DIRECT_OR_SCUT.md#loom-provenance-audit---2026-11-16). |
 | P2-01 / P2-01a-c | Delivered: unified terminal, inline media, map-first evidence, and phosphor prompt. |
 | P2-02a-b | Delivered: guided input, read-only forensic probes, typed hybrid director, local HTTP adapter, fallback, contradiction loop, and resolved-action replay. |
 | P2-02 Experiment 1 | Implemented: one opt-in supply interruption with bounded causal context, restoration/refusal/investigation and measured consequences. See newest DEVLOG for actual verification and limitations. General narrative retention remains future work. |
 | P2-02 Experiment 2 | Implemented: `show_telem` and presentation-only deterministic MOTHER-7 routing; terminal-first input correction. See DEVLOG. |
-| Chunk A | In progress: A1 opening and A2 incident delivered; A3 engagement implemented; joint acceptance pending; A4 judgment/report implemented and tested; joint acceptance pending (plan Section 9). |
-| Chunk B | Approved, not started: sound, character and presentation. |
-| Chunk C | Approved, not started: playtesting and stabilization. |
+| Chunk A | A1-A4 delivered and tested; full joint experiential acceptance is not established. Project closed; see final AAR. |
+| Chunk B | Bounded presentation/audio pass delivered; final atmosphere pass followed. See DEVLOG for scope and evidence. |
+| Chunk C | Automated stabilization and packaged checks recorded; full human experiential acceptance remains unestablished. Project closed. |
 | P2-03 / P2-04 | Legacy planning names (directional acoustics, `TextOnly` -> `VoiceOnly` Act III, *PROJECT: GLASS HOUSE* tuning/endings). Superseded as the active sequence by Chunks A–C; any retained element needs plan-level approval. |
 
 Keep runtime code in canonical domain `.h`/`.cpp` pairs; do not create numbered Slice/Stage implementation units. PIE coverage belongs in `DirectOrScutPIETest.cpp`, pure model coverage in `DirectOrScutSimulationTest.cpp`, with domain-based test names. Follow `Source/EMJ2026/.clang-format`, keep lifecycle ownership explicit, retain fixed-step backlog, and keep presentation outside the deterministic model.
@@ -71,4 +75,4 @@ For substantive implementation changes run `preflight.ps1` and `Scripts/Test-Dir
 
 ## A3 engagement implementation
 
-The ordinary branch of `ConfigureScenario()` is the single authored engagement script, extending the A2 beat deck with dialogue, bounded aliases, consequences and pending-matter copy. Preserve explicit console precedence and the comprehensive diagnostic console. Ordinary choices appear proactively in the existing Events surface; contextual matching never delegates physical authority to inference. A3 engagement and A4 judgment/report retain the same script boundary and await joint acceptance; consult the newest DEVLOG entry for actual verification.
+The ordinary branch of `ConfigureScenario()` is the single authored engagement script, extending the A2 beat deck with dialogue, bounded aliases, consequences and pending-matter copy. Preserve explicit console precedence and the comprehensive diagnostic console. Ordinary choices appear proactively in the existing Events surface; contextual matching never delegates physical authority to inference. A3 engagement and A4 judgment/report retain the same script boundary; joint experiential acceptance was not established before project closure; consult the newest DEVLOG entry for actual verification.

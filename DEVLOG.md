@@ -1,3 +1,5 @@
+**Documentation closure - 2026-11-16:** The project is closed. The [AAR](Director_Scut_2026_MegaJam_AAR.md) is the retrospective; the [timeline](DirectorScut_Devlog_Timeline.md) orders the checkpoints below. Entries retain their original session status, including superseded stop/review language and release candidates. The final combined run records 17 current PIE successes and one failing legacy fixture; the developer reports that the open-ended game plays and seems to work ("very meta chaos"). Exhaustive coverage and confirmed jam entry remain unestablished.
+
 # Final industrial atmosphere, authentic gameplay trailer and Shipping release - 2026-11-15
 
 Implemented the user's explicitly authorized final atmosphere/gameplay-trailer/release pass. Existing scenario copy, authored choices, judgment eligibility, simulation timing, crew positions/routes, camera transforms/tracking, validation and replay semantics are unchanged. No new scenario, parser, framework, inference requirement, downloaded dependency, or external visual asset was introduced.
@@ -797,3 +799,34 @@ Standalone Shipping launch used a temporary per-user `LocalEndpoint=` configurat
 **ZIP:** `Saved/Releases/DirectorScut-Final-Win64.zip`, 383,365,024 bytes, 27 files, 543,412,860 uncompressed bytes. Every entry passed CRC and SHA-256 comparison with the distribution. Archive SHA-256: `8f1164c68b945bb3ba1d41d483b5a6c96e76e180803602ddba764f4cbfae28ac`. See `FinalEvidence/ArchiveVerification.json`.
 
 **Fallback protected:** original `DirectorScut-Win64` distribution (all 27 manifest hashes checked) and ZIP remain intact. Original ZIP SHA-256 remains `28e99c973079853a44fc754c72db220a30ae58fad4b741db83a00b2757541e05`. No release was overwritten. Existing FabToolset/ToolsetRegistry dependency warning persists; packaging succeeded. No known submission blocker identified. Stop at this verified candidate; no publication or submission performed.
+
+
+---
+
+### [2026-11-16 America/Los_Angeles] - Final retrospective and project closure
+
+Documentation only. Rewrote the existing `Director_Scut_2026_MegaJam_AAR.md`, reconciled `DirectorScut_Devlog_Timeline.md` through final development commit `6aad53e` (November 15, 17:36:15 PST), and corrected current-status contradictions in agent, architecture, opening and plan documentation. Original implementation entries and failures remain unchanged. Exploration and learning are explicit project objectives; discarded experiments are distinguished from repeated corrective friction. Developer reports of supervision, quota/reset interruptions, unexpected depletion and perceived spending pressure are testimony, not a measured service audit or an established causal mechanism.
+
+Historical corrections: repository origin is November 12 (`2593509`); the prior AAR's unsupported pre-jam source-reuse assertion is withdrawn. Inspected final release JSON corroborates 27 archive files / 383,365,896 bytes / CRC and entry-hash agreement, approximately 61.8 seconds of verified trailer media, and a final combined acceptance summary of 17 successes plus one legacy Chunk 2 failure. These are retained artifacts, not newly executed verification. Packaging and startup checks do not establish human packaged completion or public submission; no submission receipt/entry URL was found in the inspected record.
+
+Closure validation: documentation diff, relative links, chronology and evidence distinctions reviewed; `git diff --check` run. No game code, assets, configuration, tests, scripts or releases changed. No builds, PIE tests, staging, commits, pushes, uploads, publication or submission performed. Pre-existing staged LICENSE and README work preserved. Project closed with its compact offline investigation/disposition loop, retained exploratory history and documented limitations; deferred proposals are historical, not a reopened backlog.
+
+
+### [2026-11-16 America/Los_Angeles] - Final editorial reconciliation
+
+Targeted documentation polish preserved the existing retrospective and historical execution entries. Clarified inherited commit timestamps versus checks performed in this pass, separate implementation authorization, public page visibility versus downloads and jam entry, and the unresolved human-acceptance boundary. Corrected stale opening/activation status and removed repeated retrospective wording. Retained final archive/trailer/test JSON corroborates the existing release figures and 17 current PIE successes plus one legacy failure; no archive rehash, new build, test run or public-site check was performed. UTF-8 and local Markdown links were checked. No Git commands were run; implementation files, releases, README and LICENSE were untouched.
+
+
+### [2026-11-16 America/Los_Angeles] - Developer clarification of playability and closure
+
+The developer clarified: "theres no full playthrough its quite open ended. but it plays and seems to work. its very meta chaos." Closure summaries and the AAR now preserve that reported experience and avoid treating a single full playthrough as the overall completion benchmark. This is developer testimony, without an asserted packaged test session or exhaustive route coverage. Historical verification entries, test counts and publication uncertainties are unchanged. Documentation only; no further development or Git actions.
+
+Final follow-up polish aligned the timeline with that open-ended playability assessment, clarified that chronology checks used recorded checkpoints without Git commands, and simplified the opening status. Local Markdown targets and UTF-8 encoding were checked across the seven closure documents; no broken local links or encoding damage were found. Retained release JSON still records 17 current PIE successes plus the separate legacy fixture failure; no tests or archive verification were rerun.
+
+### [2026-11-16 America/Los_Angeles] - Targeted Loom provenance audit
+
+Read-only comparison of the terminal generator, embedded material HLSL, native workstation helpers, retained Loom audit/code fragments and local originals under `D:/_source/loom/Content/Loom/`. Historical temporary inclusion and inspection of `MF_Loom_LineMin` / `MF_Loom_RadialSegments_Filled` are corroborated; post-purge dependency removal is distinct from authorship. The terminal asset contains its generator HLSL verbatim. Line/radial presentation shows conceptual influence, without an identifiable copied/adapted implementation established. Project-specific station contours, ECG and explicit palette construction support separate native implementations; rounded-box, capsule and smooth-min primitive origins remain undetermined. Current external radial snippets differ from the retained historical fragments; selected binary graphs were not reconstructed. See [technical classifications and evidence](DIRECT_OR_SCUT.md#loom-provenance-audit---2026-11-16).
+
+Updated the AAR with a concise provenance subsection, restored specific Loom references in the November 14 timeline and qualified the agent milestone wording. Historical entries remain intact. Dated development entries support the recorded sequence; commit identities/reachability were not checked and require later human verification. Upstream attribution/terms remain human-review questions; no licensing or redistribution decision was made. No Git commands, editor automation, generation, builds or tests were run; no implementation, asset, configuration, release, LICENSE or README changes were made.
+
+Audit integrity note: read-only hash samples differed during this session for LICENSE, Scripts/create_terminal_material.py and Scripts/TrayGlyphSDF.hlsl. No writes to those files were performed by this audit; the cause is undetermined and requires human review. The current source was reread before completion. Local documentation links and the provenance-section anchor passed checks; no UTF-8 replacement characters or checked mojibake markers were found.

@@ -1,6 +1,8 @@
 # DIRECT OR SCUT - Opening Shift: Connected Incident Briefing
 
-**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). A1 connected startup and the current A2 incident are implemented; A3 script-driven engagement is implemented and tested; joint acceptance is pending. A4 judgment/report implementation is tested; the connected-to-closure loop remains subject to joint acceptance. See DEVLOG for evidence and limits. The plan governs any conflict.
+**Closure note - 2026-11-16:** This document preserves the approved design contract, not an active work queue. A1-A4 and bounded presentation/stabilization work were subsequently implemented; final atmosphere, local Shipping packaging and trailer evidence are recorded in DEVLOG. Historical pending-review/authorization language below describes its writing stage, not final delivery status. The developer reports that the open-ended game plays and seems to work ("very meta chaos"); exhaustive coverage and public jam submission are not established. See the [final AAR](Director_Scut_2026_MegaJam_AAR.md). No further implementation is initiated by closure.
+
+**Status:** Approved opening specification, aligned with [Docs/DIRECTOR_SCUT_GAME_PLAN.md](Docs/DIRECTOR_SCUT_GAME_PLAN.md) (2026-11-15). A1-A4 implement the connected opening, compact incident, script-driven engagement and judgment/report loop. Automated verification and the developer's reported playability are recorded in DEVLOG; these do not assert exhaustive coverage. See DEVLOG for evidence and limits. The plan governs any conflict.
 **Objective:** Compose the existing simulation, terminal, and MOTHER-7 systems into one playable opening: Director Scut is already connected to the remote supervisory terminal and receives a concise MOTHER-7 incident briefing.
 
 The filename `OPENING_SHIFT.md` is retained for continuity. This document supersedes the earlier "emergency supervisory activation" proposal (an emergency already underway, a reactor supply interruption and prior local recovery attempts as the premise). That premise is withdrawn; the existing Experiment 1 supply interruption remains a technical/regression fixture, not the opening.
@@ -37,9 +39,9 @@ Play concludes when Scut renders judgment: his **director's cut** of events, com
 
 MOTHER-7 may then offer a brief, dry assessment conditional on authoritative state.
 
-## 1c. Current starting state versus the approved opening
+## 1c. Original starting conflict and delivered opening
 
-Today, cold boot shows an ASCII MOTD and a Briefing state in which crew directives are blocked until `[ENTER]` or `start_experiment` initializes the run. Chunk A must make an ordinary game start land in the briefed, connected session without that step, while preserving the existing initialization path and tests as an explicit fixture. This conflict is recorded in the DEVLOG entry for plan approval.
+At plan approval, cold boot showed an ASCII MOTD and a Briefing state blocking crew directives until `[ENTER]` or `start_experiment`. A1 delivered the ordinary briefed, connected session without that step; legacy activation remains a separate fixture. DEVLOG preserves the original conflict and implementation evidence.
 
 ## 2. Governing presentation rule
 
@@ -162,7 +164,7 @@ Chunk A acceptance (plan Section 9): from an ordinary game start, the player can
 11. Retained evidence can challenge MOTHER-7's account without predetermining her motive.
 12. The game is fully playable with deterministic offline MOTHER-7; inference is optional.
 
-These are future acceptance criteria, not a report of completed verification.
+These are the approved acceptance criteria, not a claim of completed human acceptance. A1-A4 automated evidence and its limits are recorded in DEVLOG.
 
 ## 8. Development boundaries and priorities
 
@@ -170,8 +172,8 @@ Preserve authoritative simulation, fixed-step behavior, validated commands, caus
 
 Order of work within Chunk A is a proposal for review, not authorization: (1) ordinary start lands in the briefed session; (2) the briefing and incident circumstances; (3) authored choices and forgiving input; (4) judgments and report. Evaluate the playable experience before expanding the scenario. Chunks B and C follow only after explicit authorization.
 
-## Current implementation boundary
+## Implementation boundary at closure
 
-Experiment 2 implements on-demand telemetry and deterministic MOTHER-7 routing in workstation presentation. Runtime verification is recorded in the DEVLOG entries for Experiment 2. The connected start, briefing, roaming-disturbance circumstances, authored choices and judgments are not implemented. Experiment 1 still requires `continuity_incident`, and cold boot still requires `[ENTER]` or `start_experiment`.
+Experiment 2 implements on-demand telemetry and deterministic MOTHER-7 routing in workstation presentation. Runtime verification is recorded in the DEVLOG entries for Experiment 2. A1-A4 subsequently delivered the connected start, briefing, compact incident, authored choices and judgments. The broader roaming-disturbance vision was only partially realized; no common cause was established. Experiment 1 still requires `continuity_incident`, but ordinary play requires no activation command.
 
 The presentation consumes existing terminal-visible event records and authored cue weights without changing collection. Critical oxygen/pressure/breach/security reports appear immediately; significant authored reports wait for a prose boundary while Scut is not composing input. Known routine telemetry and diagnostic signatures remain outside the conversation. Consolidation and pending reports are bounded and reset with presentation; priority depends on current event signatures/cues, not a new authoritative event schema. Requested telemetry is a frozen request-time snapshot using existing inline stream retention. Existing `show_cam` and explicit forensic inspection retain their independent functions.
