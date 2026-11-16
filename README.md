@@ -87,10 +87,6 @@ old report in the repository as a current passing result.
 
 ## License and third-party material
 
-Original project materials are offered under the MIT License; see
-[LICENSE](LICENSE). Unreal Engine, plugins, and third-party tools or content are
-not relicensed by this notice and remain subject to their own terms.
-
 The project's historical asset inventory is best effort. Do not assume every binary asset or
 dependency in the repository is MIT-licensed or freely redistributable; verify
 its provenance and applicable terms before reusing or distributing it.
